@@ -121,6 +121,39 @@ class DimensionResources:
 
 
 @dataclass
+class DimensionThresholds:
+    """Per-dimension severity caps (unset = inherit the global threshold)."""
+
+    max_critical: int | None = None
+    max_high: int | None = None
+
+    def is_empty(self) -> bool:
+        return self.max_critical is None and self.max_high is None
+
+
+@dataclass
+class ThresholdsConfig:
+    """Project threshold gates evaluated on the final report.
+
+    ``max_critical`` / ``max_high`` cap the number of findings at or above
+    that severity; ``dimensions`` caps specific dimensions. ``None`` means
+    "no gate for this metric". Violations flip the final verdict to
+    ``needs_revision`` and fail the CI exit-code gate.
+    """
+
+    max_critical: int | None = None
+    max_high: int | None = None
+    dimensions: dict[str, DimensionThresholds] = field(default_factory=dict)
+
+    def is_empty(self) -> bool:
+        return (
+            self.max_critical is None
+            and self.max_high is None
+            and not self.dimensions
+        )
+
+
+@dataclass
 class AtomicConfig:
     max_lines: int = 20
     max_adjacent_methods: int = 3
@@ -169,6 +202,10 @@ class IterateConfig:
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     reviewer: ReviewerConfig = field(default_factory=ReviewerConfig)
     dimension_resources: dict[str, DimensionResources] = field(default_factory=dict)
+    # Whole-run token budget enforced by the engine-level loop policy: the
+    # iterate loop hard-stops once the main-loop usage exceeds it.
+    token_budget: int | None = None
+    thresholds: ThresholdsConfig = field(default_factory=ThresholdsConfig)
     onboarding: dict[str, object] | None = None
     personalization: dict[str, object] | None = None
 
@@ -238,6 +275,9 @@ class FinalReviewReport:
     source: ReviewReport
     meta_review: MetaReviewResult
     summary: FinalReviewSummary
+    # Project threshold-gate outcome (None when no thresholds configured or
+    # the gate passed cleanly with nothing to fold into the meta-review).
+    threshold_gate: object | None = None
 
 
 def finding_to_dict(finding: ReviewFinding) -> dict[str, object]:

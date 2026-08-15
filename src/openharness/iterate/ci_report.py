@@ -110,21 +110,29 @@ def render_github(summary: ReportSummary) -> str:
             properties.append(f"line={line_value}")
         suffix = f" {' '.join(properties)}" if properties else ""
         message = _escape_workflow_data(
-            f"[{str(finding.get('severity') or 'notice')}] "
-            f"{str(finding.get('dimension') or 'general')}: {str(finding.get('summary') or '')}".strip()
+            f"[{finding.get('severity') or 'notice'!s}] "
+            f"{finding.get('dimension') or 'general'!s}: {finding.get('summary') or ''!s}".strip()
         )
         lines.append(f"::{level}{suffix}::{message}")
     return "\n".join(lines)
 
 
-def render_text(summary: ReportSummary) -> str:
-    """Render the report as a plain-text summary."""
+def render_text(summary: ReportSummary, gate: dict[str, Any] | None = None) -> str:
+    """Render the report as a plain-text summary.
+
+    ``gate`` is the optional ``thresholdGate`` block from the report entry:
+    when present its status line (and violations) are appended so CI logs
+    explain WHY the exit code failed the threshold gate.
+    """
     head = (
         f"iterate report ({summary.mode}): {summary.total_findings} finding(s), "
         f"verdict={summary.verdict}"
     )
+    lines = [head]
+    if gate is not None:
+        lines.append(_render_gate_lines(gate))
     if not summary.findings:
-        return head
+        return "\n".join(lines)
     rows = []
     for finding in summary.findings:
         location = str(finding.get("file") or "(no file)")
@@ -132,10 +140,41 @@ def render_text(summary: ReportSummary) -> str:
         if isinstance(line_value, int) and line_value > 0:
             location += f":{line_value}"
         rows.append(
-            f"  [{str(finding.get('severity') or '?')}] {location} "
-            f"{str(finding.get('dimension') or 'general')}: {finding.get('summary') or ''}".rstrip()
+            f"  [{finding.get('severity') or '?'!s}] {location} "
+            f"{finding.get('dimension') or 'general'!s}: {finding.get('summary') or ''}".rstrip()
         )
-    return "\n".join([head, *rows])
+    return "\n".join([*lines, *rows])
+
+
+def _render_gate_lines(gate: dict[str, Any]) -> str:
+    """One-line threshold-gate status (violations inlined, capped at 5)."""
+    passed = bool(gate.get("passed", True))
+    status = "PASS" if passed else "FAIL"
+    violations_raw = gate.get("violations")
+    violations = [v for v in violations_raw if isinstance(v, dict)] if isinstance(violations_raw, list) else []
+    if not violations:
+        return f"threshold gate: {status}"
+    rendered = [
+        f"{v.get('scope')}:{v.get('metric')} {v.get('actual')}>{v.get('limit')}"
+        for v in violations[:5]
+    ]
+    more = f" (+{len(violations) - 5} more)" if len(violations) > 5 else ""
+    return f"threshold gate: {status} — {'; '.join(rendered)}{more}"
+
+
+def threshold_gate(entry: DecisionLogEntry | None) -> dict[str, Any] | None:
+    """Return the report entry's ``thresholdGate`` block, if any (defensive)."""
+    if not isinstance(entry, DecisionLogEntry) or not isinstance(entry.data, dict):
+        return None
+    gate = entry.data.get("thresholdGate")
+    return gate if isinstance(gate, dict) else None
+
+
+def threshold_exit_code(gate: dict[str, Any] | None) -> int:
+    """Exit-code policy for the threshold gate: 1 when present and failed."""
+    if gate is None:
+        return 0
+    return 0 if bool(gate.get("passed", True)) else 1
 
 
 def severity_gate(summary: ReportSummary, fail_on: str = DEFAULT_FAIL_ON) -> int:
@@ -156,10 +195,12 @@ def severity_gate(summary: ReportSummary, fail_on: str = DEFAULT_FAIL_ON) -> int
 __all__ = [
     "DEFAULT_FAIL_ON",
     "GITHUB_ANNOTATION_LEVELS",
-    "ReportSummary",
     "SEVERITY_ORDER",
+    "ReportSummary",
     "latest_report_entry",
     "render_github",
     "render_text",
     "severity_gate",
+    "threshold_exit_code",
+    "threshold_gate",
 ]

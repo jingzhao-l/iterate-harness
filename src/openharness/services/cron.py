@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
 
@@ -44,24 +45,62 @@ def validate_cron_expression(expression: str) -> bool:
     return croniter.is_valid(expression)
 
 
-def next_run_time(expression: str, base: datetime | None = None) -> datetime:
-    """Return the next run time for a cron expression."""
-    base = base or datetime.now(timezone.utc)
-    return croniter(expression, base).get_next(datetime)
+def validate_timezone(name: str | None) -> bool:
+    """Return True when ``name`` is a valid IANA timezone identifier."""
+    if not name or not isinstance(name, str):
+        return False
+    try:
+        ZoneInfo(name.strip())
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        return False
+    return True
+
+
+def next_run_time(
+    expression: str,
+    base: datetime | None = None,
+    tz_name: str | None = None,
+) -> datetime:
+    """Return the next run time for a cron expression (UTC-normalized).
+
+    With ``tz_name`` the expression is evaluated in that IANA zone's LOCAL
+    time (so ``0 9 * * *`` + ``Asia/Shanghai`` fires at 09:00 Beijing time)
+    and the result is converted back to UTC for storage/comparison. Raises
+    ``ValueError`` for an unknown zone.
+    """
+    base = base or datetime.now(UTC)
+    if not tz_name:
+        return croniter(expression, base).get_next(datetime)
+    if not validate_timezone(tz_name):
+        raise ValueError(f"unknown timezone: {tz_name!r} (expected an IANA name like Asia/Shanghai)")
+    zone = ZoneInfo(tz_name.strip())
+    local_next = croniter(expression, base.astimezone(zone)).get_next(datetime)
+    return local_next.astimezone(UTC)
+
+
+def _recompute_next_run(job: dict[str, Any], base: datetime | None = None) -> None:
+    """Recompute ``job["next_run"]`` honoring the job's ``timezone``."""
+    schedule = job.get("schedule", "")
+    tz_name = job.get("timezone")
+    if not validate_cron_expression(schedule):
+        return
+    if tz_name is not None and not validate_timezone(tz_name):
+        # Unknown zone stored on an old/broken entry: fall back to UTC.
+        tz_name = None
+    job["next_run"] = next_run_time(schedule, base=base, tz_name=tz_name).isoformat()
 
 
 def upsert_cron_job(job: dict[str, Any]) -> None:
     """Insert or replace one cron job.
 
     Automatically sets ``enabled`` to True and computes ``next_run`` when the
-    schedule is a valid cron expression.
+    schedule is a valid cron expression. A ``timezone`` key (IANA name) makes
+    the schedule fire in that local zone.
     """
     job.setdefault("enabled", True)
-    job.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+    job.setdefault("created_at", datetime.now(UTC).isoformat())
 
-    schedule = job.get("schedule", "")
-    if validate_cron_expression(schedule):
-        job["next_run"] = next_run_time(schedule).isoformat()
+    _recompute_next_run(job)
 
     with exclusive_file_lock(_cron_lock_path()):
         jobs = [existing for existing in load_cron_jobs() if existing.get("name") != job.get("name")]
@@ -105,13 +144,11 @@ def mark_job_run(name: str, *, success: bool) -> None:
     """Update last_run and recompute next_run after a job executes."""
     with exclusive_file_lock(_cron_lock_path()):
         jobs = load_cron_jobs()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for job in jobs:
             if job.get("name") == name:
                 job["last_run"] = now.isoformat()
                 job["last_status"] = "success" if success else "failed"
-                schedule = job.get("schedule", "")
-                if validate_cron_expression(schedule):
-                    job["next_run"] = next_run_time(schedule, now).isoformat()
+                _recompute_next_run(job, base=now)
                 save_cron_jobs(jobs)
                 return

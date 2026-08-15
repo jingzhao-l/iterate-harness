@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 
-from .review import sort_findings
+from .review import ThresholdGateResult, sort_findings
 from .types import (
     FinalReviewReport,
     FinalReviewSummary,
@@ -259,12 +259,36 @@ def _check_round_shape(rounds: list) -> list[MetaReviewIssue]:
     return issues
 
 
-def build_final_review_report(report: ReviewReport | None) -> FinalReviewReport:
+def build_final_review_report(
+    report: ReviewReport | None,
+    *,
+    threshold_result: ThresholdGateResult | None = None,
+) -> FinalReviewReport:
     """Pair the source report with its meta-review verdict and summary.
 
+    ``threshold_result`` (from project ``thresholds`` config) is folded in
+    as one ``THRESHOLD_EXCEEDED`` issue per violation; a failed gate flips
+    the verdict to ``needs_revision`` regardless of the consistency checks.
     Pure and deterministic.
     """
     meta = meta_review_report(report)
+    if threshold_result is not None and not threshold_result.passed:
+        for violation in threshold_result.violations:
+            meta.issues.append(
+                _issue(
+                    "THRESHOLD_EXCEEDED",
+                    "high",
+                    f"Threshold gate violated: {violation.get('scope')} "
+                    f"{violation.get('metric')} {violation.get('actual')} > "
+                    f"limit {violation.get('limit')}",
+                    f"Project thresholds (iterate.config.yaml) cap "
+                    f"{violation.get('scope')} {violation.get('metric')} findings at "
+                    f"{violation.get('limit')}; the report carries "
+                    f"{violation.get('actual')}.",
+                )
+            )
+        meta.passed = False
+        meta.verdict = "revise"
     summary = report.summary if report is not None else None
     convergence = report.convergence if report is not None else None
     verdict: str = "approved" if meta.passed else "needs_revision"
@@ -284,4 +308,5 @@ def build_final_review_report(report: ReviewReport | None) -> FinalReviewReport:
         source=report,  # type: ignore[arg-type]
         meta_review=meta,
         summary=final_summary,
+        threshold_gate=threshold_result,
     )

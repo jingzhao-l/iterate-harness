@@ -41,6 +41,7 @@ from .types import (
     ReviewReport,
     ReviewRound,
     Scope,
+    ThresholdsConfig,
     finding_to_dict,
 )
 
@@ -350,6 +351,104 @@ def reviewer_task_prompt(
     )
     parts.append(f"Write summaries and details in {output_language}.")
     return "\n".join(parts)
+
+
+@dataclass
+class BudgetAudit:
+    """Deterministic audit of per-dimension token usage against budgets."""
+
+    dimensions: list[dict[str, object]]
+    exceeded_dimensions: list[str]
+    all_budgeted_exhausted: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "dimensions": self.dimensions,
+            "exceededDimensions": self.exceeded_dimensions,
+            "allBudgetedExhausted": self.all_budgeted_exhausted,
+        }
+
+
+def audit_dimension_budgets(
+    budgets: dict[str, int],
+    dimension_usage: dict[str, int],
+) -> BudgetAudit:
+    """Compare reported per-dimension token usage against configured budgets.
+
+    ``budgets`` carries only the dimensions that HAVE a budget; dimensions
+    without one are never audited. Usage is clamped at 0 (defensive).
+    """
+    rows: list[dict[str, object]] = []
+    exceeded: list[str] = []
+    for dimension in sorted(budgets):
+        budget = budgets[dimension]
+        used = max(0, int(dimension_usage.get(dimension, 0)))
+        row_exceeded = used > budget
+        if row_exceeded:
+            exceeded.append(dimension)
+        rows.append(
+            {
+                "dimension": dimension,
+                "budget": budget,
+                "used": used,
+                "remaining": max(0, budget - used),
+                "exceeded": row_exceeded,
+            }
+        )
+    return BudgetAudit(
+        dimensions=rows,
+        exceeded_dimensions=exceeded,
+        all_budgeted_exhausted=bool(budgets) and len(exceeded) == len(budgets),
+    )
+
+
+@dataclass
+class ThresholdGateResult:
+    """Outcome of evaluating project threshold gates on a report."""
+
+    passed: bool
+    violations: list[dict[str, object]]
+
+    def to_dict(self) -> dict[str, object]:
+        return {"passed": self.passed, "violations": self.violations}
+
+
+def evaluate_threshold_gates(
+    thresholds: ThresholdsConfig,
+    findings: list[ReviewFinding],
+) -> ThresholdGateResult:
+    """Evaluate ``thresholds.max_critical`` / ``max_high`` (+ per-dimension).
+
+    A violation is ``{scope, metric, limit, actual}``; the gate passes only
+    when every configured cap holds. Pure and deterministic.
+    """
+    if thresholds.is_empty():
+        return ThresholdGateResult(passed=True, violations=[])
+
+    violations: list[dict[str, object]] = []
+
+    def _check(scope: str, metric: str, limit: int | None, actual: int) -> None:
+        if limit is not None and actual > limit:
+            violations.append(
+                {"scope": scope, "metric": metric, "limit": limit, "actual": actual}
+            )
+
+    def _counts(scope_findings: list[ReviewFinding]) -> tuple[int, int]:
+        critical = sum(1 for f in scope_findings if f.severity == "critical")
+        high = sum(1 for f in scope_findings if f.severity == "high")
+        return critical, high
+
+    global_critical, global_high = _counts(findings)
+    _check("global", "critical", thresholds.max_critical, global_critical)
+    _check("global", "high", thresholds.max_high, global_high)
+
+    for dimension, dim_thresholds in thresholds.dimensions.items():
+        dim_findings = [f for f in findings if f.dimension == dimension]
+        dim_critical, dim_high = _counts(dim_findings)
+        _check(f"dimension:{dimension}", "critical", dim_thresholds.max_critical, dim_critical)
+        _check(f"dimension:{dimension}", "high", dim_thresholds.max_high, dim_high)
+
+    return ThresholdGateResult(passed=not violations, violations=violations)
 
 
 @dataclass

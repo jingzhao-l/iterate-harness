@@ -204,6 +204,104 @@ class TestIterateReviewTool:
         issues = payload["finalReport"]["metaReview"]["issues"]
         assert any(i["code"] == "DIMENSION_UNKNOWN" for i in issues)
 
+    async def test_aggregate_audits_dimension_usage_against_budgets(self, tmp_path):
+        """v1.1: aggregate with dimension_usage emits budgetAudit + exhausted state."""
+        from openharness.iterate.loop_policy import ITERATE_STATE_KEY
+        from openharness.tools.iterate_tools import IterateReviewInput
+
+        write_config(
+            tmp_path,
+            "dimensions:\n  - security\n  - correctness\n"
+            "dimension_resources:\n"
+            "  security:\n    token_budget: 1000\n"
+            "  correctness:\n    token_budget: 5000\n",
+        )
+        context = make_context(tmp_path)
+        rounds = [{"round": 1, "findings": [FINDING]}]
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(
+                operation="aggregate",
+                rounds=rounds,
+                dimension_usage={"security": 1500, "correctness": 100},
+            ),
+            context,
+        )
+        payload = json.loads(result.output)
+        audit = payload["budgetAudit"]
+        assert audit["exceededDimensions"] == ["security"]
+        assert audit["allBudgetedExhausted"] is False
+        state = context.metadata[ITERATE_STATE_KEY]
+        assert state["exhausted_dimensions"] == ["security"]
+        assert state["all_dimensions_exhausted"] is False
+
+    async def test_aggregate_without_budgets_omits_audit(self, tmp_path):
+        from openharness.iterate.loop_policy import ITERATE_STATE_KEY
+        from openharness.tools.iterate_tools import IterateReviewInput
+
+        context = make_context(tmp_path)
+        rounds = [{"round": 1, "findings": [FINDING]}]
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(operation="aggregate", rounds=rounds, dimension_usage={"security": 10}),
+            context,
+        )
+        payload = json.loads(result.output)
+        assert "budgetAudit" not in payload
+        assert "exhausted_dimensions" not in context.metadata[ITERATE_STATE_KEY]
+
+    async def test_meta_review_emits_threshold_gate_when_configured(self, tmp_path):
+        """v1.1: meta-review folds project thresholds into the final verdict."""
+        from openharness.tools.iterate_tools import IterateReviewInput
+
+        write_config(
+            tmp_path,
+            "dimensions:\n  - security\nthresholds:\n  max_critical: 0\n",
+        )
+        report_dict = {
+            "mode": "dry-run",
+            "goal": "g",
+            "dimensions": ["security"],
+            "maxReviewRounds": 2,
+            "rounds": [
+                {"round": 1, "findings": [FINDING]},  # severity: critical
+                {"round": 2, "findings": []},
+            ],
+        }
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(operation="meta-review", report=report_dict),
+            make_context(tmp_path),
+        )
+        payload = json.loads(result.output)
+        final = payload["finalReport"]
+        gate = final["thresholdGate"]
+        assert gate["passed"] is False
+        assert gate["violations"][0]["metric"] == "critical"
+        assert final["verdict"] == "needs_revision"
+        assert any(i["code"] == "THRESHOLD_EXCEEDED" for i in final["metaReview"]["issues"])
+
+    async def test_meta_review_without_thresholds_omits_gate(self, tmp_path):
+        from openharness.tools.iterate_tools import IterateReviewInput
+
+        report_dict = {
+            "mode": "dry-run",
+            "goal": "g",
+            "dimensions": ["security"],
+            "maxReviewRounds": 2,
+            "rounds": [
+                {"round": 1, "findings": [FINDING]},
+                {"round": 2, "findings": []},
+            ],
+        }
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(operation="meta-review", report=report_dict),
+            make_context(tmp_path),
+        )
+        payload = json.loads(result.output)
+        assert "thresholdGate" not in payload["finalReport"]
+
 
 class TestIterateDecisionLogTool:
     async def test_append_and_read_roundtrip(self, tmp_path):

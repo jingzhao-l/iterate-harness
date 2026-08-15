@@ -173,6 +173,13 @@ class IterateReviewInput(BaseModel):
         default=None,
         description="Changed-only quick review: repo-relative delta files to pin the review scope",
     )
+    dimension_usage: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Optional per-dimension token usage (e.g. from reviewer agents' "
+            "reported totals) audited against dimension_resources token budgets"
+        ),
+    )
 
 
 class IterateReviewTool(BaseTool):
@@ -196,7 +203,7 @@ class IterateReviewTool(BaseTool):
                 return self._plan(arguments, context)
             if arguments.operation == "aggregate":
                 return self._aggregate(arguments, context)
-            return self._meta_review(arguments)
+            return self._meta_review(arguments, context)
         except ValueError as exc:
             return _json_output({"error": str(exc)}, error=True)
 
@@ -230,8 +237,9 @@ class IterateReviewTool(BaseTool):
                 rounds=report.rounds,
                 known_intentional=known,
             )
+        budget_audit = self._audit_budgets(args, context)
         # Publish loop-policy state (single source of truth for convergence).
-        context.metadata[ITERATE_STATE_KEY] = {
+        state: dict[str, Any] = {
             "mode": report.mode,
             "rounds_seen": report.convergence.total_rounds,
             "total_findings": report.summary.total_findings,
@@ -239,46 +247,77 @@ class IterateReviewTool(BaseTool):
             "converged": report.convergence.converged,
             "by_dimension": dict(report.summary.by_dimension),
         }
-        return _json_output({"report": review.report_to_dict(report)})
+        payload: dict[str, Any] = {"report": review.report_to_dict(report)}
+        if budget_audit is not None:
+            state["exhausted_dimensions"] = budget_audit.exceeded_dimensions
+            state["all_dimensions_exhausted"] = budget_audit.all_budgeted_exhausted
+            payload["budgetAudit"] = budget_audit.to_dict()
+        context.metadata[ITERATE_STATE_KEY] = state
+        return _json_output(payload)
 
-    def _meta_review(self, args: IterateReviewInput) -> ToolResult:
+    @staticmethod
+    def _audit_budgets(args: IterateReviewInput, context: ToolExecutionContext):
+        """Audit reported per-dimension usage against configured budgets.
+
+        Returns ``None`` when no budgets are configured or no usage was
+        reported; never raises — budget auditing must not break aggregation.
+        """
+        budgets = {
+            name: res.token_budget
+            for name, res in config_loader.load_effective_config(context.cwd)
+            .config.dimension_resources.items()
+            if res.token_budget is not None
+        }
+        if not budgets or not args.dimension_usage:
+            return None
+        usage = {
+            str(dim): max(0, int(tokens))
+            for dim, tokens in args.dimension_usage.items()
+            if isinstance(tokens, int) and not isinstance(tokens, bool)
+        }
+        return review.audit_dimension_budgets(budgets, usage)
+
+    def _meta_review(self, args: IterateReviewInput, context: ToolExecutionContext) -> ToolResult:
         if not args.report:
             return _json_output({"error": "meta-review requires report"}, error=True)
         parsed = review.report_from_dict(args.report)
-        final = meta_review.build_final_review_report(parsed)
-        return _json_output(
-            {
-                "finalReport": {
-                    "verdict": final.verdict,
-                    "summary": {
-                        "totalFindings": final.summary.total_findings,
-                        "critical": final.summary.critical,
-                        "high": final.summary.high,
-                        "medium": final.summary.medium,
-                        "low": final.summary.low,
-                        "converged": final.summary.converged,
-                        "totalRounds": final.summary.total_rounds,
-                        "reportIssues": final.summary.report_issues,
-                        "verdict": final.summary.verdict,
-                    },
-                    "metaReview": {
-                        "passed": final.meta_review.passed,
-                        "verdict": final.meta_review.verdict,
-                        "checksRun": final.meta_review.checks_run,
-                        "issues": [
-                            {
-                                "code": i.code,
-                                "severity": i.severity,
-                                "summary": i.summary,
-                                "detail": i.detail,
-                            }
-                            for i in final.meta_review.issues
-                        ],
-                    },
-                    "report": review.report_to_dict(final.source),
-                }
-            }
+        thresholds = config_loader.load_effective_config(context.cwd).config.thresholds
+        gate = review.evaluate_threshold_gates(thresholds, parsed.findings)
+        final = meta_review.build_final_review_report(
+            parsed, threshold_result=None if gate.passed else gate
         )
+        final_payload: dict[str, Any] = {
+            "verdict": final.verdict,
+            "summary": {
+                "totalFindings": final.summary.total_findings,
+                "critical": final.summary.critical,
+                "high": final.summary.high,
+                "medium": final.summary.medium,
+                "low": final.summary.low,
+                "converged": final.summary.converged,
+                "totalRounds": final.summary.total_rounds,
+                "reportIssues": final.summary.report_issues,
+                "verdict": final.summary.verdict,
+            },
+            "metaReview": {
+                "passed": final.meta_review.passed,
+                "verdict": final.meta_review.verdict,
+                "checksRun": final.meta_review.checks_run,
+                "issues": [
+                    {
+                        "code": i.code,
+                        "severity": i.severity,
+                        "summary": i.summary,
+                        "detail": i.detail,
+                    }
+                    for i in final.meta_review.issues
+                ],
+            },
+            "report": review.report_to_dict(final.source),
+        }
+        if not thresholds.is_empty():
+            final_payload["thresholdGate"] = gate.to_dict()
+        return _json_output({"finalReport": final_payload})
 
 
 # --- iterate_decision_log ---------------------------------------------------

@@ -26,10 +26,12 @@ import yaml
 from .types import (
     AtomicConfig,
     DimensionResources,
+    DimensionThresholds,
     GitConfig,
     IterateConfig,
     ReviewerConfig,
     ReviewScopeConfig,
+    ThresholdsConfig,
     ValidationConfig,
 )
 
@@ -102,6 +104,8 @@ def _default_config_dict() -> dict[str, object]:
         "dimension_resources": {
             name: resources_to_dict(res) for name, res in cfg.dimension_resources.items()
         },
+        "token_budget": cfg.token_budget,
+        "thresholds": thresholds_to_dict(cfg.thresholds),
     }
 
 
@@ -166,6 +170,94 @@ def resources_to_dict(resources: DimensionResources) -> dict[str, object]:
         out["concurrency"] = resources.concurrency
     if resources.token_budget is not None:
         out["token_budget"] = resources.token_budget
+    return out
+
+
+def parse_token_budget(raw: object) -> tuple[int | None, list[str]]:
+    """Parse the whole-run ``token_budget`` (positive integer, ``None``=off)."""
+    if raw is None:
+        return None, []
+    if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
+        return None, ["token_budget must be a positive integer"]
+    return raw, []
+
+
+def _parse_dimension_thresholds(dim: str, raw: object, errors: list[str]) -> DimensionThresholds:
+    """Parse one ``thresholds.dimensions.<dim>`` mapping defensively."""
+    if not isinstance(raw, dict):
+        errors.append(f"thresholds.dimensions.{dim} must be a mapping")
+        return DimensionThresholds()
+    max_critical = raw.get("max_critical")
+    if max_critical is not None and (
+        not isinstance(max_critical, int) or isinstance(max_critical, bool) or max_critical < 0
+    ):
+        errors.append(f"thresholds.dimensions.{dim}.max_critical must be a non-negative integer")
+        max_critical = None
+    max_high = raw.get("max_high")
+    if max_high is not None and (
+        not isinstance(max_high, int) or isinstance(max_high, bool) or max_high < 0
+    ):
+        errors.append(f"thresholds.dimensions.{dim}.max_high must be a non-negative integer")
+        max_high = None
+    return DimensionThresholds(max_critical=max_critical, max_high=max_high)
+
+
+def parse_thresholds(raw: object) -> tuple[ThresholdsConfig, list[str]]:
+    """Parse the ``thresholds`` mapping defensively.
+
+    Returns ``(thresholds, errors)``: invalid entries are reported as errors
+    and skipped, never raised — a typo in the yaml must not kill the loop.
+    """
+    if raw is None:
+        return ThresholdsConfig(), []
+    if not isinstance(raw, dict):
+        return ThresholdsConfig(), ["thresholds must be a mapping"]
+
+    errors: list[str] = []
+    max_critical = raw.get("max_critical")
+    if max_critical is not None and (
+        not isinstance(max_critical, int) or isinstance(max_critical, bool) or max_critical < 0
+    ):
+        errors.append("thresholds.max_critical must be a non-negative integer")
+        max_critical = None
+    max_high = raw.get("max_high")
+    if max_high is not None and (
+        not isinstance(max_high, int) or isinstance(max_high, bool) or max_high < 0
+    ):
+        errors.append("thresholds.max_high must be a non-negative integer")
+        max_high = None
+
+    dimensions: dict[str, DimensionThresholds] = {}
+    dims_raw = raw.get("dimensions")
+    if dims_raw is not None:
+        if not isinstance(dims_raw, dict):
+            errors.append("thresholds.dimensions must be a mapping")
+        else:
+            for name, value in dims_raw.items():
+                dimensions[str(name)] = _parse_dimension_thresholds(str(name), value, errors)
+
+    return (
+        ThresholdsConfig(
+            max_critical=max_critical,
+            max_high=max_high,
+            dimensions=dimensions,
+        ),
+        errors,
+    )
+
+
+def thresholds_to_dict(thresholds: ThresholdsConfig) -> dict[str, object]:
+    """Serialize ThresholdsConfig back to its yaml shape (set fields only)."""
+    out: dict[str, object] = {}
+    if thresholds.max_critical is not None:
+        out["max_critical"] = thresholds.max_critical
+    if thresholds.max_high is not None:
+        out["max_high"] = thresholds.max_high
+    if thresholds.dimensions:
+        out["dimensions"] = {
+            name: {k: v for k, v in (("max_critical", dim.max_critical), ("max_high", dim.max_high)) if v is not None}
+            for name, dim in thresholds.dimensions.items()
+        }
     return out
 
 
@@ -261,6 +353,8 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     dimension_resources, _resource_errors = parse_dimension_resources(
         data.get("dimension_resources")
     )
+    token_budget, _budget_errors = parse_token_budget(data.get("token_budget"))
+    thresholds, _threshold_errors = parse_thresholds(data.get("thresholds"))
 
     return IterateConfig(
         goal=data.get("goal", defaults.goal),
@@ -273,6 +367,8 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
         validation=validation,
         reviewer=reviewer,
         dimension_resources=dimension_resources,
+        token_budget=token_budget,
+        thresholds=thresholds,
         onboarding=dict(onboarding) if isinstance(onboarding, dict) else None,
         personalization=dict(personalization) if isinstance(personalization, dict) else None,
     )
@@ -351,4 +447,10 @@ def validate_config(config: object) -> list[str]:
     if raw_resources is not None:
         _, resource_errors = parse_dimension_resources(raw_resources)
         errors.extend(resource_errors)
+    _, budget_errors = parse_token_budget(config.get("token_budget"))
+    errors.extend(budget_errors)
+    raw_thresholds = config.get("thresholds")
+    if raw_thresholds is not None:
+        _, threshold_errors = parse_thresholds(raw_thresholds)
+        errors.extend(threshold_errors)
     return errors

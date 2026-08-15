@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typer.testing import CliRunner
+from typing import ClassVar
 
 import pytest
+from typer.testing import CliRunner
 
-import openharness.cli as cli
+from openharness import cli
 from openharness.iterate import ci_report
 from openharness.iterate.decision_log import append_entry, make_entry, read_entries
 
@@ -18,6 +19,7 @@ def report_entry(
     mode: str = "dry-run",
     total: int | None = None,
     round_number: int = 2,
+    threshold_gate: dict | None = None,
 ):
     data: dict[str, object] = {
         "verdict": verdict,
@@ -26,6 +28,8 @@ def report_entry(
     }
     if total is not None:
         data["totalFindings"] = total
+    if threshold_gate is not None:
+        data["thresholdGate"] = threshold_gate
     return make_entry(entry_type="report", round_number=round_number, data=data)
 
 
@@ -174,6 +178,83 @@ class TestSeverityGate:
 
     def test_empty_report_passes(self):
         assert ci_report.severity_gate(ci_report.ReportSummary.from_entry(None)) == 0
+
+
+class TestThresholdGate:
+    """thresholdGate block extraction, rendering, and exit-code policy."""
+
+    FAILED_GATE: ClassVar[dict] = {
+        "passed": False,
+        "violations": [
+            {"scope": "global", "metric": "critical", "limit": 0, "actual": 2},
+            {"scope": "dimension:security", "metric": "high", "limit": 1, "actual": 3},
+        ],
+    }
+
+    def test_extracts_gate_from_entry(self):
+        entry = report_entry(threshold_gate=self.FAILED_GATE)
+        assert ci_report.threshold_gate(entry) == self.FAILED_GATE
+
+    def test_missing_or_malformed_gate_yields_none(self):
+        assert ci_report.threshold_gate(None) is None
+        assert ci_report.threshold_gate(report_entry()) is None
+        entry = report_entry()
+        entry.data["thresholdGate"] = "junk"
+        assert ci_report.threshold_gate(entry) is None
+
+    def test_exit_code_zero_when_passed_or_absent(self):
+        assert ci_report.threshold_exit_code(None) == 0
+        assert ci_report.threshold_exit_code({"passed": True, "violations": []}) == 0
+        assert ci_report.threshold_exit_code(self.FAILED_GATE) == 1
+
+    def test_render_text_includes_gate_status_line(self):
+        summary = ci_report.ReportSummary.from_entry(report_entry())
+        text = ci_report.render_text(summary, self.FAILED_GATE)
+        gate_line = text.splitlines()[1]
+        assert gate_line.startswith("threshold gate: FAIL")
+        assert "global:critical 2>0" in gate_line
+        assert "dimension:security:high 3>1" in gate_line
+
+    def test_render_text_passed_gate_without_violations(self):
+        summary = ci_report.ReportSummary.from_entry(report_entry())
+        assert "threshold gate: PASS" in ci_report.render_text(summary, {"passed": True, "violations": []})
+
+    def test_render_text_caps_violations_at_five(self):
+        gate = {
+            "passed": False,
+            "violations": [
+                {"scope": "global", "metric": "low", "limit": 0, "actual": i} for i in range(7)
+            ],
+        }
+        text = ci_report.render_text(ci_report.ReportSummary.from_entry(report_entry()), gate)
+        assert "(+2 more)" in text
+
+    def test_cli_exit_one_on_failed_gate_below_severity_gate(self, tmp_path, monkeypatch):
+        """Findings below --fail-on but a failed threshold gate must still fail CI."""
+        monkeypatch.chdir(tmp_path)
+        append_entry(
+            tmp_path,
+            report_entry(
+                findings=[{"severity": "low", "file": "a.py", "line": 1, "summary": "s", "dimension": "style"}],
+                threshold_gate=self.FAILED_GATE,
+            ),
+        )
+        result = CliRunner().invoke(cli.app, ["iterate", "report"])
+        assert result.exit_code == 1
+        assert "threshold gate: FAIL" in result.output
+
+    def test_cli_exit_zero_on_passed_gate(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        append_entry(
+            tmp_path,
+            report_entry(
+                findings=[{"severity": "low", "file": "a.py", "line": 1, "summary": "s", "dimension": "style"}],
+                threshold_gate={"passed": True, "violations": []},
+            ),
+        )
+        result = CliRunner().invoke(cli.app, ["iterate", "report"])
+        assert result.exit_code == 0
+        assert "threshold gate: PASS" in result.output
 
 
 class TestIterateReportCli:

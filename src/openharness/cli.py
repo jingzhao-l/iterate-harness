@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -1002,15 +1002,18 @@ schedule_app = typer.Typer(help="Manage the scheduled changed-only quick review 
 
 @schedule_app.command("add")
 def iterate_schedule_add(
-    schedule: str = typer.Argument(..., help="5-field cron expression (UTC)"),
+    schedule: str = typer.Argument(..., help="5-field cron expression"),
     ref: str = typer.Option("HEAD", "--ref", help="Git ref used as the changed baseline"),
     rounds: int = typer.Option(3, "--rounds", min=1, max=20, help="Review round cap"),
     mode: str = typer.Option("dry-run", "--mode", help="dry-run|normal"),
     timeout: int = typer.Option(
         3600, "--timeout", min=1, max=7200, help="Per-run timeout in seconds"
     ),
+    timezone: str = typer.Option(
+        "", "--timezone", help="IANA zone for the schedule (e.g. Asia/Shanghai); default UTC"
+    ),
 ) -> None:
-    """Register the scheduled quick-review cron job for this repo (UTC)."""
+    """Register the scheduled quick-review cron job for this repo."""
     from openharness.iterate import batch as iterate_batch
 
     try:
@@ -1021,14 +1024,16 @@ def iterate_schedule_add(
             rounds=rounds,
             mode=mode,
             timeout=timeout,
+            timezone=timezone or None,
         )
     except ValueError as exc:
         print(f"Rejected: {exc}", file=sys.stderr)
         raise typer.Exit(1) from exc
-    print(f"Scheduled {job['name']}: '{schedule}' (UTC)")
+    zone = job.get("timezone") or "UTC"
+    print(f"Scheduled {job['name']}: '{schedule}' ({zone})")
     print(f"  command: {job['command']}")
     print(f"  cwd: {job['cwd']}")
-    print(f"  next run: {job.get('next_run', '?')}")
+    print(f"  next run: {job.get('next_run', '?')} (UTC-normalized)")
     print("Start the scheduler with `oh cron start` if it is not running.")
 
 
@@ -1210,12 +1215,20 @@ def iterate_report(
             file=sys.stderr,
         )
     summary = ci_report.ReportSummary.from_entry(report_entry)
+    gate = ci_report.threshold_gate(report_entry)
 
     if html_out:
         _write_html_report(html_report, entries, html_out)
 
-    print(ci_report.render_github(summary) if github else ci_report.render_text(summary))
-    raise typer.Exit(ci_report.severity_gate(summary, threshold))
+    if github:
+        print(ci_report.render_github(summary))
+    else:
+        print(ci_report.render_text(summary, gate))
+    exit_code = max(
+        ci_report.severity_gate(summary, threshold),
+        ci_report.threshold_exit_code(gate),
+    )
+    raise typer.Exit(exit_code)
 
 
 def _write_html_report(html_report: object, entries: list, html_out: str) -> None:

@@ -56,17 +56,29 @@ def install_schedule(
     rounds: int = 3,
     mode: str = "dry-run",
     timeout: int = DEFAULT_SCHEDULE_TIMEOUT_SECONDS,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     """Register (or replace) the scheduled quick-review cron job.
 
-    Raises ``ValueError`` for an invalid cron expression or ref.
+    ``timezone`` (IANA name, e.g. ``Asia/Shanghai``) evaluates the cron
+    expression in that local zone; the default is UTC. Raises ``ValueError``
+    for an invalid cron expression, ref, or timezone.
     """
-    from openharness.services.cron import get_cron_job, upsert_cron_job, validate_cron_expression
+    from openharness.services.cron import (
+        get_cron_job,
+        upsert_cron_job,
+        validate_cron_expression,
+        validate_timezone,
+    )
 
     if not validate_cron_expression(schedule):
-        raise ValueError(f"invalid cron expression: {schedule!r} (5-field UTC)")
+        raise ValueError(f"invalid cron expression: {schedule!r} (5-field cron)")
     if mode not in ("dry-run", "normal"):
         raise ValueError(f"mode must be dry-run|normal (got {mode!r})")
+    if timezone is not None and not validate_timezone(timezone):
+        raise ValueError(
+            f"unknown timezone: {timezone!r} (expected an IANA name like Asia/Shanghai)"
+        )
     command = build_scheduled_command(ref=ref, rounds=rounds, mode=mode)
     upsert_cron_job(
         {
@@ -75,6 +87,7 @@ def install_schedule(
             "command": command,
             "cwd": cwd,
             "timeout": max(1, int(timeout)),
+            **({"timezone": timezone} if timezone else {}),
         }
     )
     stored = get_cron_job(ITERATE_CRON_JOB_NAME)

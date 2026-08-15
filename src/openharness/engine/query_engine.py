@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 from openharness.api.client import SupportsStreamingMessages
-from openharness.engine.cost_tracker import CostTracker
 from openharness.coordinator.coordinator_mode import get_coordinator_user_context
+from openharness.engine.cost_tracker import CostTracker
 from openharness.engine.messages import ConversationMessage, TextBlock, ToolResultBlock
 from openharness.engine.query import (
     AskUserPrompt,
@@ -37,10 +37,12 @@ def _default_iterate_policy(cwd: Path) -> object | None:
         kernel = load_settings().iterate
         if not kernel.enabled:
             return None
-        rounds = effective_review_rounds(kernel, project_config(cwd))
+        project = project_config(cwd)
+        rounds = effective_review_rounds(kernel, project)
         return IterateLoopPolicy(
             max_review_rounds=rounds,
             require_fix_approval=kernel.require_fix_approval,
+            total_token_budget=project.config.token_budget,
             price_overrides={
                 model: tuple(price)
                 for model, price in (kernel.price_overrides or {}).items()

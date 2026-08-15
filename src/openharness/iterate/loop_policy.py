@@ -55,6 +55,10 @@ class AggregateSnapshot:
     converged: bool = False
     by_dimension: dict[str, int] = field(default_factory=dict)
     mode: str = "dry-run"
+    # Per-dimension token-budget state published by the aggregate tool
+    # (empty when no budgets are configured or no usage was reported).
+    exhausted_dimensions: list[str] = field(default_factory=list)
+    all_dimensions_exhausted: bool = False
 
 
 def read_state(tool_metadata: dict[str, object] | None) -> AggregateSnapshot | None:
@@ -79,6 +83,8 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
     by_dim = {str(k): int(v) for k, v in by_dim_raw.items()} if isinstance(by_dim_raw, dict) else {}
     fbr_raw = state.get("findings_by_round")
     fbr = [int(x) for x in fbr_raw] if isinstance(fbr_raw, list) else []
+    exhausted_raw = state.get("exhausted_dimensions")
+    exhausted = [str(x) for x in exhausted_raw if isinstance(x, str)] if isinstance(exhausted_raw, list) else []
     return AggregateSnapshot(
         rounds_seen=int(state.get("rounds_seen", 0) or 0),
         total_findings=int(state.get("total_findings", 0) or 0),
@@ -86,6 +92,8 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
         converged=bool(state.get("converged", False)),
         by_dimension=by_dim,
         mode=str(state.get("mode", "dry-run")),
+        exhausted_dimensions=exhausted,
+        all_dimensions_exhausted=bool(state.get("all_dimensions_exhausted", False)),
     )
 
 
@@ -107,6 +115,10 @@ class IterateLoopPolicy:
     # normal-mode iterate loop is active.
     require_fix_approval: bool = False
     price_overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Whole-run token budget (from iterate.config.yaml ``token_budget``):
+    # once the main-loop usage exceeds it the loop hard-stops and steers the
+    # model toward the closing report. ``None`` disables the cap.
+    total_token_budget: int | None = None
     # Esc intervention channel (design §11.2.1): set externally by the
     # backend interrupt path while an iterate loop is running; consumed at
     # the next round boundary.
@@ -136,6 +148,10 @@ class IterateLoopPolicy:
     ) -> LoopDecision:
         """Evaluate one completed turn; return the engine decision."""
         self.cost_meter.accumulate(usage, model)
+        budget_stop = self._budget_stop_reason()
+        if budget_stop is not None:
+            snapshot = read_state(tool_metadata) or AggregateSnapshot(mode=self.mode)
+            return self._stop_decision(snapshot, budget_stop, self._build_progress(snapshot, usage))
         snapshot = read_state(tool_metadata)
         if snapshot is None or snapshot.rounds_seen <= self._rounds_seen:
             # No NEW aggregate this turn → nothing iterate-specific to do.
@@ -144,6 +160,16 @@ class IterateLoopPolicy:
         self._emitted_progress += 1
         progress = self._build_progress(snapshot, usage)
         return self._decide(snapshot, progress)
+
+    def _budget_stop_reason(self) -> str | None:
+        """Return the token-budget stop reason, or None when within budget."""
+        budget = self.total_token_budget
+        if budget is None:
+            return None
+        used = self.cost_meter.total_tokens
+        if used > budget:
+            return f"token budget exhausted ({used:,}/{budget:,} tokens)"
+        return None
 
     # -- internals --------------------------------------------------------
 
@@ -175,8 +201,20 @@ class IterateLoopPolicy:
             return self._stop_decision(
                 snapshot, f"round cap reached ({self.max_review_rounds})", progress
             )
+        if snapshot.all_dimensions_exhausted and snapshot.exhausted_dimensions:
+            return self._stop_decision(
+                snapshot,
+                "all dimension token budgets exhausted ("
+                + ", ".join(snapshot.exhausted_dimensions)
+                + ")",
+                progress,
+            )
         decision = LoopDecision(
-            inject_message=prompts.next_round_instruction(snapshot.rounds_seen, last_new),
+            inject_message=prompts.next_round_instruction(
+                snapshot.rounds_seen,
+                last_new,
+                exhausted_dimensions=snapshot.exhausted_dimensions or None,
+            ),
             progress=progress,
         )
         if self.pause_requested:

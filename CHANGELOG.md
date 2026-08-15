@@ -6,6 +6,21 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-15
+
+Policy layer: engine-enforced token budgets, project threshold gates, timezone-aware schedules.
+
+### Added
+
+- Whole-run token budget (`token_budget` in `iterate.config.yaml`): a positive integer enforced by the engine-level loop policy — once main-loop usage exceeds it the loop hard-stops with a `token budget exhausted (used/budget tokens)` reason and steers the model to the closing report. Enforcement is snapshot-independent (fires even on a turn without a fresh aggregate); `validate_config` rejects non-positive/non-integer values without killing the loop.
+- Per-dimension budget auditing (`openharness.iterate.review.audit_dimension_budgets`): `iterate_review(operation="aggregate", dimension_usage={...})` now accepts reported per-dimension token usage and audits it against `dimension_resources.<dim>.token_budget`. The aggregate output gains a `budgetAudit` block (budget/used/remaining/exceeded per dimension); exhausted dimensions flow into the loop-policy state, where ALL budgets exhausted stops the loop and PARTIAL exhaustion injects an explicit "do NOT spawn reviewer agents for these dimensions" directive into the next-round instruction. Auditing never raises — malformed usage is clamped/skipped.
+- Project threshold gates (`thresholds` in `iterate.config.yaml`): `max_critical` / `max_high` cap the number of findings at or above that severity, globally and per dimension (`thresholds.dimensions.<dim>`). Gates are evaluated in `iterate_review(operation="meta-review")` (pure `evaluate_threshold_gates`); a violated gate emits a `thresholdGate` block in the final report, folds one `THRESHOLD_EXCEEDED` meta-review issue per violation, and flips the verdict to `needs_revision`. The canonical-loop prompt directs the model to copy the block into the single report entry; CI (`oh iterate report`) renders `threshold gate: PASS/FAIL` (violations inlined, capped at 5) and fails the exit code via `threshold_exit_code` combined with `severity_gate`. Invalid threshold yaml entries are reported by `validate_config` and skipped.
+- Timezone-aware scheduled reviews: `oh iterate schedule add <cron> --timezone <IANA>` (e.g. `Asia/Shanghai`) evaluates the 5-field cron expression in local time and stores the next run UTC-normalized; `next_run_time` / `upsert_cron_job` / `mark_job_run` all honor the job's `timezone` (unknown stored zones fall back to UTC), unknown zones are rejected with `ValueError` at install time, and the scheduler's due check compares against the stored UTC time so a 09:00 Beijing job fires at 01:00 UTC.
+
+### Changed
+
+- README (en + zh-CN): feature table gains the token budgets / threshold gates / schedule timezones rows; version badges updated to 1.1.0.
+
 ## [1.0.0] - 2026-08-15
 
 First stable release: shareable single-file HTML report, chronological decision replay, per-dimension resource overrides.

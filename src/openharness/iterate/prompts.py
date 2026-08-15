@@ -47,6 +47,9 @@ Canonical loop — reproduce this structure exactly (adjust dims via the plan):
    final report (counts, severity buckets, dimension sums, sort order,
    convergence math). `verdict` is `approved` only if every check passes.
 6. Append exactly ONE `report` entry to the decision log. Nothing else is written.
+   When the meta-review output carries a `thresholdGate` block (project
+   thresholds configured), copy it verbatim into the report entry under
+   `thresholdGate` so CI (`oh iterate report`) can gate on it.
 7. When the user wants a say in the findings, offer triage via
    `iterate_triage(findings=[...])` — the user answers y/n/a per finding and
    `a` entries are persisted to known_intentional automatically.
@@ -188,15 +191,32 @@ def resume_kickoff(goal: str, max_rounds: int, last_summary: dict) -> str:
     )
 
 
-def next_round_instruction(round_number: int, new_findings: int) -> str:
-    """Engine-injected message steering the next review round."""
-    return (
+def next_round_instruction(
+    round_number: int,
+    new_findings: int,
+    *,
+    exhausted_dimensions: list[str] | None = None,
+) -> str:
+    """Engine-injected message steering the next review round.
+
+    ``exhausted_dimensions`` lists dimensions whose configured token budget
+    is already spent — the next round must skip spawning reviewers for them.
+    """
+    base = (
         f"[iterate] Round {round_number} recorded {new_findings} new finding(s). "
         "Start the next review round now: re-review every dimension IN "
         "PARALLEL on the current state, feed the already-known findings so "
         "reviewers hunt NEW issues only, then aggregate via "
         'iterate_review(operation="aggregate").'
     )
+    if exhausted_dimensions:
+        listing = ", ".join(sorted(exhausted_dimensions))
+        base += (
+            " Token budgets are EXHAUSTED for: "
+            f"{listing} — do NOT spawn reviewer agents for these dimensions "
+            "this round; review only the remaining dimensions."
+        )
+    return base
 
 
 def convergence_stop_notice(reason: str, total_findings: int) -> str:
