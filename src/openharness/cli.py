@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "0.6.0"
+__version__ = "1.0.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -1140,9 +1140,13 @@ def iterate_log(
     trend: bool = typer.Option(
         False, "--trend", help="Show the cross-run finding trend summary instead of entries"
     ),
+    replay: bool = typer.Option(
+        False, "--replay", help="Replay the whole run chronologically (relative timestamps)"
+    ),
 ) -> None:
     """View the append-only iterate decision log."""
     from openharness.iterate import decision_log as iter_log
+    from openharness.iterate import replay as replay_mod
     from openharness.iterate import trend_store
 
     if trend:
@@ -1154,6 +1158,9 @@ def iterate_log(
         return
 
     entries = iter_log.read_entries(str(Path.cwd()))
+    if replay:
+        print(replay_mod.render_replay(entries))
+        return
     if as_json:
         print(json.dumps([e.__dict__ for e in entries], ensure_ascii=False, indent=2))
         return
@@ -1171,6 +1178,11 @@ def iterate_report(
     github: bool = typer.Option(
         False, "--github", help="Emit GitHub Actions workflow commands (PR annotations)"
     ),
+    html_out: str = typer.Option(
+        "",
+        "--html",
+        help="Write a self-contained single-file HTML report (path or '-' for default .iterate/report.html)",
+    ),
     fail_on: str = typer.Option(
         "high",
         "--fail-on",
@@ -1182,8 +1194,7 @@ def iterate_report(
     Exit code is 1 when any finding is at or above --fail-on severity;
     a missing or malformed report degrades to an empty report (exit 0).
     """
-    from openharness.iterate import ci_report
-    from openharness.iterate import decision_log as iter_log
+    from openharness.iterate import ci_report, decision_log as iter_log, html_report
 
     threshold = fail_on.strip().lower()
     if threshold not in ci_report.SEVERITY_ORDER:
@@ -1199,8 +1210,24 @@ def iterate_report(
             file=sys.stderr,
         )
     summary = ci_report.ReportSummary.from_entry(report_entry)
+
+    if html_out:
+        _write_html_report(html_report, entries, html_out)
+
     print(ci_report.render_github(summary) if github else ci_report.render_text(summary))
     raise typer.Exit(ci_report.severity_gate(summary, threshold))
+
+
+def _write_html_report(html_report: object, entries: list, html_out: str) -> None:
+    """Render and write the single-file HTML report for this project."""
+    page = html_report.build_html_report(entries)
+    if page is None:
+        print("No report entry to render as HTML.", file=sys.stderr)
+        return
+    target = Path(html_out) if html_out != "-" else Path.cwd() / ".iterate" / "report.html"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(page, encoding="utf-8")
+    print(f"HTML report written: {target}")
 
 
 # ---- plugin subcommands ----

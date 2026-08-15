@@ -28,7 +28,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-0.6.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.0.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -56,7 +56,9 @@ oh iterate run           # 无头自治修复闭环
 oh iterate resume        # 恢复上次会话
 oh iterate log           # 查看决策日志尾部
 oh iterate log --trend   # 查看跨运行 finding 趋势（新增/已修复/回归/顽固）
+oh iterate log --replay  # 按时间序回放整次运行（相对时间戳）
 oh iterate report        # 渲染最终报告（CI 模式，见下）
+oh iterate report --html # 单文件 HTML 报告（收敛曲线、内嵌 diff、可直接分享）
 oh iterate batch a/ b/   # 顺序评审多个仓库，按严重度加权排出最差榜
 oh iterate schedule add "0 9 * * 1-5" # 每日 changed-only 快审（cron，UTC）
 ```
@@ -83,6 +85,9 @@ OpenAI 兼容供应商，见 `oh --help`）。
 | **changed-only 快审** | `--changed [--ref <ref>]`（CLI 与 `/iterate review --changed`）把整个闭环钉在 git 增量上：kickoff、评审计划与每个维度 reviewer prompt 都携带明确的改动文件清单 |
 | **批量排行** | `oh iterate batch repoA repoB …` 顺序评审多个仓库，按严重度加权排出最差榜；单个仓库失败不会中断整批 |
 | **定时评审** | `oh iterate schedule add "0 9 * * 1-5"` 注册 cron 任务，每日（UTC）自动跑 changed-only 快审（`--clean-ok`）；新增 vs 顽固 finding 经趋势库呈现 |
+| **HTML 单文件报告** | `oh iterate report --html` 把整次运行渲染成一个可离线打开的 `.html`：SVG 收敛曲线、severity/维度分布条、含失败场景的 findings 表、按修复着色的 diff——可直接作为 CI 产物分享 |
+| **评审回放** | `oh iterate log --replay` 按时间序回放整次运行（`[+90s] r1 review_result newFindings=3`），像看录像一样还原闭环展开过程 |
+| **per-dimension 资源** | `iterate.config.yaml` 的 `dimension_resources` 支持按维度设置 `model` / `concurrency`（1–8）/ `token_budget`——security 用强模型、style-tests 用快模型；评审计划会携带到每次 reviewer 派发 |
 | **决策日志** | append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘 |
 | **项目知识** | `ITERATE.md` 项目知识 + 按项目隔离的 9 类结构化个性化数据 |
 

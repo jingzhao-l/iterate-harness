@@ -25,6 +25,7 @@ import yaml
 
 from .types import (
     AtomicConfig,
+    DimensionResources,
     GitConfig,
     IterateConfig,
     ReviewerConfig,
@@ -33,6 +34,10 @@ from .types import (
 )
 
 CONFIG_FILENAME = "iterate.config.yaml"
+
+#: Bounds for per-dimension concurrency overrides (validated at load time).
+MIN_DIMENSION_CONCURRENCY = 1
+MAX_DIMENSION_CONCURRENCY = 8
 
 
 @dataclass
@@ -94,7 +99,74 @@ def _default_config_dict() -> dict[str, object]:
             "commands": dict(cfg.validation.commands),
         },
         "reviewer": {"output_schema_validation": cfg.reviewer.output_schema_validation},
+        "dimension_resources": {
+            name: resources_to_dict(res) for name, res in cfg.dimension_resources.items()
+        },
     }
+
+
+def parse_dimension_resources(
+    raw: object,
+) -> tuple[dict[str, DimensionResources], list[str]]:
+    """Parse the ``dimension_resources`` mapping defensively.
+
+    Returns ``(resources, errors)``: unknown-key/invalid-value entries are
+    reported as errors and skipped, never raise — a typo in the yaml must
+    not kill the whole loop.
+    """
+    if raw is None:
+        return {}, []
+    if not isinstance(raw, dict):
+        return {}, ["dimension_resources must be a mapping"]
+
+    resources: dict[str, DimensionResources] = {}
+    errors: list[str] = []
+    for name, value in raw.items():
+        dim = str(name)
+        if not isinstance(value, dict):
+            errors.append(f"dimension_resources.{dim} must be a mapping")
+            continue
+        model = value.get("model")
+        if model is not None and not isinstance(model, str):
+            errors.append(f"dimension_resources.{dim}.model must be a string")
+            model = None
+        concurrency = value.get("concurrency")
+        if concurrency is not None:
+            if not isinstance(concurrency, int) or isinstance(concurrency, bool):
+                errors.append(f"dimension_resources.{dim}.concurrency must be an integer")
+                concurrency = None
+            else:
+                concurrency = max(
+                    MIN_DIMENSION_CONCURRENCY, min(MAX_DIMENSION_CONCURRENCY, concurrency)
+                )
+        token_budget = value.get("token_budget")
+        if token_budget is not None and (
+            not isinstance(token_budget, int)
+            or isinstance(token_budget, bool)
+            or token_budget < 0
+        ):
+            errors.append(
+                f"dimension_resources.{dim}.token_budget must be a non-negative integer"
+            )
+            token_budget = None
+        resources[dim] = DimensionResources(
+            model=model or None,
+            concurrency=concurrency,
+            token_budget=token_budget,
+        )
+    return resources, errors
+
+
+def resources_to_dict(resources: DimensionResources) -> dict[str, object]:
+    """Serialize DimensionResources back to its yaml shape (set fields only)."""
+    out: dict[str, object] = {}
+    if resources.model is not None:
+        out["model"] = resources.model
+    if resources.concurrency is not None:
+        out["concurrency"] = resources.concurrency
+    if resources.token_budget is not None:
+        out["token_budget"] = resources.token_budget
+    return out
 
 
 def merge_config(
@@ -186,6 +258,9 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     dimensions = data.get("dimensions")
     onboarding = data.get("onboarding")
     personalization = data.get("personalization")
+    dimension_resources, _resource_errors = parse_dimension_resources(
+        data.get("dimension_resources")
+    )
 
     return IterateConfig(
         goal=data.get("goal", defaults.goal),
@@ -197,6 +272,7 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
         git=git,
         validation=validation,
         reviewer=reviewer,
+        dimension_resources=dimension_resources,
         onboarding=dict(onboarding) if isinstance(onboarding, dict) else None,
         personalization=dict(personalization) if isinstance(personalization, dict) else None,
     )
@@ -270,4 +346,9 @@ def validate_config(config: object) -> list[str]:
             errors.append("validation.command_whitelist")
         if not isinstance(validation.get("commands"), dict):
             errors.append("validation.commands")
+
+    raw_resources = config.get("dimension_resources")
+    if raw_resources is not None:
+        _, resource_errors = parse_dimension_resources(raw_resources)
+        errors.extend(resource_errors)
     return errors

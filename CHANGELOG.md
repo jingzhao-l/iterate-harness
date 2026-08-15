@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-15
+
+First stable release: shareable single-file HTML report, chronological decision replay, per-dimension resource overrides.
+
+### Added
+
+- Single-file HTML report (`openharness.iterate.html_report` + `oh iterate report --html [path]` / `/iterate report --html`): renders the final report entry plus the fix timeline (atomic_fix / revert / validation entries before the report, capped at 50) into ONE self-contained `.html` file — inline CSS only, zero external requests, no scripts. Includes an inline SVG convergence curve (findings per round with per-point labels), severity + dimension distribution bars, the full findings table (failure scenario + suggested fix per finding), colorized unified diffs from `atomic_fix` entries, and verdict/mode/converged badges. All log-derived text is HTML-escaped; severity colors come from a fixed table so log content cannot inject markup. Default output path: `.iterate/report.html`; the `--fail-on` severity gate still decides the exit code so CI can upload the artifact AND gate on it.
+- Decision-log replay (`openharness.iterate.replay` + `oh iterate log --replay` / `/iterate log --replay`): re-plays the whole run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`), a per-type one-line summary (goal / findings / fix / command / verdict probes), unknown-type payload previews, and truncation at 140 chars. Unparseable timestamps degrade to `[+?s]`; an empty log prints a friendly placeholder.
+- Per-dimension resource overrides (`dimension_resources` in `iterate.config.yaml`): each dimension can set `model` (e.g. a strong model for security, a fast one for style-tests), `concurrency` (clamped to 1–8) and `token_budget` (non-negative). Values are parsed defensively (invalid entries are reported by `validate_config` and skipped, never fatal), flow into the review plan (`DimensionPlan.resources`, serialized in `plan_to_dict`) and are appended to the reviewer prompt as an explicit spawn directive ("Resource plan: model=…; max concurrent reviewer agents=…; token budget=…"). `/iterate config` lists the effective per-dimension resources.
+
+### Changed
+
+- README (en + zh-CN): feature table gains the HTML report / decision replay / per-dimension resources rows; the CLI block shows `oh iterate report --html` and `oh iterate log --replay`; version badges updated to 1.0.0.
+
 ## [0.6.0] - 2026-08-15
 
 Unattended scenarios: changed-only quick review, multi-repo batch ranking, scheduled reviews.

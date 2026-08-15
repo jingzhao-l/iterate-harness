@@ -30,7 +30,7 @@ convergence policy are layered on top.
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-0.6.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.0.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -58,7 +58,9 @@ oh iterate run           # headless autonomous fix loop
 oh iterate resume        # resume the last session
 oh iterate log           # tail the decision log
 oh iterate log --trend   # cross-run finding trend (new/fixed/regressed/stubborn)
+oh iterate log --replay  # replay the whole run chronologically (relative timestamps)
 oh iterate report        # render the final report (CI mode, see below)
+oh iterate report --html # single-file HTML report (convergence curve, diffs, shareable)
 oh iterate batch a/ b/   # review multiple repos sequentially, rank worst-first
 oh iterate schedule add "0 9 * * 1-5" # daily changed-only quick review (cron, UTC)
 ```
@@ -85,6 +87,9 @@ providers are also supported — see `oh --help`).
 | **Changed-only quick review** | `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing |
 | **Batch ranking** | `oh iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch |
 | **Scheduled review** | `oh iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library |
+| **HTML single-file report** | `oh iterate report --html` renders the run as ONE offline `.html` file: SVG convergence curve, severity/dimension bars, findings table with failure scenarios, and colorized per-fix diffs — share it as a CI artifact |
+| **Decision replay** | `oh iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording |
+| **Per-dimension resources** | `dimension_resources` in `iterate.config.yaml` sets per-dimension `model` / `concurrency` (1–8) / `token_budget` — a strong model for security, a fast one for style-tests; the plan carries them into every reviewer spawn |
 | **Decision log** | Append-only `.iterate/decision-log.jsonl`: every round, fix, validation and triage decision is recorded |
 | **Project knowledge** | `ITERATE.md` project knowledge + per-project structured personalization (9 categories) |
 

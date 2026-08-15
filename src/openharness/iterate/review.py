@@ -29,8 +29,10 @@ import json
 import re
 from dataclasses import dataclass, field
 
+from .config_loader import resources_to_dict
 from .types import (
     ConvergenceInfo,
+    DimensionResources,
     IterateConfig,
     KnownIntentional,
     ReportSummary,
@@ -357,6 +359,7 @@ class DimensionPlan:
     id: str
     reviewer_prompt: str
     findings_schema: dict[str, object] = field(default_factory=findings_schema)
+    resources: DimensionResources | None = None
 
 
 @dataclass
@@ -369,6 +372,24 @@ class ReviewPlan:
     dimensions: list[DimensionPlan]
     max_review_rounds: int
     known_intentional: list[KnownIntentional] = field(default_factory=list)
+
+
+def _resource_prompt_clause(resources: DimensionResources | None) -> str:
+    """One instruction line telling the orchestrator how to spawn this dimension."""
+    if resources is None or resources.is_empty():
+        return ""
+    directives: list[str] = []
+    if resources.model is not None:
+        directives.append(f"model={resources.model}")
+    if resources.concurrency is not None:
+        directives.append(f"max concurrent reviewer agents={resources.concurrency}")
+    if resources.token_budget is not None:
+        directives.append(f"token budget={resources.token_budget}")
+    return (
+        "\nResource plan (applies when spawning this dimension's reviewer agent): "
+        + "; ".join(directives)
+        + "."
+    )
 
 
 def build_review_plan(
@@ -384,7 +405,9 @@ def build_review_plan(
     Used by the ``iterate_review`` tool's ``plan`` operation to give the
     orchestrator a canonical spec. When ``changed_files`` is non-empty the
     plan switches to changed-only scope and embeds the file list into every
-    reviewer prompt (changed-only quick review).
+    reviewer prompt (changed-only quick review). Per-dimension resource
+    overrides (model / concurrency / token budget) are attached both to the
+    dimension spec and as an explicit clause inside the reviewer prompt.
     """
     language = "Chinese (中文)" if config.language == "zh" else "English"
     safe_changed = [f for f in (changed_files or []) if isinstance(f, str) and f.strip()]
@@ -405,7 +428,9 @@ def build_review_plan(
                     output_language=language,
                     atomic_max_lines=config.atomic.max_lines,
                     changed_files=safe_changed or None,
-                ),
+                )
+                + _resource_prompt_clause(config.dimension_resources.get(d)),
+                resources=config.dimension_resources.get(d),
             )
             for d in config.dimensions
         ],
@@ -426,6 +451,11 @@ def plan_to_dict(plan: ReviewPlan) -> dict[str, object]:
                 "id": d.id,
                 "reviewerPrompt": d.reviewer_prompt,
                 "findingsSchema": d.findings_schema,
+                **(
+                    {"resources": resources_to_dict(d.resources)}
+                    if d.resources is not None and not d.resources.is_empty()
+                    else {}
+                ),
             }
             for d in plan.dimensions
         ],

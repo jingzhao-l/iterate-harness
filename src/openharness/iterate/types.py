@@ -105,6 +105,22 @@ class ReviewScopeConfig:
 
 
 @dataclass
+class DimensionResources:
+    """Per-dimension resource overrides (model / concurrency / token budget).
+
+    Unset fields (``None``) mean "inherit the session default" — the plan
+    only carries what the project explicitly configured.
+    """
+
+    model: str | None = None
+    concurrency: int | None = None
+    token_budget: int | None = None
+
+    def is_empty(self) -> bool:
+        return self.model is None and self.concurrency is None and self.token_budget is None
+
+
+@dataclass
 class AtomicConfig:
     max_lines: int = 20
     max_adjacent_methods: int = 3
@@ -152,6 +168,7 @@ class IterateConfig:
     git: GitConfig = field(default_factory=GitConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     reviewer: ReviewerConfig = field(default_factory=ReviewerConfig)
+    dimension_resources: dict[str, DimensionResources] = field(default_factory=dict)
     onboarding: dict[str, object] | None = None
     personalization: dict[str, object] | None = None
 

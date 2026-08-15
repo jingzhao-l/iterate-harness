@@ -74,6 +74,10 @@ def _format_config(cwd: str) -> str:
         f"max rounds: {_resolve_rounds(cwd)} (project max_rounds={cfg.max_rounds})",
         f"validation commands: {len(config_loader.flatten_commands(cfg.validation.commands))} configured",
     ]
+    for name in sorted(cfg.dimension_resources):
+        rendered = config_loader.resources_to_dict(cfg.dimension_resources[name])
+        if rendered:
+            lines.append(f"dimension resources [{name}]: {rendered}")
     return "\n".join(lines)
 
 
@@ -194,6 +198,12 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
     if sub == "log":
         if rest and rest[0] == "trend":
             return _result(message=trend_store.render_trend_summary(trend_store.summarize(cwd)))
+        if "--replay" in rest:
+            from openharness.iterate import replay as replay_mod
+
+            return _result(
+                message=replay_mod.render_replay(decision_log.read_entries(cwd))
+            )
         try:
             limit = int(rest[0]) if rest else DEFAULT_LOG_TAIL
         except ValueError:
@@ -204,10 +214,26 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
         return _result(message=trend_store.render_trend_summary(trend_store.summarize(cwd)))
 
     if sub == "report":
-        report_entry = ci_report.latest_report_entry(decision_log.read_entries(cwd))
+        entries = decision_log.read_entries(cwd)
+        report_entry = ci_report.latest_report_entry(entries)
         if report_entry is None:
             return _result(
                 message="No report entry in the decision log yet (run /iterate review or /iterate run first)."
+            )
+        if "--html" in rest:
+            from openharness.iterate import html_report as html_mod
+
+            page = html_mod.build_html_report(entries)
+            if page is None:
+                return _result(message="No report entry to render as HTML.")
+            target = Path(cwd) / ".iterate" / "report.html"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(page, encoding="utf-8")
+            return _result(
+                message=(
+                    f"HTML report written: {target}\n"
+                    + ci_report.render_text(ci_report.ReportSummary.from_entry(report_entry))
+                )
             )
         return _result(
             message=ci_report.render_text(ci_report.ReportSummary.from_entry(report_entry))
