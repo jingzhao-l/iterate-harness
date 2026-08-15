@@ -12,6 +12,8 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
 - :mod:`.loop_policy` — engine-level convergence enforcement
 - :mod:`.cost` — USD money layer over token usage
 - :mod:`.personalization` — 9-category per-project personalization
+- :mod:`.onboarding` / :mod:`.onboard_cmd` — ITERATE.md knowledge base + fingerprints
+- :mod:`.personalize_cmd` — skill-parity 9-category personalize wizard
 - :mod:`.prompts` — canonical workflow prompt templates
 - :mod:`.trend_store` — finding fingerprint trend library (new/fixed/stubborn)
 - :mod:`.worktree_flow` — fix-round git isolation orchestration
@@ -65,6 +67,7 @@ _EXPORTS: dict[str, str] = {
     "dry_run_kickoff": ".prompts",
     "next_round_instruction": ".prompts",
     "normal_kickoff": ".prompts",
+    "personalization_constraints": ".prompts",
     # review
     "SEVERITY_RANK": ".review",
     "aggregate_rounds": ".review",
@@ -154,6 +157,7 @@ __all__ = [
     "next_round_instruction",
     "normal_kickoff",
     "normalize_summary",
+    "personalization_constraints",
     "plan_to_dict",
     "post_pr_comment",
     "price_for",

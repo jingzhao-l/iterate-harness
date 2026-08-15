@@ -6,6 +6,22 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-15
+
+Personalization parity with the skill: the full 9-category wizard, kernel-enforced protected paths, and fingerprint auto-capture after TUI onboarding.
+
+### Added
+
+- **`ih iterate personalize`** (`iterate_harness.iterate.personalize_cmd`): the skill's 9-category personalization wizard, re-run any time to edit in place (existing config + `ITERATE.md` are pre-loaded as defaults). Structured categories (protected paths, risk areas, known-intentional, dimension focus overrides, fix priority order, forbidden fixes) are written to the `personalization` section of `iterate.config.yaml`; free-text categories (iterate notes, code conventions) are rendered into the `ITERATE.md` user-owned region with exact-header section replacement — manually written user sections survive verbatim. Extra validation commands pass the skill's strict whitelist (forbidden shell metacharacters, allowed tool prefixes, `ITERATE_EXTRA_SAFE_PREFIXES` env extension) BEFORE merging into `validation.commands` + `command_whitelist`, so schema validation can never fail on a hostile entry. `/iterate personalize` in the TUI shows the current personalization summary and points at the CLI wizard.
+- **Kernel-enforced protected paths**: `build_permission_checker` (`permissions/checker.py`) now also merges the current project's `personalization.protected_paths` into the deny path rules (normalized to absolute-path globs) — wizard-configured protected paths are a hard permission boundary, not just a prompt-side instruction. Unreadable configs contribute no rules and never crash permission bootstrap.
+- **Personalization constraints in every kickoff**: review/run kickoffs append the personalization constraint block (protected paths, risk areas, forbidden fixes, fix priority, dimension focus, known-intentional count) so every loop starts with the project-specific rules in context.
+- **Fingerprint auto-capture after TUI onboarding** (`ensure_onboarding_fingerprints`): when `ITERATE.md` exists but the config has no `onboarding.fingerprints` (the TUI `/iterate onboard` path — the slash-command flow cannot run the CLI's synchronous post-scan bookkeeping), the next review/run/drift-check completes the config's `onboarding` section with harness-serialized fingerprints. The model never touches trusted config; users no longer need a manual `ih iterate refresh` after TUI onboarding.
+- Defensive config parsing: `load_personalization_from_config` accepts either a full config dict or the personalization section itself, and string lists keep only non-empty `str` entries (hostile YAML degrades to empty instead of coercing).
+
+### Changed
+
+- README (en + zh-CN): `personalize` in the CLI cheat-sheet, a "Personalization wizard" feature row, the onboarding row now mentions TUI fingerprint auto-capture; version badges updated to 1.6.0.
+
 ## [1.5.0] - 2026-08-15
 
 Full onboarding parity with the skill: model-driven `ITERATE.md` generation, manifest fingerprints, drift detection, and knowledge-base injection into every loop.

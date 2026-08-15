@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -844,9 +844,13 @@ def _run_headless(kickoff: str) -> None:
     """Run one canonical iterate prompt through the kernel print pipeline."""
     import asyncio
 
-    from iterate_harness.iterate.onboard_cmd import warn_if_drifted
+    from iterate_harness.iterate.onboard_cmd import (
+        ensure_onboarding_fingerprints,
+        warn_if_drifted,
+    )
     from iterate_harness.ui.app import run_print_mode
 
+    ensure_onboarding_fingerprints(Path.cwd())
     warn_if_drifted(Path.cwd())
     asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
 
@@ -909,6 +913,14 @@ def iterate_reonboard(
     from iterate_harness.iterate.onboard_cmd import run_reonboard
 
     raise typer.Exit(run_reonboard(yes=yes, goal=goal, no_ai=no_ai))
+
+
+@iterate_app.command("personalize")
+def iterate_personalize() -> None:
+    """Interactive 9-category personalization wizard (config + ITERATE.md dual write)."""
+    from iterate_harness.iterate.personalize_cmd import run_personalize
+
+    raise typer.Exit(run_personalize())
 
 
 @iterate_app.command("status")
@@ -1015,7 +1027,9 @@ def iterate_review(
 
     effective_goal = load_effective_config(str(Path.cwd())).config.goal
     changed_files = _resolve_changed_files(changed, ref, clean_ok)
-    _run_headless(iterate_prompts.dry_run_kickoff(effective_goal, rounds, changed_files))
+    _run_headless(
+        iterate_prompts.dry_run_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd()))
+    )
 
 
 @iterate_app.command("run")
@@ -1035,7 +1049,9 @@ def iterate_run(
 
     effective_goal = load_effective_config(str(Path.cwd())).config.goal
     changed_files = _resolve_changed_files(changed, ref, clean_ok)
-    _run_headless(iterate_prompts.normal_kickoff(effective_goal, rounds, changed_files))
+    _run_headless(
+        iterate_prompts.normal_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd()))
+    )
 
 
 schedule_app = typer.Typer(help="Manage the scheduled changed-only quick review (cron)")

@@ -3,7 +3,9 @@
 Subcommands:
 - ``/iterate`` or ``/iterate status`` — effective config + decision-log summary
 - ``/iterate onboard [goal]`` — model-driven project scan that writes ITERATE.md
-  (afterwards run ``ih iterate refresh`` in a terminal to record fingerprints)
+  (fingerprints auto-recorded on the next review/run, or via ``ih iterate refresh``)
+- ``/iterate personalize`` — show personalization state; run ``ih iterate
+  personalize`` in a terminal for the interactive 9-category wizard
 - ``/iterate review [--changed] [--ref <ref>]`` — kick off the canonical dry-run loop
 - ``/iterate run [--changed] [--ref <ref>]`` — kick off the canonical normal-mode autonomous loop
 - ``/iterate resume`` — continue the last finished run from its decision log
@@ -36,7 +38,11 @@ from iterate_harness.iterate import (
     trend_store,
 )
 from iterate_harness.iterate import validate as validate_mod
-from iterate_harness.iterate.settings import IterateSettings, effective_review_rounds, project_config
+from iterate_harness.iterate.settings import (
+    IterateSettings,
+    effective_review_rounds,
+    project_config,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -125,6 +131,15 @@ def _drift_note(cwd: str) -> str:
     return f"\n⚠ Onboarding drift: {drift.summary()} — run `ih iterate refresh` / `reonboard`."
 
 
+def _auto_fingerprint_note(cwd: str) -> str:
+    """Complete post-onboarding bookkeeping (fingerprints) when pending."""
+    from iterate_harness.iterate.onboard_cmd import ensure_onboarding_fingerprints
+
+    if ensure_onboarding_fingerprints(cwd, quiet=True):
+        return "\n✓ Recorded onboarding fingerprints into iterate.config.yaml."
+    return ""
+
+
 async def iterate_command_handler(args: str, context: CommandContext) -> CommandResult:
     """Handle ``/iterate [subcommand]``."""
     tokens = args.split()
@@ -167,10 +182,43 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
         return _result(
             message=(
                 "Starting model-driven onboarding scan — the model will explore the "
-                "project and write ITERATE.md. Afterwards run `ih iterate refresh` in a "
-                "terminal to record manifest fingerprints into iterate.config.yaml."
+                "project and write ITERATE.md. Manifest fingerprints are recorded "
+                "automatically into iterate.config.yaml on your next review/run "
+                "(or immediately via `ih iterate refresh` in a terminal). "
+                "Add project-specific constraints afterwards with `ih iterate personalize`."
             ),
             submit_prompt=kickoff,
+        )
+
+    if sub == "personalize":
+        from iterate_harness.iterate import onboarding as onboarding_mod
+        from iterate_harness.iterate import personalize_cmd
+
+        if not onboarding_mod.is_onboarded(cwd):
+            return _result(
+                message="Not onboarded yet — run `/iterate onboard` (or `ih iterate onboard`) first."
+            )
+        existing = personalize_cmd.load_existing_personalization(Path(cwd))
+        counts = (
+            f"protected paths: {len(existing.protected_paths)}",
+            f"risk areas: {len(existing.risk_areas)}",
+            f"known intentional: {len(existing.known_intentional)}",
+            f"dimension focus: {len(existing.dimension_focus)}",
+            f"fix priority order: {len(existing.fix_priority_order)}",
+            f"forbidden fixes: {len(existing.forbidden_fixes)}",
+            f"iterate notes: {len(existing.iterate_notes)}",
+            f"code conventions: {len(existing.code_conventions)}",
+            f"extra validation commands: {sum(len(c) for c in existing.extra_validation_commands.values())}",
+        )
+        return _result(
+            message=(
+                "Current personalization:\n- "
+                + "\n- ".join(counts)
+                + "\n\nThe interactive 9-category wizard runs in a terminal:\n"
+                "  ih iterate personalize\n"
+                "Structured rules are written to iterate.config.yaml, free-text notes "
+                "to the ITERATE.md user-owned region."
+            )
         )
 
     if sub == "review":
@@ -190,12 +238,13 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
                         "(clean tree / not a git repo) — nothing to quick-review."
                     )
                 )
-        kickoff = prompts.dry_run_kickoff(effective.config.goal, rounds, changed_files)
+        kickoff = prompts.dry_run_kickoff(effective.config.goal, rounds, changed_files, cwd=cwd)
         scope_note = (
             f"changed-only, {len(changed_files)} file(s)" if changed_files else "full codebase"
         )
         return _result(
             message=f"Starting dry-run review ({scope_note}, {rounds} round cap)…"
+            + _auto_fingerprint_note(cwd)
             + _drift_note(cwd),
             submit_prompt=kickoff,
         )
@@ -217,12 +266,13 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
                         "(clean tree / not a git repo) — nothing to quick-review."
                     )
                 )
-        kickoff = prompts.normal_kickoff(effective.config.goal, rounds, changed_files)
+        kickoff = prompts.normal_kickoff(effective.config.goal, rounds, changed_files, cwd=cwd)
         scope_note = (
             f"changed-only, {len(changed_files)} file(s)" if changed_files else "full codebase"
         )
         return _result(
             message=f"Starting autonomous iterate loop ({scope_note}, {rounds} round cap)…"
+            + _auto_fingerprint_note(cwd)
             + _drift_note(cwd),
             submit_prompt=kickoff,
         )
@@ -346,8 +396,10 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
 
     return _result(
         message=(
-            "Usage: /iterate [status|config|review|run|resume|log|trend|report|init|validate]\n"
+            "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|report|init|validate]\n"
             "- status|config: effective config summary\n"
+            "- onboard [goal]: model-driven project scan that writes ITERATE.md\n"
+            "- personalize: show personalization state (wizard: `ih iterate personalize`)\n"
             "- review [--changed] [--ref <ref>]: dry-run pure review (read-only, convergence-enforced);\n"
             "  --changed pins the loop to files changed vs <ref> (default HEAD)\n"
             "- run [--changed] [--ref <ref>]: autonomous review-fix-validate loop (same flags)\n"

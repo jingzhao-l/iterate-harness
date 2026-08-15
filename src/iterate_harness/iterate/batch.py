@@ -187,9 +187,9 @@ async def _review_one_repo(
             return _base_record(repo, "clean", f"no changes vs {ref}")
     goal = config_loader.load_effective_config(str(repo)).config.goal
     kickoff = (
-        prompts.normal_kickoff(goal, rounds, changed_files)
+        prompts.normal_kickoff(goal, rounds, changed_files, cwd=str(repo))
         if mode == "normal"
-        else prompts.dry_run_kickoff(goal, rounds, changed_files)
+        else prompts.dry_run_kickoff(goal, rounds, changed_files, cwd=str(repo))
     )
     from iterate_harness.ui.app import run_print_mode
 

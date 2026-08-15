@@ -123,6 +123,63 @@ def changed_scope_clause(changed_files: list[str] | None) -> str:
     )
 
 
+def personalization_constraints(cwd: str | None) -> str:
+    """Render the project's structured personalization rules as prompt text.
+
+    Mirrors the skill's SKILL.md "Load personalization" step: protected
+    paths, risk areas, forbidden fixes, fix priority and dimension focus
+    are surfaced to every review/fix loop kickoff. Hard boundaries
+    (protected paths as deny rules) are ALSO enforced by the permission
+    layer; this clause covers prompt-side compliance (forbidden fixes,
+    risk-area approval, reviewer focus).
+    """
+    if not cwd:
+        return ""
+    from .config_loader import load_effective_config
+
+    personalization = load_effective_config(cwd).config.personalization
+    if not isinstance(personalization, dict) or not personalization:
+        return ""
+
+    lines: list[str] = []
+    protected = [str(p) for p in personalization.get("protected_paths") or []]
+    if protected:
+        lines.append(
+            "Protected paths (NEVER modify, enforced by permissions too): "
+            + ", ".join(f"`{p}`" for p in protected)
+        )
+    risks = [
+        (str(item.get("path", "")), str(item.get("reason", "")))
+        for item in personalization.get("risk_areas") or []
+        if isinstance(item, dict)
+    ]
+    if risks:
+        rendered = ", ".join(f"`{path}` ({reason or 'no reason given'})" for path, reason in risks)
+        lines.append(f"Risk areas (changes require explicit user approval): {rendered}")
+    forbidden = [str(f) for f in personalization.get("forbidden_fixes") or []]
+    if forbidden:
+        lines.append(
+            "Forbidden fix approaches (never use): " + ", ".join(f"`{f}`" for f in forbidden)
+        )
+    priority = [str(d) for d in personalization.get("fix_priority_order") or []]
+    if priority:
+        lines.append("Fix priority order (high to low): " + " > ".join(priority))
+    focus = [
+        (str(item.get("dimension", "")), str(item.get("focus", "")))
+        for item in personalization.get("dimension_focus") or []
+        if isinstance(item, dict)
+    ]
+    for dimension, focus_text in focus:
+        if dimension and focus_text:
+            lines.append(f"Extra focus for dimension `{dimension}`: {focus_text}")
+    if not lines:
+        return ""
+    return (
+        "\n\nPersonalization constraints from iterate.config.yaml (apply throughout):\n"
+        + "\n".join(f"- {line}" for line in lines)
+    )
+
+
 def load_onboarding_template() -> str:
     """Read the bundled ITERATE.md skeleton (never fails; inline fallback)."""
     from pathlib import Path
@@ -208,13 +265,17 @@ def onboarding_kickoff(
 
 
 def dry_run_kickoff(
-    goal: str, max_rounds: int, changed_files: list[str] | None = None
+    goal: str,
+    max_rounds: int,
+    changed_files: list[str] | None = None,
+    cwd: str | None = None,
 ) -> str:
     """First-turn prompt that boots the canonical dry-run loop."""
     return (
         f"Run an iterate dry-run review of this project now. Goal: {goal}. "
-        f"Max review rounds: {max_rounds}.{changed_scope_clause(changed_files)} "
-        "Follow the dry-run canonical loop "
+        f"Max review rounds: {max_rounds}.{changed_scope_clause(changed_files)}"
+        + personalization_constraints(cwd)
+        + " Follow the dry-run canonical loop "
         "exactly: plan via iterate_review, parallel per-dimension review, "
         "deterministic aggregate each round, stop on convergence (0 new "
         "findings) or the round cap, then meta-review the final report and "
@@ -223,13 +284,17 @@ def dry_run_kickoff(
 
 
 def normal_kickoff(
-    goal: str, max_rounds: int, changed_files: list[str] | None = None
+    goal: str,
+    max_rounds: int,
+    changed_files: list[str] | None = None,
+    cwd: str | None = None,
 ) -> str:
     """First-turn prompt that boots the canonical normal-mode loop."""
     return (
         f"Run the iterate autonomous loop on this project now. Goal: {goal}. "
-        f"Max rounds: {max_rounds}.{changed_scope_clause(changed_files)} "
-        "Follow the normal-mode canonical loop "
+        f"Max rounds: {max_rounds}.{changed_scope_clause(changed_files)}"
+        + personalization_constraints(cwd)
+        + " Follow the normal-mode canonical loop "
         "exactly: config + plan, parallel per-dimension review of the current "
         "state, deterministic aggregate, fix ONLY atomic findings with "
         "minimal changes, validate every round via iterate_validate, roll "

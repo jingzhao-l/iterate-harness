@@ -6,6 +6,7 @@ import fnmatch
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from iterate_harness.config.settings import PathRuleConfig, PermissionSettings, Settings
 from iterate_harness.permissions.modes import PermissionMode
@@ -215,6 +216,11 @@ def build_permission_checker(settings: Settings) -> PermissionChecker:
 
     When ``settings.iterate.enabled`` is ``False`` the permission settings
     pass through untouched.
+
+    Project-config parity (skill semantics): the ``personalization.protected_paths``
+    list of the current project's ``iterate.config.yaml`` is ALSO merged into
+    the deny rules, so wizard-configured protected paths are enforced as a
+    hard boundary — not just a prompt-side instruction.
     """
     permission = settings.permission
     iterate = settings.iterate
@@ -223,7 +229,7 @@ def build_permission_checker(settings: Settings) -> PermissionChecker:
 
     merged = permission.model_copy(deep=True)
     existing_patterns = {rule.pattern for rule in merged.path_rules}
-    for pattern in iterate.protected_paths:
+    for pattern in (*iterate.protected_paths, *_project_protected_paths()):
         normalized = _to_deny_path_glob(pattern)
         if normalized and normalized not in existing_patterns:
             merged.path_rules.append(PathRuleConfig(pattern=normalized, allow=False))
@@ -237,6 +243,26 @@ def build_permission_checker(settings: Settings) -> PermissionChecker:
             log.warning("Skipping invalid iterate forbidden_fix_pattern: %r", raw_pattern)
 
     return PermissionChecker(merged, forbidden_content_patterns=tuple(compiled_patterns))
+
+
+def _project_protected_paths() -> tuple[str, ...]:
+    """``personalization.protected_paths`` from the cwd's iterate.config.yaml.
+
+    Never raises: an unreadable/missing config simply contributes no rules
+    (fail-open for availability, the kernel deny list above still applies).
+    """
+    try:
+        from iterate_harness.iterate.config_loader import load_effective_config
+
+        personalization = load_effective_config(str(Path.cwd())).config.personalization
+    except Exception:  # noqa: BLE001 - permission bootstrap must never crash
+        return ()
+    if not isinstance(personalization, dict):
+        return ()
+    raw = personalization.get("protected_paths")
+    if not isinstance(raw, list):
+        return ()
+    return tuple(pattern for pattern in raw if isinstance(pattern, str) and pattern.strip())
 
 
 def _to_deny_path_glob(pattern: str) -> str | None:

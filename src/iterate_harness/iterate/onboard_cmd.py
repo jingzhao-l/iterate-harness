@@ -430,8 +430,60 @@ def warn_if_drifted(cwd: str | Path) -> None:
         )
 
 
+def ensure_onboarding_fingerprints(cwd: str | Path, *, quiet: bool = False) -> bool:
+    """Auto-capture fingerprints when ITERATE.md exists but the config has none.
+
+    Covers the TUI onboarding path: the model writes ITERATE.md, but the
+    slash-command flow cannot run the post-scan bookkeeping the CLI performs
+    synchronously. The next review/run (or any drift check) lands here and
+    completes the ``onboarding`` config section with harness-serialized data —
+    the model never touches the trusted config. Returns True when the config
+    was written; False when nothing needed doing or the write failed.
+    """
+    root = Path(cwd)
+    if not onboarding.is_onboarded(root):
+        return False
+    config_path = init_wizard.existing_config_path(root)
+    if not config_path.is_file():
+        return False
+    if onboarding.load_stored_fingerprints(root):
+        return False
+
+    try:
+        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(raw_config, dict):
+        return False
+
+    onboarding_section = raw_config.get("onboarding")
+    if not isinstance(onboarding_section, dict):
+        onboarding_section = {}
+    previous_channel = onboarding_section.get("channel")
+    onboarding_section.update(
+        onboarding.build_onboarding_section(
+            channel=previous_channel if isinstance(previous_channel, str) else "ai",
+            fingerprints=onboarding.capture_fingerprints(root, onboarding.load_drift_ignore(root)),
+        )
+    )
+    raw_config["onboarding"] = onboarding_section
+    try:
+        config_path.write_text(
+            init_wizard.render_config_text(raw_config), encoding="utf-8"
+        )
+    except OSError:
+        return False
+    if not quiet:
+        _print_flush(
+            "[iterate] recorded onboarding fingerprints into "
+            f"{config_path.name} (auto-captured after TUI onboarding)."
+        )
+    return True
+
+
 __all__ = [
     "check_auth_configured",
+    "ensure_onboarding_fingerprints",
     "render_detection_iterate_md",
     "render_status_onboarding_lines",
     "run_onboard",

@@ -28,7 +28,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-1.5.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.6.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -54,6 +54,7 @@ ih iterate onboard --no-ai # 纯检测降级路径（不调模型，channel=cli�
 ih iterate status        # 配置 + onboarding 状态 + 漂移检查
 ih iterate refresh       # 重新采集指纹、报告漂移、刷新元信息（不调模型）
 ih iterate reonboard     # 备份后完整重扫，用户手写区逐字保留
+ih iterate personalize   # 9 类个性化向导：约束写入 config + ITERATE.md 用户区
 ih iterate init          # 检测项目，生成 iterate.config.yaml（仅配置）
 ih iterate review        # 无头 dry-run（支持 stream-json 输出）
 ih iterate review --changed # 快审：只审相对 --ref（默认 HEAD）改动的文件
@@ -108,7 +109,8 @@ OpenAI 兼容供应商，见 `ih --help`）。
 | **阈值门禁** | `thresholds.max_critical` / `max_high` / `max_medium` / `max_low`（全局或按维度）封顶最终报告中的发现数量——违规即把结论翻转为 `needs_revision`，并让 `ih iterate report` 退出码失败（`threshold gate: FAIL`） |
 | **定时评审时区** | `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` 按本地时区解释 cron（存储为 UTC 标准化时间），"每天 9 点"就是你所在地的 9 点 |
 | **检测式 init** | `ih iterate init` 探测项目标记文件（package.json / pyproject / go.mod / Cargo.toml / …），基于真实证据推断测试命令，推荐评审维度（前端依赖解锁 `frontend-backend` / `ui-ux`），预览 yaml 并确认后才写入；TUI 内 `/iterate init` 同效 |
-| **模型驱动 onboarding** | `ih iterate onboard` 串联凭证门禁 → 检测证据 → 模型扫描 → `ITERATE.md` 知识库（AI/用户分区标记）+ manifest 指纹；`refresh` 重采指纹、`reonboard` 保留手写区重扫；每次 kickoff 注入知识库并检测漂移——产物与 skill 生态字节兼容 |
+| **模型驱动 onboarding** | `ih iterate onboard` 串联凭证门禁 → 检测证据 → 模型扫描 → `ITERATE.md` 知识库（AI/用户分区标记）+ manifest 指纹；`refresh` 重采指纹、`reonboard` 保留手写区重扫；每次 kickoff 注入知识库并检测漂移——产物与 skill 生态字节兼容。TUI onboard 的指纹会在下一次 review/run 自动补录，无需手动 `refresh` |
+| **个性化向导** | `ih iterate personalize` 走完 skill 同款 9 类（禁区、风险区、已知意图、维度定制、修复优先级、禁止修复方式、注意点、代码约定、补充验证命令）：结构化规则写入 `iterate.config.yaml`（禁区同时由内核权限层强制拦截），自由文本写入 `ITERATE.md` 用户区，每次 kickoff 附带约束；补充命令先过严格白名单再合并进 `validation.commands` |
 | **pre-commit 钩子** | `ih iterate hook install` 写入带标记的托管 `.git/hooks/pre-commit`：提交前跑 1 轮 changed-only 评审并按 `--fail-on` 严重度门禁；拒绝覆盖第三方钩子，可用 `ITERATE_SKIP_HOOK=1` / `--no-verify` 跳过 |
 | **决策日志** | append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘 |
 | **项目知识** | `ITERATE.md` 项目知识 + 按项目隔离的 9 类结构化个性化数据 |
