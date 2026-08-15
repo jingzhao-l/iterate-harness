@@ -5,9 +5,9 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from openharness.skills import get_user_skills_dir, load_skill_registry
-from openharness.skills.bundled import _parse_frontmatter as parse_bundled_frontmatter
-from openharness.skills.loader import _parse_skill_markdown as parse_skill_markdown
+from iterate_harness.skills import get_user_skills_dir, load_skill_registry
+from iterate_harness.skills.bundled import _parse_frontmatter as parse_bundled_frontmatter
+from iterate_harness.skills.loader import _parse_skill_markdown as parse_skill_markdown
 
 
 def test_load_skill_registry_includes_bundled(tmp_path: Path, monkeypatch):
@@ -22,7 +22,7 @@ def test_load_skill_registry_includes_bundled(tmp_path: Path, monkeypatch):
     skill_creator = registry.get("skill-creator")
     assert skill_creator is not None
     assert skill_creator.source == "bundled"
-    assert "Create, improve, and verify OpenHarness skills" in skill_creator.description
+    assert "Create, improve, and verify IterateHarness skills" in skill_creator.description
 
 
 def test_load_skill_registry_includes_user_skills(tmp_path: Path, monkeypatch):

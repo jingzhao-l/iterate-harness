@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from openharness.sandbox.docker_image import (
+from iterate_harness.sandbox.docker_image import (
     _image_exists,
     ensure_image_available,
     get_dockerfile_content,
@@ -22,7 +22,7 @@ def test_get_dockerfile_content_returns_valid_dockerfile():
 
 async def test_image_exists_returns_true_on_success(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_image.shutil.which",
+        "iterate_harness.sandbox.docker_image.shutil.which",
         lambda name: "/usr/bin/docker",
     )
 
@@ -34,13 +34,13 @@ async def test_image_exists_returns_true_on_success(monkeypatch):
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    result = await _image_exists("openharness-sandbox:latest")
+    result = await _image_exists("iterate_harness-sandbox:latest")
     assert result is True
 
 
 async def test_image_exists_returns_false_on_failure(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_image.shutil.which",
+        "iterate_harness.sandbox.docker_image.shutil.which",
         lambda name: "/usr/bin/docker",
     )
 
@@ -58,7 +58,7 @@ async def test_image_exists_returns_false_on_failure(monkeypatch):
 
 async def test_ensure_image_skips_build_when_exists(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_image.shutil.which",
+        "iterate_harness.sandbox.docker_image.shutil.which",
         lambda name: "/usr/bin/docker",
     )
 
@@ -70,13 +70,13 @@ async def test_ensure_image_skips_build_when_exists(monkeypatch):
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    result = await ensure_image_available("openharness-sandbox:latest", auto_build=True)
+    result = await ensure_image_available("iterate_harness-sandbox:latest", auto_build=True)
     assert result is True
 
 
 async def test_ensure_image_returns_false_without_auto_build(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_image.shutil.which",
+        "iterate_harness.sandbox.docker_image.shutil.which",
         lambda name: "/usr/bin/docker",
     )
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from openharness.engine.messages import (
+from iterate_harness.engine.messages import (
     ConversationMessage,
     TextBlock,
     ToolResultBlock,

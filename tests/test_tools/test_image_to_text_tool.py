@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from openharness.api.provider import is_model_multimodal
-from openharness.config.settings import VisionModelConfig
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.image_to_text_tool import ImageToTextTool, ImageToTextToolInput
+from iterate_harness.api.provider import is_model_multimodal
+from iterate_harness.config.settings import VisionModelConfig
+from iterate_harness.tools.base import ToolExecutionContext
+from iterate_harness.tools.image_to_text_tool import ImageToTextTool, ImageToTextToolInput
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ class TestVisionModelConfig:
 
 def test_tool_registered() -> None:
     """image_to_text tool is registered in the default registry."""
-    from openharness.tools import create_default_tool_registry
+    from iterate_harness.tools import create_default_tool_registry
 
     registry = create_default_tool_registry()
     tool = registry.get("image_to_text")
@@ -275,4 +275,4 @@ def test_tool_registered() -> None:
     assert tool.name == "image_to_text"
     assert "vision" in tool.description.lower()
     assert tool.input_model.__name__ == "ImageToTextToolInput"
-    assert tool.input_model.__module__ == "openharness.tools.image_to_text_tool"
+    assert tool.input_model.__module__ == "iterate_harness.tools.image_to_text_tool"

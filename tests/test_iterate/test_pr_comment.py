@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from openharness import cli
-from openharness.iterate import pr_comment
-from openharness.iterate.ci_report import ReportSummary
-from openharness.iterate.decision_log import append_entry, make_entry
+from iterate_harness import cli
+from iterate_harness.iterate import pr_comment
+from iterate_harness.iterate.ci_report import ReportSummary
+from iterate_harness.iterate.decision_log import append_entry, make_entry
 
 
 def _summary(**overrides) -> ReportSummary:
@@ -230,7 +230,7 @@ class TestPostPrComment:
 
 
 class TestReportCliPrMode:
-    """`oh iterate report --pr` end-to-end (posting is faked at module level)."""
+    """`ih iterate report --pr` end-to-end (posting is faked at module level)."""
 
     def _seed_report(self, tmp_path):
         append_entry(

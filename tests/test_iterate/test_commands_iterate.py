@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from openharness.commands.iterate import iterate_command_handler
-from openharness.commands.registry import CommandContext
-from openharness.iterate.decision_log import append_entry, make_entry
+from iterate_harness.commands.iterate import iterate_command_handler
+from iterate_harness.commands.registry import CommandContext
+from iterate_harness.iterate.decision_log import append_entry, make_entry
 
 
 def make_context(cwd: Path) -> CommandContext:

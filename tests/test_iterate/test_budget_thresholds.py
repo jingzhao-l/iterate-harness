@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from openharness.api.usage import UsageSnapshot
-from openharness.iterate.config_loader import (
+from iterate_harness.api.usage import UsageSnapshot
+from iterate_harness.iterate.config_loader import (
     parse_thresholds,
     parse_token_budget,
     thresholds_to_dict,
 )
-from openharness.iterate.loop_policy import ITERATE_STATE_KEY, IterateLoopPolicy
-from openharness.iterate.meta_review import build_final_review_report
-from openharness.iterate.prompts import next_round_instruction
-from openharness.iterate.review import (
+from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY, IterateLoopPolicy
+from iterate_harness.iterate.meta_review import build_final_review_report
+from iterate_harness.iterate.prompts import next_round_instruction
+from iterate_harness.iterate.review import (
     audit_dimension_budgets,
     evaluate_threshold_gates,
 )
-from openharness.iterate.types import (
+from iterate_harness.iterate.types import (
     DimensionThresholds,
     ReviewFinding,
     ThresholdsConfig,
@@ -275,7 +275,7 @@ class TestConfigParsing:
 
 class TestMetaReviewThresholdFolding:
     def _report(self, findings: list[ReviewFinding]):
-        from openharness.iterate.review import ReviewRound, build_review_report
+        from iterate_harness.iterate.review import ReviewRound, build_review_report
 
         return build_review_report(
             mode="dry-run",

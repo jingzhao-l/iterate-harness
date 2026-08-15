@@ -9,14 +9,14 @@ import json
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.stream_events import CompactProgressEvent
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.config.settings import Settings, save_settings
-from openharness.ui.backend_host import BackendHostConfig, ReactBackendHost, run_backend_host
-from openharness.ui.protocol import BackendEvent
-from openharness.ui.runtime import build_runtime, close_runtime, start_runtime
+from iterate_harness.api.client import ApiMessageCompleteEvent
+from iterate_harness.api.usage import UsageSnapshot
+from iterate_harness.engine.stream_events import CompactProgressEvent
+from iterate_harness.engine.messages import ConversationMessage, TextBlock
+from iterate_harness.config.settings import Settings, save_settings
+from iterate_harness.ui.backend_host import BackendHostConfig, ReactBackendHost, run_backend_host
+from iterate_harness.ui.protocol import BackendEvent
+from iterate_harness.ui.runtime import build_runtime, close_runtime, start_runtime
 
 
 class StaticApiClient:
@@ -65,7 +65,7 @@ async def test_run_backend_host_accepts_permission_mode(monkeypatch):
         captured["permission_mode"] = self._config.permission_mode
         return 0
 
-    monkeypatch.setattr("openharness.ui.backend_host.ReactBackendHost.run", _fake_run)
+    monkeypatch.setattr("iterate_harness.ui.backend_host.ReactBackendHost.run", _fake_run)
 
     result = await run_backend_host(
         api_client=StaticApiClient("unused"),
@@ -97,7 +97,7 @@ async def test_read_requests_resolves_permission_response_without_queueing(monke
     class _FakeStdin:
         buffer = _FakeBuffer()
 
-    monkeypatch.setattr("openharness.ui.backend_host.sys.stdin", _FakeStdin())
+    monkeypatch.setattr("iterate_harness.ui.backend_host.sys.stdin", _FakeStdin())
 
     await host._read_requests()
 
@@ -131,7 +131,7 @@ async def test_read_requests_interrupt_cancels_active_request(monkeypatch):
     class _FakeStdin:
         buffer = _FakeBuffer()
 
-    monkeypatch.setattr("openharness.ui.backend_host.sys.stdin", _FakeStdin())
+    monkeypatch.setattr("iterate_harness.ui.backend_host.sys.stdin", _FakeStdin())
 
     await host._read_requests()
 
@@ -256,7 +256,7 @@ async def test_backend_host_processes_command(tmp_path, monkeypatch):
         event.type == "transcript_item"
         and event.item
         and event.item.role == "system"
-        and "OpenHarness" in event.item.text
+        and "IterateHarness" in event.item.text
         for event in events
     )
     assert any(event.type == "state_snapshot" for event in events)
@@ -322,7 +322,7 @@ async def test_backend_host_emits_compact_progress_event(tmp_path, monkeypatch):
         )
         return True
 
-    monkeypatch.setattr("openharness.ui.backend_host.handle_line", _fake_handle_line)
+    monkeypatch.setattr("iterate_harness.ui.backend_host.handle_line", _fake_handle_line)
     host._emit = _emit  # type: ignore[method-assign]
     await start_runtime(host._bundle)
     try:
@@ -346,7 +346,7 @@ async def test_backend_host_emits_review_progress_event(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
 
-    from openharness.engine.stream_events import ReviewProgressEvent
+    from iterate_harness.engine.stream_events import ReviewProgressEvent
 
     host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
     host._bundle = await build_runtime(api_client=StaticApiClient("unused"))
@@ -372,7 +372,7 @@ async def test_backend_host_emits_review_progress_event(tmp_path, monkeypatch):
         )
         return True
 
-    monkeypatch.setattr("openharness.ui.backend_host.handle_line", _fake_handle_line)
+    monkeypatch.setattr("iterate_harness.ui.backend_host.handle_line", _fake_handle_line)
     host._emit = _emit  # type: ignore[method-assign]
     await start_runtime(host._bundle)
     try:
@@ -431,7 +431,7 @@ async def test_backend_host_command_does_not_reset_cli_overrides(tmp_path, monke
 
     When the session is launched with CLI overrides (e.g. --provider openai -m 5.4),
     issuing a command like /fast triggers a UI state refresh. That refresh must
-    preserve the effective session settings, not reload ~/.openharness/settings.json
+    preserve the effective session settings, not reload ~/.iterate-harness/settings.json
     verbatim.
     """
     monkeypatch.chdir(tmp_path)
@@ -514,7 +514,7 @@ async def test_build_runtime_leaves_interactive_sessions_unbounded_by_default(tm
 async def test_backend_host_emits_utf8_protocol_bytes(monkeypatch):
     host = ReactBackendHost(BackendHostConfig())
     fake_stdout = FakeBinaryStdout()
-    monkeypatch.setattr("openharness.ui.backend_host.sys.stdout", fake_stdout)
+    monkeypatch.setattr("iterate_harness.ui.backend_host.sys.stdout", fake_stdout)
 
     await host._emit(BackendEvent(type="assistant_delta", message="你好😊"))
 

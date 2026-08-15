@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iterate-harness"
-version = "1.3.0"
+version = "1.4.0"
 description = "iterate-skill powered fork of OpenHarness - dedicated agent harness for the iterate review/fix loop"
 readme = "README.md"
 license = "MIT"
@@ -44,13 +44,11 @@ dev = [
 ]
 
 [project.scripts]
-openharness = "openharness.cli:app"
-oh = "openharness.cli:app"
-openh = "openharness.cli:app"
-iterate-harness = "openharness.cli:app"
+ih = "iterate_harness.cli:app"
+iterate-harness = "iterate_harness.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/openharness"]
+packages = ["src/iterate_harness"]
 
 [tool.hatch.build]
 exclude = [
@@ -66,9 +64,9 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
-"frontend/terminal/package.json" = "openharness/_frontend/package.json"
-"frontend/terminal/tsconfig.json" = "openharness/_frontend/tsconfig.json"
-"frontend/terminal/src" = "openharness/_frontend/src"
+"frontend/terminal/package.json" = "iterate_harness/_frontend/package.json"
+"frontend/terminal/tsconfig.json" = "iterate_harness/_frontend/tsconfig.json"
+"frontend/terminal/src" = "iterate_harness/_frontend/src"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

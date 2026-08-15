@@ -12,20 +12,20 @@ from dataclasses import dataclass
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import PathRuleConfig, PermissionSettings, Settings
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.engine.query_engine import QueryEngine
-from openharness.engine.stream_events import (
+from iterate_harness.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
+from iterate_harness.api.usage import UsageSnapshot
+from iterate_harness.config.settings import PathRuleConfig, PermissionSettings, Settings
+from iterate_harness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from iterate_harness.engine.query_engine import QueryEngine
+from iterate_harness.engine.stream_events import (
     AssistantTurnComplete,
     ReviewProgressEvent,
     StatusEvent,
 )
-from openharness.iterate.loop_policy import IterateLoopPolicy
-from openharness.permissions.checker import PermissionChecker
-from openharness.permissions.modes import PermissionMode
-from openharness.tools import create_default_tool_registry
+from iterate_harness.iterate.loop_policy import IterateLoopPolicy
+from iterate_harness.permissions.checker import PermissionChecker
+from iterate_harness.permissions.modes import PermissionMode
+from iterate_harness.tools import create_default_tool_registry
 
 
 @dataclass
@@ -240,7 +240,7 @@ class TestIteratePermissionWiring:
     """build_permission_checker auto-assembles iterate settings into the layer."""
 
     def test_default_protected_paths_deny_reads_and_writes(self):
-        from openharness.permissions.checker import build_permission_checker
+        from iterate_harness.permissions.checker import build_permission_checker
 
         settings = Settings()  # default iterate.protected_paths (.env, *.key, ...)
         checker = build_permission_checker(settings)
@@ -252,7 +252,7 @@ class TestIteratePermissionWiring:
             assert not read.allowed, path
 
     def test_directory_scoped_protected_path_normalizes(self):
-        from openharness.permissions.checker import build_permission_checker
+        from iterate_harness.permissions.checker import build_permission_checker
 
         settings = Settings.model_validate({"iterate": {"protected_paths": ["secrets/*"]}})
         checker = build_permission_checker(settings)
@@ -263,7 +263,7 @@ class TestIteratePermissionWiring:
         assert not decision.allowed
 
     def test_disabled_iterate_passes_permission_settings_through(self):
-        from openharness.permissions.checker import build_permission_checker
+        from iterate_harness.permissions.checker import build_permission_checker
 
         settings = Settings.model_validate({"iterate": {"enabled": False}})
         checker = build_permission_checker(settings)
@@ -274,7 +274,7 @@ class TestIteratePermissionWiring:
         assert "deny rule" not in decision.reason
 
     def test_user_path_rules_are_never_duplicated_or_mutated(self):
-        from openharness.permissions.checker import build_permission_checker
+        from iterate_harness.permissions.checker import build_permission_checker
 
         settings = Settings.model_validate({"iterate": {"protected_paths": [".env", "*.pem"]}})
         settings.permission.path_rules.append(PathRuleConfig(pattern="*/.env", allow=False))
@@ -287,7 +287,7 @@ class TestIteratePermissionWiring:
         assert settings.permission.path_rules == original_rules
 
     def test_forbidden_fix_patterns_block_matching_write_payloads(self):
-        from openharness.permissions.checker import build_permission_checker
+        from iterate_harness.permissions.checker import build_permission_checker
 
         settings = Settings.model_validate(
             {"iterate": {"forbidden_fix_patterns": [r"AKIA[A-Z0-9]{16}"]}}
@@ -306,7 +306,7 @@ class TestIteratePermissionWiring:
         assert clean.requires_confirmation  # default-mode flow, not hard-denied
 
     def test_forbidden_boundary_precedes_tool_allowlist(self):
-        from openharness.permissions.checker import build_permission_checker
+        from iterate_harness.permissions.checker import build_permission_checker
 
         settings = Settings.model_validate(
             {
@@ -322,7 +322,7 @@ class TestIteratePermissionWiring:
         assert "forbidden fix pattern" in decision.reason
 
     def test_invalid_forbidden_regex_is_skipped_valid_still_enforced(self):
-        from openharness.permissions.checker import build_permission_checker
+        from iterate_harness.permissions.checker import build_permission_checker
 
         settings = Settings.model_validate(
             {"iterate": {"forbidden_fix_patterns": ["[unclosed", r"BEGIN PRIVATE KEY"]}}
@@ -335,7 +335,7 @@ class TestIteratePermissionWiring:
         assert "BEGIN PRIVATE KEY" in decision.reason
 
     def test_engine_extracts_write_payload_for_mutating_tools_only(self):
-        from openharness.engine.query import _extract_permission_content
+        from iterate_harness.engine.query import _extract_permission_content
 
         assert _extract_permission_content({"content": "body"}, object()) == "body"
         assert _extract_permission_content({"new_string": "edit"}, object()) == "edit"
@@ -351,7 +351,7 @@ class TestIteratePermissionWiring:
 
 class TestClaudemdInjection:
     def test_iterate_md_is_discovered_like_claude_md(self, tmp_path):
-        from openharness.prompts.claudemd import discover_claude_md_files, load_claude_md_prompt
+        from iterate_harness.prompts.claudemd import discover_claude_md_files, load_claude_md_prompt
 
         (tmp_path / "ITERATE.md").write_text("# project knowledge\n")
         found = discover_claude_md_files(tmp_path)
@@ -371,7 +371,7 @@ class TestSettingsAndCompact:
         assert again.iterate.max_review_rounds == 5
 
     def test_compact_preserves_iterate_state(self):
-        from openharness.services.compact import create_iterate_review_attachment_if_needed
+        from iterate_harness.services.compact import create_iterate_review_attachment_if_needed
 
         attachment = create_iterate_review_attachment_if_needed(
             {
@@ -395,10 +395,10 @@ class TestFixApproval:
     """Per-fix diff approval (Settings.iterate.require_fix_approval)."""
 
     def _context(self, tmp_path, *, policy, mode="normal", checker=None, prompt=None):
-        from openharness.engine.query import QueryContext
-        from openharness.tools.base import ToolRegistry
-        from openharness.tools.file_edit_tool import FileEditTool
-        from openharness.tools.file_write_tool import FileWriteTool
+        from iterate_harness.engine.query import QueryContext
+        from iterate_harness.tools.base import ToolRegistry
+        from iterate_harness.tools.file_edit_tool import FileEditTool
+        from iterate_harness.tools.file_write_tool import FileWriteTool
 
         registry = ToolRegistry()
         registry.register(FileEditTool())
@@ -420,7 +420,7 @@ class TestFixApproval:
 
     @pytest.mark.asyncio
     async def test_normal_mode_file_edit_prompts_with_diff_preview(self, tmp_path):
-        from openharness.engine.query import _execute_tool_call
+        from iterate_harness.engine.query import _execute_tool_call
 
         target = tmp_path / "app.py"
         target.write_text("alpha\nbeta\n", encoding="utf-8")
@@ -450,7 +450,7 @@ class TestFixApproval:
 
     @pytest.mark.asyncio
     async def test_approved_edit_executes(self, tmp_path):
-        from openharness.engine.query import _execute_tool_call
+        from iterate_harness.engine.query import _execute_tool_call
 
         target = tmp_path / "app.py"
         target.write_text("alpha\nbeta\n", encoding="utf-8")
@@ -474,7 +474,7 @@ class TestFixApproval:
 
     @pytest.mark.asyncio
     async def test_gate_off_policy_or_dry_run_does_not_prompt(self, tmp_path):
-        from openharness.engine.query import _execute_tool_call
+        from iterate_harness.engine.query import _execute_tool_call
 
         target = tmp_path / "app.py"
         target.write_text("alpha\n", encoding="utf-8")
@@ -498,8 +498,8 @@ class TestFixApproval:
 
     @pytest.mark.asyncio
     async def test_hard_deny_not_overridden_into_confirmation(self, tmp_path):
-        from openharness.engine.query import _execute_tool_call
-        from openharness.permissions.checker import build_permission_checker
+        from iterate_harness.engine.query import _execute_tool_call
+        from iterate_harness.permissions.checker import build_permission_checker
 
         settings = Settings.model_validate(
             {"iterate": {"protected_paths": ["secrets/*"], "require_fix_approval": True}}
@@ -530,8 +530,8 @@ class TestFixApproval:
 
     @pytest.mark.asyncio
     async def test_forbidden_pattern_boundary_covers_file_edit_new_str(self, tmp_path):
-        from openharness.engine.query import _execute_tool_call
-        from openharness.permissions.checker import build_permission_checker
+        from iterate_harness.engine.query import _execute_tool_call
+        from iterate_harness.permissions.checker import build_permission_checker
 
         settings = Settings.model_validate(
             {"iterate": {"forbidden_fix_patterns": [r"AKIA[A-Z0-9]{16}"]}}
@@ -560,7 +560,7 @@ class TestFixApproval:
         assert target.read_text(encoding="utf-8") == "key = ''\n"
 
     def test_fix_approval_reason_diff_variants(self, tmp_path):
-        from openharness.engine.query import _fix_approval_reason
+        from iterate_harness.engine.query import _fix_approval_reason
 
         # file_write to a new file → "+ lines" preview + total marker.
         reason = _fix_approval_reason(
@@ -737,7 +737,7 @@ class TestEscIntervention:
 
     @pytest.mark.asyncio
     async def test_intervention_decision_logged(self, tmp_path):
-        from openharness.iterate.decision_log import read_entries
+        from iterate_harness.iterate.decision_log import read_entries
 
         policy = IterateLoopPolicy(max_review_rounds=3)
         engine = self._engine(
@@ -785,14 +785,14 @@ class TestRegistration:
             assert registry.get(name) is not None, f"missing tool {name}"
 
     def test_iterate_slash_command_registered(self):
-        from openharness.commands.registry import create_default_command_registry
+        from iterate_harness.commands.registry import create_default_command_registry
 
         registry = create_default_command_registry()
         commands = {c.name for c in registry.list_commands()}
         assert "iterate" in commands
 
     def test_iterate_bundled_skill_loaded(self):
-        from openharness.skills.bundled import get_bundled_skills
+        from iterate_harness.skills.bundled import get_bundled_skills
 
         names = {s.name for s in get_bundled_skills()}
         assert "iterate" in names

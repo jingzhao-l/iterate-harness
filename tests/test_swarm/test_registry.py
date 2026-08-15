@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from openharness.swarm.registry import BackendRegistry
-from openharness.swarm.types import TeammateExecutor
+from iterate_harness.swarm.registry import BackendRegistry
+from iterate_harness.swarm.types import TeammateExecutor
 
 
 # ---------------------------------------------------------------------------

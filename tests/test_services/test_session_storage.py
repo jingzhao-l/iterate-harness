@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.services.session_storage import (
+from iterate_harness.api.usage import UsageSnapshot
+from iterate_harness.engine.messages import ConversationMessage, TextBlock
+from iterate_harness.services.session_storage import (
     export_session_markdown,
     get_project_session_dir,
     load_session_snapshot,
@@ -56,7 +56,7 @@ def test_export_session_markdown(tmp_path: Path, monkeypatch):
 
     assert path.exists()
     content = path.read_text(encoding="utf-8")
-    assert "OpenHarness Session Transcript" in content
+    assert "IterateHarness Session Transcript" in content
     assert "hello" in content
     assert "world" in content
 

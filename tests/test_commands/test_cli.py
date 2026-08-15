@@ -8,10 +8,10 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-import openharness.cli as cli
-from openharness.config import load_settings
-from openharness.config.settings import Settings
-from openharness.mcp.types import McpStdioServerConfig
+import iterate_harness.cli as cli
+from iterate_harness.config import load_settings
+from iterate_harness.config.settings import Settings
+from iterate_harness.mcp.types import McpStdioServerConfig
 
 
 app = cli.app
@@ -46,9 +46,9 @@ def test_setup_flow_selects_profile_and_model(tmp_path: Path, monkeypatch):
     def fake_login(provider):
         logged_in.append(provider)
 
-    monkeypatch.setattr("openharness.cli._select_setup_workflow", fake_select)
-    monkeypatch.setattr("openharness.cli._prompt_model_for_profile", lambda profile: "gpt-5.4")
-    monkeypatch.setattr("openharness.cli._login_provider", fake_login)
+    monkeypatch.setattr("iterate_harness.cli._select_setup_workflow", fake_select)
+    monkeypatch.setattr("iterate_harness.cli._prompt_model_for_profile", lambda profile: "gpt-5.4")
+    monkeypatch.setattr("iterate_harness.cli._login_provider", fake_login)
 
     result = runner.invoke(app, ["setup"])
     assert result.exit_code == 0
@@ -97,18 +97,18 @@ def test_setup_flow_existing_api_key_profile_can_update_secret(tmp_path: Path, m
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    from openharness.auth.manager import AuthManager
-    from openharness.auth.storage import load_credential
+    from iterate_harness.auth.manager import AuthManager
+    from iterate_harness.auth.storage import load_credential
 
     manager = AuthManager()
     manager.store_profile_credential("openai-compatible", "api_key", "old-key")
 
     selections = iter(["openai-compatible", "openai-compatible"])
-    monkeypatch.setattr("openharness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections))
-    monkeypatch.setattr("openharness.cli._select_from_menu", lambda *args, **kwargs: next(selections))
-    monkeypatch.setattr("openharness.cli._confirm_prompt", lambda *args, **kwargs: True)
-    monkeypatch.setattr("openharness.auth.flows.ApiKeyFlow.run", lambda self: "new-key")
-    monkeypatch.setattr("openharness.cli._prompt_model_for_profile", lambda profile: "gpt-4.1")
+    monkeypatch.setattr("iterate_harness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections))
+    monkeypatch.setattr("iterate_harness.cli._select_from_menu", lambda *args, **kwargs: next(selections))
+    monkeypatch.setattr("iterate_harness.cli._confirm_prompt", lambda *args, **kwargs: True)
+    monkeypatch.setattr("iterate_harness.auth.flows.ApiKeyFlow.run", lambda self: "new-key")
+    monkeypatch.setattr("iterate_harness.cli._prompt_model_for_profile", lambda profile: "gpt-4.1")
 
     result = runner.invoke(app, ["setup"])
 
@@ -132,10 +132,10 @@ def test_setup_flow_creates_kimi_profile_with_profile_scoped_key(tmp_path: Path,
         ]
     )
 
-    monkeypatch.setattr("openharness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections))
-    monkeypatch.setattr("openharness.cli._select_from_menu", lambda *args, **kwargs: next(selections))
-    monkeypatch.setattr("openharness.cli._text_prompt", lambda *args, **kwargs: next(prompts))
-    monkeypatch.setattr("openharness.auth.flows.ApiKeyFlow.run", lambda self: "sk-kimi-test")
+    monkeypatch.setattr("iterate_harness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections))
+    monkeypatch.setattr("iterate_harness.cli._select_from_menu", lambda *args, **kwargs: next(selections))
+    monkeypatch.setattr("iterate_harness.cli._text_prompt", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr("iterate_harness.auth.flows.ApiKeyFlow.run", lambda self: "sk-kimi-test")
 
     result = runner.invoke(app, ["setup"])
     assert result.exit_code == 0
@@ -149,7 +149,7 @@ def test_setup_flow_creates_kimi_profile_with_profile_scoped_key(tmp_path: Path,
     assert profile.credential_slot == "kimi-anthropic"
     assert profile.allowed_models == ["kimi-k2.5"]
 
-    from openharness.auth.storage import load_credential
+    from iterate_harness.auth.storage import load_credential
 
     assert load_credential("profile:kimi-anthropic", "api_key") == "sk-kimi-test"
 
@@ -158,7 +158,7 @@ def test_provider_add_can_store_profile_api_key(tmp_path: Path, monkeypatch):
     runner = CliRunner()
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
 
-    from openharness.auth.storage import load_credential
+    from iterate_harness.auth.storage import load_credential
 
     result = runner.invoke(
         app,
@@ -193,8 +193,8 @@ def test_provider_edit_can_replace_profile_api_key(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    from openharness.auth.manager import AuthManager
-    from openharness.auth.storage import load_credential
+    from iterate_harness.auth.manager import AuthManager
+    from iterate_harness.auth.storage import load_credential
 
     manager = AuthManager()
     manager.store_profile_credential("openai-compatible", "api_key", "old-key")
@@ -213,7 +213,7 @@ def test_dangerously_skip_permissions_passes_full_auto_to_run_repl(monkeypatch):
     async def fake_run_repl(**kwargs):
         captured.update(kwargs)
 
-    monkeypatch.setattr("openharness.ui.app.run_repl", fake_run_repl)
+    monkeypatch.setattr("iterate_harness.ui.app.run_repl", fake_run_repl)
 
     result = runner.invoke(app, ["--dangerously-skip-permissions"])
 
@@ -228,7 +228,7 @@ def test_task_worker_flag_routes_to_run_task_worker(monkeypatch):
     async def fake_run_task_worker(**kwargs):
         captured.update(kwargs)
 
-    monkeypatch.setattr("openharness.ui.app.run_task_worker", fake_run_task_worker)
+    monkeypatch.setattr("iterate_harness.ui.app.run_task_worker", fake_run_task_worker)
 
     result = runner.invoke(app, ["--task-worker", "--model", "kimi-k2.5"])
 
@@ -275,15 +275,15 @@ def test_dry_run_uses_preview_builder_and_skips_repl(monkeypatch):
     async def fake_run_repl(**kwargs):  # pragma: no cover - should never be called
         raise AssertionError(f"run_repl should not be called during dry-run: {kwargs}")
 
-    monkeypatch.setattr("openharness.cli._build_dry_run_preview", fake_build_dry_run_preview)
-    monkeypatch.setattr("openharness.ui.app.run_repl", fake_run_repl)
+    monkeypatch.setattr("iterate_harness.cli._build_dry_run_preview", fake_build_dry_run_preview)
+    monkeypatch.setattr("iterate_harness.ui.app.run_repl", fake_run_repl)
 
     result = runner.invoke(app, ["--dry-run", "--print", "ship it", "--model", "gpt-5.4"])
 
     assert result.exit_code == 0
     assert captured["prompt"] == "ship it"
     assert captured["model"] == "gpt-5.4"
-    assert "OpenHarness Dry Run" in result.output
+    assert "IterateHarness Dry Run" in result.output
     assert "ship it" in result.output
 
 
@@ -323,7 +323,7 @@ def test_dry_run_json_output(monkeypatch):
             "system_prompt_preview": "preview",
         }
 
-    monkeypatch.setattr("openharness.cli._build_dry_run_preview", fake_build_dry_run_preview)
+    monkeypatch.setattr("iterate_harness.cli._build_dry_run_preview", fake_build_dry_run_preview)
 
     result = runner.invoke(app, ["--dry-run", "--output-format", "json", "--print", "preview this"])
 
@@ -335,7 +335,7 @@ def test_dry_run_json_output(monkeypatch):
 
 def test_dry_run_rejects_continue_resume(monkeypatch):
     runner = CliRunner()
-    monkeypatch.setattr("openharness.cli._build_dry_run_preview", lambda **kwargs: {"mode": "dry-run"})
+    monkeypatch.setattr("iterate_harness.cli._build_dry_run_preview", lambda **kwargs: {"mode": "dry-run"})
 
     result = runner.invoke(app, ["--dry-run", "--continue"])
 
@@ -347,7 +347,7 @@ def test_build_dry_run_preview_classifies_slash_command_and_flags_bad_mcp(monkey
     settings = Settings(
         api_key="sk-test",
         mcp_servers={
-            "broken": McpStdioServerConfig(command="definitely-not-a-real-command-openharness"),
+            "broken": McpStdioServerConfig(command="definitely-not-a-real-command-iterate_harness"),
         },
     )
 
@@ -355,16 +355,16 @@ def test_build_dry_run_preview_classifies_slash_command_and_flags_bad_mcp(monkey
         def list_skills(self):
             return []
 
-    monkeypatch.setattr("openharness.config.load_settings", lambda: settings)
+    monkeypatch.setattr("iterate_harness.config.load_settings", lambda: settings)
     monkeypatch.setattr(
-        "openharness.api.provider.detect_provider",
+        "iterate_harness.api.provider.detect_provider",
         lambda settings: types.SimpleNamespace(name="anthropic"),
     )
-    monkeypatch.setattr("openharness.api.provider.auth_status", lambda settings: "configured")
-    monkeypatch.setattr("openharness.plugins.load_plugins", lambda settings, cwd: [])
-    monkeypatch.setattr("openharness.skills.load_skill_registry", lambda cwd, settings=None: _FakeSkillRegistry())
-    monkeypatch.setattr("openharness.prompts.context.build_runtime_system_prompt", lambda *args, **kwargs: "preview prompt")
-    monkeypatch.setattr("openharness.ui.runtime._resolve_api_client_from_settings", lambda settings: object())
+    monkeypatch.setattr("iterate_harness.api.provider.auth_status", lambda settings: "configured")
+    monkeypatch.setattr("iterate_harness.plugins.load_plugins", lambda settings, cwd: [])
+    monkeypatch.setattr("iterate_harness.skills.load_skill_registry", lambda cwd, settings=None: _FakeSkillRegistry())
+    monkeypatch.setattr("iterate_harness.prompts.context.build_runtime_system_prompt", lambda *args, **kwargs: "preview prompt")
+    monkeypatch.setattr("iterate_harness.ui.runtime._resolve_api_client_from_settings", lambda settings: object())
 
     preview = cli._build_dry_run_preview(
         prompt="/plugin list",
@@ -396,20 +396,20 @@ def test_build_dry_run_preview_sets_blocked_when_model_prompt_lacks_auth(monkeyp
         def list_skills(self):
             return []
 
-    monkeypatch.setattr("openharness.config.load_settings", lambda: settings)
+    monkeypatch.setattr("iterate_harness.config.load_settings", lambda: settings)
     monkeypatch.setattr(
-        "openharness.api.provider.detect_provider",
+        "iterate_harness.api.provider.detect_provider",
         lambda settings: types.SimpleNamespace(name="anthropic"),
     )
-    monkeypatch.setattr("openharness.api.provider.auth_status", lambda settings: "missing")
-    monkeypatch.setattr("openharness.plugins.load_plugins", lambda settings, cwd: [])
-    monkeypatch.setattr("openharness.skills.load_skill_registry", lambda cwd, settings=None: _FakeSkillRegistry())
-    monkeypatch.setattr("openharness.prompts.context.build_runtime_system_prompt", lambda *args, **kwargs: "preview prompt")
+    monkeypatch.setattr("iterate_harness.api.provider.auth_status", lambda settings: "missing")
+    monkeypatch.setattr("iterate_harness.plugins.load_plugins", lambda settings, cwd: [])
+    monkeypatch.setattr("iterate_harness.skills.load_skill_registry", lambda cwd, settings=None: _FakeSkillRegistry())
+    monkeypatch.setattr("iterate_harness.prompts.context.build_runtime_system_prompt", lambda *args, **kwargs: "preview prompt")
 
     def fake_resolve_api_client(settings):
         raise SystemExit(1)
 
-    monkeypatch.setattr("openharness.ui.runtime._resolve_api_client_from_settings", fake_resolve_api_client)
+    monkeypatch.setattr("iterate_harness.ui.runtime._resolve_api_client_from_settings", fake_resolve_api_client)
 
     preview = cli._build_dry_run_preview(
         prompt="fix the failing tests",
@@ -465,17 +465,17 @@ def test_build_dry_run_preview_recommends_matching_skills_and_tools(monkeypatch,
                 },
             ]
 
-    monkeypatch.setattr("openharness.config.load_settings", lambda: settings)
+    monkeypatch.setattr("iterate_harness.config.load_settings", lambda: settings)
     monkeypatch.setattr(
-        "openharness.api.provider.detect_provider",
+        "iterate_harness.api.provider.detect_provider",
         lambda settings: types.SimpleNamespace(name="anthropic"),
     )
-    monkeypatch.setattr("openharness.api.provider.auth_status", lambda settings: "configured")
-    monkeypatch.setattr("openharness.plugins.load_plugins", lambda settings, cwd: [])
-    monkeypatch.setattr("openharness.skills.load_skill_registry", lambda cwd, settings=None: _FakeSkillRegistry())
-    monkeypatch.setattr("openharness.tools.create_default_tool_registry", lambda: _FakeToolRegistry())
-    monkeypatch.setattr("openharness.prompts.context.build_runtime_system_prompt", lambda *args, **kwargs: "preview prompt")
-    monkeypatch.setattr("openharness.ui.runtime._resolve_api_client_from_settings", lambda settings: object())
+    monkeypatch.setattr("iterate_harness.api.provider.auth_status", lambda settings: "configured")
+    monkeypatch.setattr("iterate_harness.plugins.load_plugins", lambda settings, cwd: [])
+    monkeypatch.setattr("iterate_harness.skills.load_skill_registry", lambda cwd, settings=None: _FakeSkillRegistry())
+    monkeypatch.setattr("iterate_harness.tools.create_default_tool_registry", lambda: _FakeToolRegistry())
+    monkeypatch.setattr("iterate_harness.prompts.context.build_runtime_system_prompt", lambda *args, **kwargs: "preview prompt")
+    monkeypatch.setattr("iterate_harness.ui.runtime._resolve_api_client_from_settings", lambda settings: object())
 
     preview = cli._build_dry_run_preview(
         prompt="review this bug fix and grep for failing tests",
@@ -515,7 +515,7 @@ def test_autopilot_run_next_cli(monkeypatch, tmp_path: Path):
 
             return Result()
 
-    monkeypatch.setattr("openharness.autopilot.RepoAutopilotStore", FakeStore)
+    monkeypatch.setattr("iterate_harness.autopilot.RepoAutopilotStore", FakeStore)
 
     result = runner.invoke(app, ["autopilot", "run-next", "--cwd", str(tmp_path)])
 
@@ -533,7 +533,7 @@ def test_autopilot_install_cron_cli(monkeypatch, tmp_path: Path):
         def install_default_cron(self):
             return ["autopilot.scan", "autopilot.tick"]
 
-    monkeypatch.setattr("openharness.autopilot.RepoAutopilotStore", FakeStore)
+    monkeypatch.setattr("iterate_harness.autopilot.RepoAutopilotStore", FakeStore)
 
     result = runner.invoke(app, ["autopilot", "install-cron", "--cwd", str(tmp_path)])
 
@@ -551,7 +551,7 @@ def test_autopilot_export_dashboard_cli(monkeypatch, tmp_path: Path):
         def export_dashboard(self, output=None):
             return tmp_path / "docs" / "autopilot"
 
-    monkeypatch.setattr("openharness.autopilot.RepoAutopilotStore", FakeStore)
+    monkeypatch.setattr("iterate_harness.autopilot.RepoAutopilotStore", FakeStore)
 
     result = runner.invoke(app, ["autopilot", "export-dashboard", "--cwd", str(tmp_path)])
 

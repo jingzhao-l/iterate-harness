@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from openharness.config.settings import Settings, load_settings, save_settings
-from openharness.mcp.types import McpHttpServerConfig, McpStdioServerConfig
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.mcp_auth_tool import McpAuthTool, McpAuthToolInput
+from iterate_harness.config.settings import Settings, load_settings, save_settings
+from iterate_harness.mcp.types import McpHttpServerConfig, McpStdioServerConfig
+from iterate_harness.tools.base import ToolExecutionContext
+from iterate_harness.tools.mcp_auth_tool import McpAuthTool, McpAuthToolInput
 
 
 class FakeMcpManager:

@@ -8,8 +8,8 @@ import httpx
 
 import pytest
 
-from openharness.api.client import ApiMessageRequest
-from openharness.api.openai_client import (
+from iterate_harness.api.client import ApiMessageRequest
+from iterate_harness.api.openai_client import (
     OpenAICompatibleClient,
     _convert_messages_to_openai,
     _convert_tools_to_openai,
@@ -17,7 +17,7 @@ from openharness.api.openai_client import (
     _strip_think_blocks,
     _token_limit_param_for_model,
 )
-from openharness.engine.messages import (
+from iterate_harness.engine.messages import (
     ConversationMessage,
     ImageBlock,
     TextBlock,
@@ -295,7 +295,7 @@ def test_openai_client_init_normalizes_base_url(monkeypatch):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("openharness.api.openai_client.AsyncOpenAI", _StubAsyncOpenAI)
+    monkeypatch.setattr("iterate_harness.api.openai_client.AsyncOpenAI", _StubAsyncOpenAI)
     OpenAICompatibleClient(api_key="test-key", base_url="https://jarodfund.xyz/openai/v1/")
 
     assert captured["base_url"] == "https://jarodfund.xyz/openai/v1"
@@ -308,7 +308,7 @@ def test_openai_client_init_passes_timeout(monkeypatch):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("openharness.api.openai_client.AsyncOpenAI", _StubAsyncOpenAI)
+    monkeypatch.setattr("iterate_harness.api.openai_client.AsyncOpenAI", _StubAsyncOpenAI)
     OpenAICompatibleClient(api_key="test-key", timeout=45.0)
 
     assert captured["timeout"] == 45.0

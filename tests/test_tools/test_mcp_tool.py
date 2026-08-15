@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from openharness.tools.mcp_tool import _input_model_from_schema
+from iterate_harness.tools.mcp_tool import _input_model_from_schema
 
 
 class TestInputModelFromSchema:

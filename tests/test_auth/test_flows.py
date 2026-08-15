@@ -1,4 +1,4 @@
-"""Tests for ``openharness.auth.flows`` browser-launching behavior.
+"""Tests for ``iterate_harness.auth.flows`` browser-launching behavior.
 
 These cover the platform dispatch in ``DeviceCodeFlow._try_open_browser``,
 particularly the Windows path: it must use ``os.startfile`` (ShellExecuteW)
@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from openharness.auth.flows import DeviceCodeFlow
+from iterate_harness.auth.flows import DeviceCodeFlow
 
 
 class _FakeProc:
@@ -32,7 +32,7 @@ def popen_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[tuple[Any, ...], 
         calls.append((args, kwargs))
         return _FakeProc()
 
-    monkeypatch.setattr("openharness.auth.flows.subprocess.Popen", _capture)
+    monkeypatch.setattr("iterate_harness.auth.flows.subprocess.Popen", _capture)
     return calls
 
 
@@ -45,7 +45,7 @@ def startfile_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """
     calls: list[str] = []
     monkeypatch.setattr(
-        "openharness.auth.flows.os.startfile",
+        "iterate_harness.auth.flows.os.startfile",
         lambda url: calls.append(url),
         raising=False,
     )
@@ -64,7 +64,7 @@ def test_open_browser_windows_uses_startfile_not_shell(
     implementation. ``os.startfile`` calls ShellExecute directly, so the
     full URL is handed to the registered URL handler verbatim.
     """
-    monkeypatch.setattr("openharness.auth.flows.platform.system", lambda: "Windows")
+    monkeypatch.setattr("iterate_harness.auth.flows.platform.system", lambda: "Windows")
 
     url = "https://github.com/login/device&calc.exe"
     opened = DeviceCodeFlow._try_open_browser(url)
@@ -91,7 +91,7 @@ def test_open_browser_rejects_non_http_scheme(
     url: str,
 ) -> None:
     """Non-http(s) URLs must not reach any platform browser-launcher."""
-    monkeypatch.setattr("openharness.auth.flows.platform.system", lambda: "Windows")
+    monkeypatch.setattr("iterate_harness.auth.flows.platform.system", lambda: "Windows")
 
     assert DeviceCodeFlow._try_open_browser(url) is False
     assert startfile_calls == []
@@ -102,7 +102,7 @@ def test_open_browser_macos_uses_open_argv(
     monkeypatch: pytest.MonkeyPatch,
     popen_calls: list[tuple[tuple[Any, ...], dict[str, Any]]],
 ) -> None:
-    monkeypatch.setattr("openharness.auth.flows.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("iterate_harness.auth.flows.platform.system", lambda: "Darwin")
 
     assert DeviceCodeFlow._try_open_browser("https://example.com/login") is True
     assert len(popen_calls) == 1
@@ -115,7 +115,7 @@ def test_open_browser_linux_uses_xdg_open_argv(
     monkeypatch: pytest.MonkeyPatch,
     popen_calls: list[tuple[tuple[Any, ...], dict[str, Any]]],
 ) -> None:
-    monkeypatch.setattr("openharness.auth.flows.platform.system", lambda: "Linux")
+    monkeypatch.setattr("iterate_harness.auth.flows.platform.system", lambda: "Linux")
 
     assert DeviceCodeFlow._try_open_browser("https://example.com/login") is True
     assert len(popen_calls) == 1

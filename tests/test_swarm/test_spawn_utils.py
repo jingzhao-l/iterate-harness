@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from openharness.swarm.spawn_utils import (
+from iterate_harness.swarm.spawn_utils import (
     TEAMMATE_COMMAND_ENV_VAR,
     build_inherited_cli_flags,
     build_inherited_env_vars,

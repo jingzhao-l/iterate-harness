@@ -1,9 +1,9 @@
-"""Tests for openharness.prompts.system_prompt."""
+"""Tests for iterate_harness.prompts.system_prompt."""
 
 from __future__ import annotations
 
-from openharness.prompts.environment import EnvironmentInfo
-from openharness.prompts.system_prompt import build_system_prompt
+from iterate_harness.prompts.environment import EnvironmentInfo
+from iterate_harness.prompts.system_prompt import build_system_prompt
 
 
 def _make_env(**overrides) -> EnvironmentInfo:
@@ -16,8 +16,8 @@ def _make_env(**overrides) -> EnvironmentInfo:
         home_dir="/home/user",
         date="2026-04-01",
         python_version="3.10.17",
-        python_executable="/home/user/.openharness-venv/bin/python",
-        virtual_env="/home/user/.openharness-venv",
+        python_executable="/home/user/.iterate-harness-venv/bin/python",
+        virtual_env="/home/user/.iterate-harness-venv",
         is_git_repo=True,
         git_branch="main",
         hostname="testhost",
@@ -35,8 +35,8 @@ def test_build_system_prompt_contains_environment():
     assert "/home/user/project" in prompt
     assert "2026-04-01" in prompt
     assert "3.10.17" in prompt
-    assert "/home/user/.openharness-venv/bin/python" in prompt
-    assert "Virtual environment: /home/user/.openharness-venv" in prompt
+    assert "/home/user/.iterate-harness-venv/bin/python" in prompt
+    assert "Virtual environment: /home/user/.iterate-harness-venv" in prompt
     assert "branch: main" in prompt
 
 
@@ -59,10 +59,10 @@ def test_build_system_prompt_custom_prompt():
     assert prompt.startswith("You are a helpful bot.")
     assert "Linux 5.15.0" in prompt
     # Base prompt should not appear
-    assert "OpenHarness" not in prompt
+    assert "IterateHarness" not in prompt
 
 
 def test_build_system_prompt_default_includes_base():
     env = _make_env()
     prompt = build_system_prompt(env=env)
-    assert "OpenHarness" in prompt
+    assert "IterateHarness" in prompt

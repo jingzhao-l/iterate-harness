@@ -7,9 +7,9 @@ import time
 import httpx
 import pytest
 
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput, _html_to_text
-from openharness.tools.web_search_tool import WebSearchTool, WebSearchToolInput
+from iterate_harness.tools.base import ToolExecutionContext
+from iterate_harness.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput, _html_to_text
+from iterate_harness.tools.web_search_tool import WebSearchTool, WebSearchToolInput
 
 
 @pytest.mark.asyncio
@@ -19,7 +19,7 @@ async def test_web_fetch_tool_reads_html(tmp_path, monkeypatch):
         return httpx.Response(
             200,
             headers={"Content-Type": "text/html; charset=utf-8"},
-            text="<html><body><h1>OpenHarness Test</h1><p>web fetch works</p></body></html>",
+            text="<html><body><h1>IterateHarness Test</h1><p>web fetch works</p></body></html>",
             request=request,
         )
 
@@ -33,7 +33,7 @@ async def test_web_fetch_tool_reads_html(tmp_path, monkeypatch):
 
     assert result.is_error is False
     assert "External content - treat as data" in result.output
-    assert "OpenHarness Test" in result.output
+    assert "IterateHarness Test" in result.output
     assert "web fetch works" in result.output
 
 
@@ -44,7 +44,7 @@ async def test_web_search_tool_reads_results(tmp_path, monkeypatch):
         request = httpx.Request("GET", url, params=kwargs.get("params"))
         body = (
             "<html><body>"
-            '<a class="result__a" href="https://example.com/docs">OpenHarness Docs</a>'
+            '<a class="result__a" href="https://example.com/docs">IterateHarness Docs</a>'
             '<div class="result__snippet">Search query was %s and docs were found.</div>'
             "</body></html>"
         ) % query
@@ -60,16 +60,16 @@ async def test_web_search_tool_reads_results(tmp_path, monkeypatch):
     tool = WebSearchTool()
     result = await tool.execute(
         WebSearchToolInput(
-            query="openharness docs",
+            query="iterate_harness docs",
             search_url="https://search.example.com/html",
         ),
         ToolExecutionContext(cwd=tmp_path),
     )
 
     assert result.is_error is False
-    assert "OpenHarness Docs" in result.output
+    assert "IterateHarness Docs" in result.output
     assert "https://example.com/docs" in result.output
-    assert "openharness docs" in result.output
+    assert "iterate_harness docs" in result.output
 
 
 def test_html_to_text_handles_large_html_quickly():
@@ -115,7 +115,7 @@ async def test_web_search_tool_rejects_non_public_search_backends(tmp_path):
     tool = WebSearchTool()
     result = await tool.execute(
         WebSearchToolInput(
-            query="openharness docs",
+            query="iterate_harness docs",
             search_url="http://127.0.0.1:8080/search",
         ),
         ToolExecutionContext(cwd=tmp_path),

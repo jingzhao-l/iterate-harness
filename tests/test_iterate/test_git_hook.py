@@ -1,4 +1,4 @@
-"""Tests for the managed pre-commit hook (`oh iterate hook`, v1.2-b)."""
+"""Tests for the managed pre-commit hook (`ih iterate hook`, v1.2-b)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from openharness.iterate import git_hook
+from iterate_harness.iterate import git_hook
 
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "t",
@@ -35,16 +35,16 @@ def git_repo(tmp_path: Path) -> Path:
 
 class TestRenderHookScript:
     def test_script_contains_guard_binary_and_gate(self):
-        script = git_hook.render_hook_script(oh_binary="/usr/local/bin/oh", fail_on="high")
+        script = git_hook.render_hook_script(oh_binary="/usr/local/bin/ih", fail_on="high")
         assert git_hook.HOOK_MARKER in script
-        assert 'OH="/usr/local/bin/oh"' in script
+        assert 'OH="/usr/local/bin/ih"' in script
         assert "ITERATE_SKIP_HOOK" in script
         assert "iterate review --changed" in script
         assert f"--rounds {git_hook.HOOK_ROUNDS}" in script
         assert "iterate report --fail-on high" in script
 
     def test_script_is_valid_posix_sh(self):
-        script = git_hook.render_hook_script(oh_binary="oh", fail_on="critical")
+        script = git_hook.render_hook_script(oh_binary="ih", fail_on="critical")
         result = subprocess.run(
             ["sh", "-n"], input=script, text=True, capture_output=True, check=False
         )

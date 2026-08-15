@@ -1,10 +1,10 @@
-"""Tests for openharness.iterate.config_loader (port of config-loader.test.ts)."""
+"""Tests for iterate_harness.iterate.config_loader (port of config-loader.test.ts)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from openharness.iterate.config_loader import (
+from iterate_harness.iterate.config_loader import (
     default_config,
     flatten_commands,
     is_command_allowed,
@@ -220,12 +220,12 @@ class TestValidateConfig:
         assert errors == ["validation.command_whitelist", "validation.commands"]
 
     def test_passes_a_complete_config(self):
-        from openharness.iterate.config_loader import _default_config_dict
+        from iterate_harness.iterate.config_loader import _default_config_dict
 
         assert validate_config(_default_config_dict()) == []
 
 
 def test_config_filename_constant_matches_skill_convention():
-    from openharness.iterate.config_loader import CONFIG_FILENAME
+    from iterate_harness.iterate.config_loader import CONFIG_FILENAME
 
     assert CONFIG_FILENAME == "iterate.config.yaml"

@@ -1,13 +1,13 @@
-"""Tests for decision-log replay (openharness.iterate.replay)."""
+"""Tests for decision-log replay (iterate_harness.iterate.replay)."""
 
 from __future__ import annotations
 
 import pytest
 
-from openharness.commands.iterate import iterate_command_handler
-from openharness.commands.registry import CommandContext
-from openharness.iterate.decision_log import DecisionLogEntry, append_entry
-from openharness.iterate.replay import build_replay_lines, render_replay
+from iterate_harness.commands.iterate import iterate_command_handler
+from iterate_harness.commands.registry import CommandContext
+from iterate_harness.iterate.decision_log import DecisionLogEntry, append_entry
+from iterate_harness.iterate.replay import build_replay_lines, render_replay
 
 
 def _entry(
@@ -104,7 +104,7 @@ class TestSlashReplay:
 
 class TestCliReplay:
     def test_cli_log_replay(self, tmp_path, monkeypatch, capsys):
-        from openharness.cli import iterate_log
+        from iterate_harness.cli import iterate_log
 
         monkeypatch.chdir(tmp_path)
         for entry in TIMELINE:
@@ -115,7 +115,7 @@ class TestCliReplay:
         assert "(5 entries replayed)" in out
 
     def test_cli_log_replay_empty(self, tmp_path, monkeypatch, capsys):
-        from openharness.cli import iterate_log
+        from iterate_harness.cli import iterate_log
 
         monkeypatch.chdir(tmp_path)
         iterate_log(tail=20, as_json=False, trend=False, replay=True)

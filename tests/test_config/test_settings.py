@@ -1,4 +1,4 @@
-"""Tests for openharness.config.settings."""
+"""Tests for iterate_harness.config.settings."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from openharness.auth.storage import store_credential
-from openharness.config.settings import (
+from iterate_harness.auth.storage import store_credential
+from iterate_harness.config.settings import (
     ProviderProfile,
     Settings,
     display_model_setting,
@@ -517,7 +517,7 @@ class TestAnsiEscapeSequences:
         updated = _apply_env_overrides(s)
         assert updated.model == "claude-opus-4-6"
 
-    def test_env_override_strips_ansi_from_openharness_model(self, monkeypatch):
+    def test_env_override_strips_ansi_from_iterate_harness_model(self, monkeypatch):
         """Test that ANSI escape sequences are stripped from OPENHARNESS_MODEL env var."""
         monkeypatch.setenv("OPENHARNESS_MODEL", "\x1b[32mclaude-sonnet-4-6\x1b[0m")
         s = Settings()
@@ -535,7 +535,7 @@ class TestMiniMaxProvider:
     """Tests for MiniMax provider profile and auth integration."""
 
     def test_minimax_in_default_provider_profiles(self):
-        from openharness.config.settings import default_provider_profiles
+        from iterate_harness.config.settings import default_provider_profiles
 
         profiles = default_provider_profiles()
         assert "minimax" in profiles
@@ -547,12 +547,12 @@ class TestMiniMaxProvider:
         assert profile.base_url == "https://api.minimax.io/v1"
 
     def test_auth_source_provider_name_minimax(self):
-        from openharness.config.settings import auth_source_provider_name
+        from iterate_harness.config.settings import auth_source_provider_name
 
         assert auth_source_provider_name("minimax_api_key") == "minimax"
 
     def test_default_auth_source_for_minimax_provider(self):
-        from openharness.config.settings import default_auth_source_for_provider
+        from iterate_harness.config.settings import default_auth_source_for_provider
 
         assert default_auth_source_for_provider("minimax") == "minimax_api_key"
 
@@ -599,7 +599,7 @@ class TestNvidiaProvider:
     """Tests for NVIDIA NIM provider profile and auth integration."""
 
     def test_nvidia_in_default_provider_profiles(self):
-        from openharness.config.settings import default_provider_profiles
+        from iterate_harness.config.settings import default_provider_profiles
 
         profiles = default_provider_profiles()
         assert "nvidia" in profiles
@@ -611,12 +611,12 @@ class TestNvidiaProvider:
         assert profile.base_url == "https://integrate.api.nvidia.com/v1"
 
     def test_auth_source_provider_name_nvidia(self):
-        from openharness.config.settings import auth_source_provider_name
+        from iterate_harness.config.settings import auth_source_provider_name
 
         assert auth_source_provider_name("nvidia_api_key") == "nvidia"
 
     def test_default_auth_source_for_nvidia_provider(self):
-        from openharness.config.settings import default_auth_source_for_provider
+        from iterate_harness.config.settings import default_auth_source_for_provider
 
         assert default_auth_source_for_provider("nvidia") == "nvidia_api_key"
 
@@ -663,7 +663,7 @@ class TestQwenProvider:
     """Tests for Qwen (DashScope) provider profile and auth integration."""
 
     def test_qwen_in_default_provider_profiles(self):
-        from openharness.config.settings import default_provider_profiles
+        from iterate_harness.config.settings import default_provider_profiles
 
         profiles = default_provider_profiles()
         assert "qwen" in profiles
@@ -675,12 +675,12 @@ class TestQwenProvider:
         assert profile.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     def test_auth_source_provider_name_qwen(self):
-        from openharness.config.settings import auth_source_provider_name
+        from iterate_harness.config.settings import auth_source_provider_name
 
         assert auth_source_provider_name("dashscope_api_key") == "dashscope"
 
     def test_default_auth_source_for_qwen_provider(self):
-        from openharness.config.settings import default_auth_source_for_provider
+        from iterate_harness.config.settings import default_auth_source_for_provider
 
         assert default_auth_source_for_provider("dashscope") == "dashscope_api_key"
 
@@ -704,7 +704,7 @@ class TestQwenProvider:
         assert "DASHSCOPE_API_KEY" in resolved.source
 
     def test_display_model_setting_for_qwen(self):
-        from openharness.config.settings import display_model_setting
+        from iterate_harness.config.settings import display_model_setting
 
         profile = ProviderProfile(
             label="Qwen (DashScope)",
@@ -740,7 +740,7 @@ class TestModelScopeProvider:
     """Tests for ModelScope provider profile and auth integration."""
 
     def test_modelscope_in_default_provider_profiles(self):
-        from openharness.config.settings import default_provider_profiles
+        from iterate_harness.config.settings import default_provider_profiles
 
         profiles = default_provider_profiles()
         assert "modelscope" in profiles
@@ -752,12 +752,12 @@ class TestModelScopeProvider:
         assert profile.base_url == "https://api-inference.modelscope.cn/v1"
 
     def test_auth_source_provider_name_modelscope(self):
-        from openharness.config.settings import auth_source_provider_name
+        from iterate_harness.config.settings import auth_source_provider_name
 
         assert auth_source_provider_name("modelscope_api_key") == "modelscope"
 
     def test_default_auth_source_for_modelscope_provider(self):
-        from openharness.config.settings import default_auth_source_for_provider
+        from iterate_harness.config.settings import default_auth_source_for_provider
 
         assert default_auth_source_for_provider("modelscope") == "modelscope_api_key"
 

@@ -1,4 +1,4 @@
-"""Tests for the detection-driven `oh iterate init` wizard (v1.2-a)."""
+"""Tests for the detection-driven `ih iterate init` wizard (v1.2-a)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import ClassVar
 import pytest
 import yaml
 
-from openharness.iterate import config_loader, init_wizard
+from iterate_harness.iterate import config_loader, init_wizard
 
 
 def write(path: Path, text: str) -> None:

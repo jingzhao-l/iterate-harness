@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tasks.manager import BackgroundTaskManager, _encode_task_worker_payload
+from iterate_harness.tasks.manager import BackgroundTaskManager, _encode_task_worker_payload
 
 
 @pytest.mark.asyncio
@@ -82,7 +82,7 @@ async def test_write_to_stopped_agent_task_restarts_process(tmp_path: Path, monk
 
     output = manager.read_task_output(task.id)
     assert "got:ready" in output
-    assert "[OpenHarness] Agent task restarted; prior interactive context was not preserved." in output
+    assert "[IterateHarness] Agent task restarted; prior interactive context was not preserved." in output
     assert "got:follow-up" in output
     updated = manager.get_task(task.id)
     assert updated is not None

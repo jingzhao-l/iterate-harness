@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
-from openharness.autopilot import RepoAutopilotStore, RepoVerificationStep
-from openharness.autopilot.service import _DEFAULT_VERIFICATION_POLICY
-from openharness.config.paths import (
+from iterate_harness.autopilot import RepoAutopilotStore, RepoVerificationStep
+from iterate_harness.autopilot.service import _DEFAULT_VERIFICATION_POLICY
+from iterate_harness.config.paths import (
     get_project_active_repo_context_path,
     get_project_autopilot_policy_path,
     get_project_release_policy_path,
@@ -234,7 +234,7 @@ def test_autopilot_tick_scans_then_runs_next(tmp_path: Path) -> None:
         return {"github_issue": 0, "github_pr": 0, "claude_code_candidate": 0}
 
     async def fake_run_next(self, *, model=None, max_turns=None, permission_mode=None):
-        from openharness.autopilot import RepoRunResult
+        from iterate_harness.autopilot import RepoRunResult
 
         return RepoRunResult(
             card_id="ap-test",
@@ -263,7 +263,7 @@ def test_autopilot_install_default_cron_creates_jobs(tmp_path: Path, monkeypatch
     recorded: list[dict[str, str]] = []
 
     monkeypatch.setattr(
-        "openharness.services.cron.upsert_cron_job",
+        "iterate_harness.services.cron.upsert_cron_job",
         lambda job: recorded.append(job),
     )
 
@@ -303,24 +303,24 @@ def test_autopilot_run_card_opens_pr_and_waits_for_ci(tmp_path: Path, monkeypatc
     async def fake_wait_for_pr_ci(self, pr_number: int, policies):
         return "success", "All reported remote checks passed.", {"url": "https://example/pr/17", "labels": [], "isDraft": False}, []
 
-    monkeypatch.setattr("openharness.autopilot.service.WorktreeManager.create_worktree", fake_create_worktree)
-    monkeypatch.setattr("openharness.autopilot.service.WorktreeManager.remove_worktree", fake_remove_worktree)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._is_git_repo", lambda self, cwd: True)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._run_agent_prompt", fake_run_agent_prompt)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._run_verification_steps", fake_run_verification_steps)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._sync_worktree_to_base", lambda self, cwd, *, base_branch, head_branch, reset: None)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._git_commit_all", lambda self, cwd, message: True)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._git_push_branch", lambda self, cwd, branch: None)
+    monkeypatch.setattr("iterate_harness.autopilot.service.WorktreeManager.create_worktree", fake_create_worktree)
+    monkeypatch.setattr("iterate_harness.autopilot.service.WorktreeManager.remove_worktree", fake_remove_worktree)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._is_git_repo", lambda self, cwd: True)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._run_agent_prompt", fake_run_agent_prompt)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._run_verification_steps", fake_run_verification_steps)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._sync_worktree_to_base", lambda self, cwd, *, base_branch, head_branch, reset: None)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._git_commit_all", lambda self, cwd, message: True)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._git_push_branch", lambda self, cwd, branch: None)
     monkeypatch.setattr(
-        "openharness.autopilot.service.RepoAutopilotStore._upsert_pull_request",
+        "iterate_harness.autopilot.service.RepoAutopilotStore._upsert_pull_request",
         lambda self, card, *, head_branch, base_branch, run_report_path, verification_report_path: {
             "number": 17,
             "url": "https://example/pr/17",
         },
     )
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._wait_for_pr_ci", fake_wait_for_pr_ci)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._automerge_eligible", lambda self, pr_snapshot, policies: False)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._comment_on_pr", lambda self, pr_number, comment: None)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._wait_for_pr_ci", fake_wait_for_pr_ci)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._automerge_eligible", lambda self, pr_snapshot, policies: False)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._comment_on_pr", lambda self, pr_number, comment: None)
 
     import asyncio
 
@@ -368,25 +368,25 @@ def test_autopilot_run_card_repairs_after_local_verification_failure(tmp_path: P
 
     merged = {"called": False}
 
-    monkeypatch.setattr("openharness.autopilot.service.WorktreeManager.create_worktree", fake_create_worktree)
-    monkeypatch.setattr("openharness.autopilot.service.WorktreeManager.remove_worktree", fake_remove_worktree)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._is_git_repo", lambda self, cwd: True)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._run_agent_prompt", fake_run_agent_prompt)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._run_verification_steps", fake_run_verification_steps)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._sync_worktree_to_base", lambda self, cwd, *, base_branch, head_branch, reset: None)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._git_commit_all", lambda self, cwd, message: True)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._git_push_branch", lambda self, cwd, branch: None)
+    monkeypatch.setattr("iterate_harness.autopilot.service.WorktreeManager.create_worktree", fake_create_worktree)
+    monkeypatch.setattr("iterate_harness.autopilot.service.WorktreeManager.remove_worktree", fake_remove_worktree)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._is_git_repo", lambda self, cwd: True)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._run_agent_prompt", fake_run_agent_prompt)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._run_verification_steps", fake_run_verification_steps)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._sync_worktree_to_base", lambda self, cwd, *, base_branch, head_branch, reset: None)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._git_commit_all", lambda self, cwd, message: True)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._git_push_branch", lambda self, cwd, branch: None)
     monkeypatch.setattr(
-        "openharness.autopilot.service.RepoAutopilotStore._upsert_pull_request",
+        "iterate_harness.autopilot.service.RepoAutopilotStore._upsert_pull_request",
         lambda self, card, *, head_branch, base_branch, run_report_path, verification_report_path: {
             "number": 23,
             "url": "https://example/pr/23",
         },
     )
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._wait_for_pr_ci", fake_wait_for_pr_ci)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._automerge_eligible", lambda self, pr_snapshot, policies: True)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._merge_pull_request", lambda self, pr_number: merged.__setitem__("called", True))
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._comment_on_pr", lambda self, pr_number, comment: None)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._wait_for_pr_ci", fake_wait_for_pr_ci)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._automerge_eligible", lambda self, pr_snapshot, policies: True)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._merge_pull_request", lambda self, pr_number: merged.__setitem__("called", True))
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._comment_on_pr", lambda self, pr_number, comment: None)
 
     import asyncio
 
@@ -427,28 +427,28 @@ def test_autopilot_run_card_reuses_existing_branch_progress(tmp_path: Path, monk
 
     pushed = {"called": False}
 
-    monkeypatch.setattr("openharness.autopilot.service.WorktreeManager.create_worktree", fake_create_worktree)
-    monkeypatch.setattr("openharness.autopilot.service.WorktreeManager.remove_worktree", fake_remove_worktree)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._is_git_repo", lambda self, cwd: True)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._run_agent_prompt", fake_run_agent_prompt)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._run_verification_steps", fake_run_verification_steps)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._sync_worktree_to_base", lambda self, cwd, *, base_branch, head_branch, reset: None)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._git_commit_all", lambda self, cwd, message: False)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._git_branch_has_progress", lambda self, cwd, *, base_branch: True)
+    monkeypatch.setattr("iterate_harness.autopilot.service.WorktreeManager.create_worktree", fake_create_worktree)
+    monkeypatch.setattr("iterate_harness.autopilot.service.WorktreeManager.remove_worktree", fake_remove_worktree)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._is_git_repo", lambda self, cwd: True)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._run_agent_prompt", fake_run_agent_prompt)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._run_verification_steps", fake_run_verification_steps)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._sync_worktree_to_base", lambda self, cwd, *, base_branch, head_branch, reset: None)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._git_commit_all", lambda self, cwd, message: False)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._git_branch_has_progress", lambda self, cwd, *, base_branch: True)
     monkeypatch.setattr(
-        "openharness.autopilot.service.RepoAutopilotStore._git_push_branch",
+        "iterate_harness.autopilot.service.RepoAutopilotStore._git_push_branch",
         lambda self, cwd, branch: pushed.__setitem__("called", True),
     )
     monkeypatch.setattr(
-        "openharness.autopilot.service.RepoAutopilotStore._upsert_pull_request",
+        "iterate_harness.autopilot.service.RepoAutopilotStore._upsert_pull_request",
         lambda self, card, *, head_branch, base_branch, run_report_path, verification_report_path: {
             "number": 29,
             "url": "https://example/pr/29",
         },
     )
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._wait_for_pr_ci", fake_wait_for_pr_ci)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._automerge_eligible", lambda self, pr_snapshot, policies: False)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._comment_on_pr", lambda self, pr_number, comment: None)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._wait_for_pr_ci", fake_wait_for_pr_ci)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._automerge_eligible", lambda self, pr_snapshot, policies: False)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._comment_on_pr", lambda self, pr_number, comment: None)
 
     import asyncio
 
@@ -479,10 +479,10 @@ def test_autopilot_existing_pr_card_can_auto_merge(tmp_path: Path, monkeypatch) 
 
     merged = {"called": False}
 
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._wait_for_pr_ci", fake_wait_for_pr_ci)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._automerge_eligible", lambda self, pr_snapshot, policies: True)
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._merge_pull_request", lambda self, pr_number: merged.__setitem__("called", True))
-    monkeypatch.setattr("openharness.autopilot.service.RepoAutopilotStore._comment_on_pr", lambda self, pr_number, comment: None)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._wait_for_pr_ci", fake_wait_for_pr_ci)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._automerge_eligible", lambda self, pr_snapshot, policies: True)
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._merge_pull_request", lambda self, pr_number: merged.__setitem__("called", True))
+    monkeypatch.setattr("iterate_harness.autopilot.service.RepoAutopilotStore._comment_on_pr", lambda self, pr_number, comment: None)
 
     import asyncio
 
@@ -499,9 +499,9 @@ def test_wait_for_pr_ci_allows_repos_with_no_remote_checks_after_grace(tmp_path:
     store = RepoAutopilotStore(repo)
 
     times = iter([1000.0, 1000.0, 1006.0, 1006.0])
-    monkeypatch.setattr("openharness.autopilot.service.time.time", lambda: next(times))
+    monkeypatch.setattr("iterate_harness.autopilot.service.time.time", lambda: next(times))
     monkeypatch.setattr(
-        "openharness.autopilot.service.asyncio.sleep",
+        "iterate_harness.autopilot.service.asyncio.sleep",
         lambda _seconds: __import__("asyncio").sleep(0),
     )
     monkeypatch.setattr(
@@ -531,7 +531,7 @@ def test_wait_for_pr_ci_waits_for_check_settle_window(tmp_path: Path, monkeypatc
     store = RepoAutopilotStore(repo)
 
     current_time = {"value": 1000.0}
-    monkeypatch.setattr("openharness.autopilot.service.time.time", lambda: current_time["value"])
+    monkeypatch.setattr("iterate_harness.autopilot.service.time.time", lambda: current_time["value"])
     snapshots = [
         {
             "url": "https://example/pr/33",
@@ -561,7 +561,7 @@ def test_wait_for_pr_ci_waits_for_check_settle_window(tmp_path: Path, monkeypatc
         sleep_calls.append(seconds)
         current_time["value"] += seconds
 
-    monkeypatch.setattr("openharness.autopilot.service.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("iterate_harness.autopilot.service.asyncio.sleep", fake_sleep)
     monkeypatch.setattr(
         store,
         "_pr_status_snapshot",

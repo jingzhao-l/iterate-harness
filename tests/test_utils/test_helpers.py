@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from openharness.utils.helpers import get_data_path, safe_filename, split_message
+from iterate_harness.utils.helpers import get_data_path, safe_filename, split_message
 
 
 def test_split_message_prefers_word_boundaries() -> None:

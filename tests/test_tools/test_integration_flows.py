@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tasks.manager import get_task_manager
-from openharness.tools import create_default_tool_registry
-from openharness.tools.base import ToolExecutionContext
+from iterate_harness.tasks.manager import get_task_manager
+from iterate_harness.tools import create_default_tool_registry
+from iterate_harness.tools.base import ToolExecutionContext
 
 
 async def _wait_for_terminal_task(task_id: str, *, timeout_seconds: float = 2.0) -> None:

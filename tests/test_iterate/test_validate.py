@@ -1,11 +1,11 @@
-"""Tests for openharness.iterate.validate (port of the validate tool core)."""
+"""Tests for iterate_harness.iterate.validate (port of the validate tool core)."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-from openharness.iterate.validate import run_command, run_validation
+from iterate_harness.iterate.validate import run_command, run_validation
 
 
 def write_config(project: Path, content: str) -> None:

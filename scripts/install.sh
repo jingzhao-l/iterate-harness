@@ -249,11 +249,11 @@ fi
 # ---------------------------------------------------------------------------
 step "Setting up iterate-harness config directory"
 
-mkdir -p "$HOME/.openharness"
-mkdir -p "$HOME/.openharness/skills"
-mkdir -p "$HOME/.openharness/plugins"
+mkdir -p "$HOME/.iterate-harness"
+mkdir -p "$HOME/.iterate-harness/skills"
+mkdir -p "$HOME/.iterate-harness/plugins"
 
-success "Config directory ready: ~/.openharness/"
+success "Config directory ready: ~/.iterate-harness/"
 
 # ---------------------------------------------------------------------------
 # Step 7: Register global commands
@@ -261,29 +261,29 @@ success "Config directory ready: ~/.openharness/"
 step "Registering global commands"
 
 mkdir -p "$BIN_DIR"
-ln -snf "$VENV_DIR/bin/oh" "$BIN_DIR/oh"
+ln -snf "$VENV_DIR/bin/ih" "$BIN_DIR/ih"
 ln -snf "$VENV_DIR/bin/iterate-harness" "$BIN_DIR/iterate-harness"
-success "Linked oh / iterate-harness into ${BIN_DIR}"
+success "Linked ih / iterate-harness into ${BIN_DIR}"
 
 # ---------------------------------------------------------------------------
 # Step 8: Verify installation
 # ---------------------------------------------------------------------------
 step "Verifying installation"
 
-if [ -x "$BIN_DIR/oh" ]; then
-    OH_VERSION=$("$BIN_DIR/oh" --version 2>&1 || echo "(version check failed)")
+if [ -x "$BIN_DIR/ih" ]; then
+    IH_VERSION=$("$BIN_DIR/ih" --version 2>&1 || echo "(version check failed)")
     success "Installation successful!"
     echo ""
-    echo -e "  ${BOLD}oh${RESET} is ready: ${GREEN}${OH_VERSION}${RESET}"
-elif "$PYTHON_CMD" -m openharness --version &>/dev/null 2>&1; then
-    OH_VERSION=$("$PYTHON_CMD" -m openharness --version 2>&1)
-    warn "'oh' command link is not executable yet. Run via: python -m openharness"
-    echo "  Version: ${OH_VERSION}"
+    echo -e "  ${BOLD}ih${RESET} is ready: ${GREEN}${IH_VERSION}${RESET}"
+elif "$PYTHON_CMD" -m iterate_harness --version &>/dev/null 2>&1; then
+    IH_VERSION=$("$PYTHON_CMD" -m iterate_harness --version 2>&1)
+    warn "'ih' command link is not executable yet. Run via: python -m iterate_harness"
+    echo "  Version: ${IH_VERSION}"
     echo "  To add it to PATH, ensure ${BIN_DIR} is in PATH:"
     echo "    export PATH=\"${BIN_DIR}:\$PATH\""
 else
-    warn "Could not verify 'oh' command. The package may need a PATH update."
-    echo "  Try: $PYTHON_CMD -m openharness --version"
+    warn "Could not verify 'ih' command. The package may need a PATH update."
+    echo "  Try: $PYTHON_CMD -m iterate_harness --version"
     echo "  Or add ${BIN_DIR} to PATH and restart your shell."
 fi
 
@@ -352,9 +352,9 @@ echo "    1. Restart shell, or reload your shell config:"
 echo "         bash/zsh: source ~/.bashrc  (or ~/.zshrc)"
 echo "         fish:     source ~/.config/fish/config.fish"
 echo "    2. Set your API key:        export ANTHROPIC_API_KEY=your_key"
-echo "    3. Launch the TUI:          oh"
+echo "    3. Launch the TUI:          ih"
 echo "    4. First run in a project:  /iterate review   (dry-run review)"
-echo "       or headless:             oh iterate init && oh iterate review"
+echo "       or headless:             ih iterate init && ih iterate review"
 echo "    5. Docs:                    https://github.com/jingzhao-l/iterate-harness"
 echo ""
 echo "  Notes:"

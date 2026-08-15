@@ -1,16 +1,16 @@
-"""Tests for openharness.iterate.meta_review (port of meta-review.test.ts)."""
+"""Tests for iterate_harness.iterate.meta_review (port of meta-review.test.ts)."""
 
 from __future__ import annotations
 
 import dataclasses
 
-from openharness.iterate.meta_review import (
+from iterate_harness.iterate.meta_review import (
     META_REVIEW_CHECKS,
     build_final_review_report,
     meta_review_report,
 )
-from openharness.iterate.review import build_review_report
-from openharness.iterate.types import ReviewFinding, ReviewRound
+from iterate_harness.iterate.review import build_review_report
+from iterate_harness.iterate.types import ReviewFinding, ReviewRound
 
 
 def f(**partial: object) -> ReviewFinding:

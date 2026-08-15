@@ -30,7 +30,7 @@ convergence policy are layered on top.
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-1.3.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.4.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -42,7 +42,7 @@ convergence policy are layered on top.
 curl -fsSL https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.sh | bash
 
 # launch the TUI
-oh
+ih
 
 # inside the REPL
 /iterate review        # dry-run: read-only multi-round review until convergence
@@ -51,24 +51,24 @@ oh
 CLI-first instead:
 
 ```bash
-oh iterate init          # detect the project, generate iterate.config.yaml
-oh iterate review        # headless dry-run (stream-json output available)
-oh iterate review --changed # quick review: only files changed vs --ref (default HEAD)
-oh iterate run           # headless autonomous fix loop
-oh iterate resume        # resume the last session
-oh iterate log           # tail the decision log
-oh iterate log --trend   # cross-run finding trend (new/fixed/regressed/stubborn)
-oh iterate log --replay  # replay the whole run chronologically (relative timestamps)
-oh iterate report        # render the final report (CI mode, see below)
-oh iterate report --pr    # post/update the report as a PR comment (gh CLI, idempotent)
-oh iterate report --html # single-file HTML report (convergence curve, diffs, shareable)
-oh iterate batch a/ b/   # review multiple repos sequentially, rank worst-first
-oh iterate schedule add "0 9 * * 1-5" # daily changed-only quick review (cron, UTC)
-oh iterate hook install  # managed pre-commit hook: 1-round changed-only gate
+ih iterate init          # detect the project, generate iterate.config.yaml
+ih iterate review        # headless dry-run (stream-json output available)
+ih iterate review --changed # quick review: only files changed vs --ref (default HEAD)
+ih iterate run           # headless autonomous fix loop
+ih iterate resume        # resume the last session
+ih iterate log           # tail the decision log
+ih iterate log --trend   # cross-run finding trend (new/fixed/regressed/stubborn)
+ih iterate log --replay  # replay the whole run chronologically (relative timestamps)
+ih iterate report        # render the final report (CI mode, see below)
+ih iterate report --pr    # post/update the report as a PR comment (gh CLI, idempotent)
+ih iterate report --html # single-file HTML report (convergence curve, diffs, shareable)
+ih iterate batch a/ b/   # review multiple repos sequentially, rank worst-first
+ih iterate schedule add "0 9 * * 1-5" # daily changed-only quick review (cron, UTC)
+ih iterate hook install  # managed pre-commit hook: 1-round changed-only gate
 ```
 
 Set your API key first: `export ANTHROPIC_API_KEY=your_key` (OpenAI-compatible
-providers are also supported — see `oh --help`).
+providers are also supported — see `ih --help`).
 
 ## ✨ Iterate Features
 
@@ -83,20 +83,20 @@ providers are also supported — see `oh --help`).
 | **Security boundaries as code** | `protected_paths` and `forbidden_fix_patterns` from settings are auto-assembled into the permission layer (deny path rules + write-payload regex); validation commands run through an EXACT-match allowlist |
 | **Per-fix diff approval** | `require_fix_approval` routes every file write during a normal-mode loop through an interactive prompt with an inline diff preview — even in full-auto mode; hard denials are never downgraded |
 | **Esc intervention** | Press Esc mid-loop: the loop pauses at the next round boundary and opens a directional-key menu (skip top finding / narrow dimensions / stop / resume); a second Esc force-interrupts the turn |
-| **Finding trend library** | Every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `oh iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs |
+| **Finding trend library** | Every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `ih iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs |
 | **Breakpoint resume** | The TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings |
-| **CI / PR mode** | `oh iterate report --github --fail-on high` turns the final report into GitHub Actions annotations with a severity-based exit-code gate for PRs; `--pr` posts (and on later runs UPDATES) a Markdown report comment via the gh CLI — every failure mode degrades gracefully, never breaking the exit-code policy |
+| **CI / PR mode** | `ih iterate report --github --fail-on high` turns the final report into GitHub Actions annotations with a severity-based exit-code gate for PRs; `--pr` posts (and on later runs UPDATES) a Markdown report comment via the gh CLI — every failure mode degrades gracefully, never breaking the exit-code policy |
 | **Changed-only quick review** | `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing |
-| **Batch ranking** | `oh iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch |
-| **Scheduled review** | `oh iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library |
-| **HTML single-file report** | `oh iterate report --html` renders the run as ONE offline `.html` file: SVG convergence curve, severity/dimension bars, findings table with failure scenarios, and colorized per-fix diffs — share it as a CI artifact |
-| **Decision replay** | `oh iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording |
+| **Batch ranking** | `ih iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch |
+| **Scheduled review** | `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library |
+| **HTML single-file report** | `ih iterate report --html` renders the run as ONE offline `.html` file: SVG convergence curve, severity/dimension bars, findings table with failure scenarios, and colorized per-fix diffs — share it as a CI artifact |
+| **Decision replay** | `ih iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording |
 | **Per-dimension resources** | `dimension_resources` in `iterate.config.yaml` sets per-dimension `model` / `concurrency` (1–8) / `token_budget` — a strong model for security, a fast one for style-tests; the plan carries them into every reviewer spawn |
 | **Token budget enforcement** | `token_budget` caps the whole run at the engine level (hard-stop + closing report); `iterate_review(operation="aggregate", dimension_usage=…)` audits per-dimension usage, relays reviewer-reported totals into the engine cost meter (with per-dimension USD estimates at the model's blended price), and steers the next round away from exhausted dimensions |
-| **Threshold gates** | `thresholds.max_critical` / `max_high` / `max_medium` / `max_low` (global or per dimension) cap finding counts in the final report — a violation flips the verdict to `needs_revision` and fails the `oh iterate report` exit code (`threshold gate: FAIL`) |
-| **Schedule timezones** | `oh iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` evaluates the cron in local time (stored UTC-normalized) so "daily at 9" means 9 where you live |
-| **Detection-driven init** | `oh iterate init` probes marker files (package.json / pyproject / go.mod / Cargo.toml / …), infers the test command from real evidence, suggests dimensions (frontend deps unlock `frontend-backend` / `ui-ux`), previews the yaml and writes it only after confirmation — `/iterate init` does the same in the TUI |
-| **Pre-commit hook** | `oh iterate hook install` writes a MARKED managed `.git/hooks/pre-commit` that runs a 1-round changed-only review and gates the commit on `--fail-on` severity; refuses to touch foreign hooks, skippable via `ITERATE_SKIP_HOOK=1` / `--no-verify` |
+| **Threshold gates** | `thresholds.max_critical` / `max_high` / `max_medium` / `max_low` (global or per dimension) cap finding counts in the final report — a violation flips the verdict to `needs_revision` and fails the `ih iterate report` exit code (`threshold gate: FAIL`) |
+| **Schedule timezones** | `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` evaluates the cron in local time (stored UTC-normalized) so "daily at 9" means 9 where you live |
+| **Detection-driven init** | `ih iterate init` probes marker files (package.json / pyproject / go.mod / Cargo.toml / …), infers the test command from real evidence, suggests dimensions (frontend deps unlock `frontend-backend` / `ui-ux`), previews the yaml and writes it only after confirmation — `/iterate init` does the same in the TUI |
+| **Pre-commit hook** | `ih iterate hook install` writes a MARKED managed `.git/hooks/pre-commit` that runs a 1-round changed-only review and gates the commit on `--fail-on` severity; refuses to touch foreign hooks, skippable via `ITERATE_SKIP_HOOK=1` / `--no-verify` |
 | **Decision log** | Append-only `.iterate/decision-log.jsonl`: every round, fix, validation and triage decision is recorded |
 | **Project knowledge** | `ITERATE.md` project knowledge + per-project structured personalization (9 categories) |
 
@@ -115,7 +115,7 @@ the bundled `iterate` skill provide the same loops through different entries.
 ## 🧭 Architecture
 
 ```
-src/openharness/
+src/iterate_harness/
 ├── iterate/            # semantic layer (Python port of the TS skill)
 │   ├── review.py       # dedupe / known_intentional filter / severity sort / convergence
 │   ├── meta_review.py  # 6-check report consistency audit
@@ -135,7 +135,7 @@ src/openharness/
 ## 📦 Install
 
 - **macOS / Linux / WSL**: `bash scripts/install.sh` (clone + venv + editable
-  install, links `oh` and `iterate-harness` into `~/.local/bin`)
+  install, links `ih` and `iterate-harness` into `~/.local/bin`)
 - **Windows (PowerShell)**: `scripts/install.ps1`
 - **From a checkout**: `bash scripts/install_dev.sh`
 - Requires Python ≥ 3.10; Node.js ≥ 18 enables the React TUI (skipped

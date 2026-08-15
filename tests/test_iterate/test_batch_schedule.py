@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from openharness.iterate import batch as iterate_batch
-from openharness.iterate import decision_log
-from openharness.services import cron_scheduler
-from openharness.services.cron import load_cron_jobs
+from iterate_harness.iterate import batch as iterate_batch
+from iterate_harness.iterate import decision_log
+from iterate_harness.services import cron_scheduler
+from iterate_harness.services.cron import load_cron_jobs
 
 
 @pytest.fixture()
@@ -58,11 +58,11 @@ def append_report_entry(repo: Path, findings: list[dict]) -> None:
 class TestScheduledCommand:
     def test_build_scheduled_command_dry_run(self):
         command = iterate_batch.build_scheduled_command(ref="HEAD", rounds=4, mode="dry-run")
-        assert command == "oh iterate review --changed --clean-ok --ref HEAD --rounds 4"
+        assert command == "ih iterate review --changed --clean-ok --ref HEAD --rounds 4"
 
     def test_build_scheduled_command_normal(self):
         command = iterate_batch.build_scheduled_command(ref="main", rounds=2, mode="normal")
-        assert command.startswith("oh iterate run --changed --clean-ok --ref main")
+        assert command.startswith("ih iterate run --changed --clean-ok --ref main")
 
     def test_invalid_ref_rejected(self):
         with pytest.raises(ValueError):
@@ -110,7 +110,7 @@ class TestScheduleTimezone:
     """v1.1: cron schedules evaluate in a local IANA zone, stored as UTC."""
 
     def test_validate_timezone(self):
-        from openharness.services.cron import validate_timezone
+        from iterate_harness.services.cron import validate_timezone
 
         assert validate_timezone("Asia/Shanghai") is True
         assert validate_timezone(" America/New_York ") is True
@@ -122,7 +122,7 @@ class TestScheduleTimezone:
     def test_next_run_time_evaluated_in_local_zone(self):
         from datetime import datetime
 
-        from openharness.services.cron import next_run_time
+        from iterate_harness.services.cron import next_run_time
 
         base = datetime(2026, 8, 15, 0, 0, tzinfo=UTC)  # 08:00 Beijing
         nxt = next_run_time("0 9 * * *", base=base, tz_name="Asia/Shanghai")
@@ -132,7 +132,7 @@ class TestScheduleTimezone:
     def test_next_run_time_without_zone_stays_utc(self):
         from datetime import datetime
 
-        from openharness.services.cron import next_run_time
+        from iterate_harness.services.cron import next_run_time
 
         base = datetime(2026, 8, 15, 0, 0, tzinfo=UTC)
         assert next_run_time("0 9 * * *", base=base) == datetime(2026, 8, 15, 9, 0, tzinfo=UTC)
@@ -140,7 +140,7 @@ class TestScheduleTimezone:
     def test_next_run_time_unknown_zone_raises(self):
         from datetime import datetime
 
-        from openharness.services.cron import next_run_time
+        from iterate_harness.services.cron import next_run_time
 
         base = datetime(2026, 8, 15, tzinfo=UTC)
         with pytest.raises(ValueError, match="unknown timezone"):
@@ -164,7 +164,7 @@ class TestScheduleTimezone:
         assert "timezone" not in job
 
     def test_mark_job_run_recomputes_next_run_in_zone(self, isolated_registry):
-        from openharness.services.cron import mark_job_run
+        from iterate_harness.services.cron import mark_job_run
 
         iterate_batch.install_schedule(cwd="/repo", schedule="0 9 * * *", timezone="Asia/Shanghai")
         mark_job_run(iterate_batch.ITERATE_CRON_JOB_NAME, success=True)

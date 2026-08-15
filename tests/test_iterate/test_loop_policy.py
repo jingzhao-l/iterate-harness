@@ -1,11 +1,11 @@
-"""Tests for openharness.iterate.loop_policy and cost metering."""
+"""Tests for iterate_harness.iterate.loop_policy and cost metering."""
 
 from __future__ import annotations
 
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.stream_events import ReviewProgressEvent
-from openharness.iterate.cost import CostMeter, price_for
-from openharness.iterate.loop_policy import ITERATE_STATE_KEY, IterateLoopPolicy
+from iterate_harness.api.usage import UsageSnapshot
+from iterate_harness.engine.stream_events import ReviewProgressEvent
+from iterate_harness.iterate.cost import CostMeter, price_for
+from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY, IterateLoopPolicy
 
 
 def state(**overrides: object) -> dict[str, object]:

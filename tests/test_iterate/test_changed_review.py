@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from openharness.commands.iterate import _parse_changed_flags, iterate_command_handler
-from openharness.commands.registry import CommandContext
-from openharness.iterate import git_scope, prompts, review
-from openharness.iterate.config_loader import default_config
-from openharness.iterate.types import IterateConfig
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.iterate_tools import IterateReviewInput, IterateReviewTool
+from iterate_harness.commands.iterate import _parse_changed_flags, iterate_command_handler
+from iterate_harness.commands.registry import CommandContext
+from iterate_harness.iterate import git_scope, prompts, review
+from iterate_harness.iterate.config_loader import default_config
+from iterate_harness.iterate.types import IterateConfig
+from iterate_harness.tools.base import ToolExecutionContext
+from iterate_harness.tools.iterate_tools import IterateReviewInput, IterateReviewTool
 
 
 def make_command_context(cwd: Path) -> CommandContext:

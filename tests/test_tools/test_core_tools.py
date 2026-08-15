@@ -7,27 +7,27 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tools.bash_tool import BashTool, BashToolInput
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.brief_tool import BriefTool, BriefToolInput
-from openharness.tools.cron_create_tool import CronCreateTool, CronCreateToolInput
-from openharness.tools.cron_delete_tool import CronDeleteTool, CronDeleteToolInput
-from openharness.tools.cron_list_tool import CronListTool, CronListToolInput
-from openharness.tools.config_tool import ConfigTool, ConfigToolInput
-from openharness.tools.enter_worktree_tool import EnterWorktreeTool, EnterWorktreeToolInput
-from openharness.tools.exit_worktree_tool import ExitWorktreeTool, ExitWorktreeToolInput
-from openharness.tools.file_edit_tool import FileEditTool, FileEditToolInput
-from openharness.tools.file_read_tool import FileReadTool, FileReadToolInput
-from openharness.tools.file_write_tool import FileWriteTool, FileWriteToolInput
-from openharness.tools.glob_tool import GlobTool, GlobToolInput
-from openharness.tools.grep_tool import GrepTool, GrepToolInput
-from openharness.tools.lsp_tool import LspTool, LspToolInput
-from openharness.tools.notebook_edit_tool import NotebookEditTool, NotebookEditToolInput
-from openharness.tools.remote_trigger_tool import RemoteTriggerTool, RemoteTriggerToolInput
-from openharness.tools.skill_tool import SkillTool, SkillToolInput
-from openharness.tools.todo_write_tool import TodoWriteTool, TodoWriteToolInput
-from openharness.tools.tool_search_tool import ToolSearchTool, ToolSearchToolInput
-from openharness.tools import create_default_tool_registry
+from iterate_harness.tools.bash_tool import BashTool, BashToolInput
+from iterate_harness.tools.base import ToolExecutionContext
+from iterate_harness.tools.brief_tool import BriefTool, BriefToolInput
+from iterate_harness.tools.cron_create_tool import CronCreateTool, CronCreateToolInput
+from iterate_harness.tools.cron_delete_tool import CronDeleteTool, CronDeleteToolInput
+from iterate_harness.tools.cron_list_tool import CronListTool, CronListToolInput
+from iterate_harness.tools.config_tool import ConfigTool, ConfigToolInput
+from iterate_harness.tools.enter_worktree_tool import EnterWorktreeTool, EnterWorktreeToolInput
+from iterate_harness.tools.exit_worktree_tool import ExitWorktreeTool, ExitWorktreeToolInput
+from iterate_harness.tools.file_edit_tool import FileEditTool, FileEditToolInput
+from iterate_harness.tools.file_read_tool import FileReadTool, FileReadToolInput
+from iterate_harness.tools.file_write_tool import FileWriteTool, FileWriteToolInput
+from iterate_harness.tools.glob_tool import GlobTool, GlobToolInput
+from iterate_harness.tools.grep_tool import GrepTool, GrepToolInput
+from iterate_harness.tools.lsp_tool import LspTool, LspToolInput
+from iterate_harness.tools.notebook_edit_tool import NotebookEditTool, NotebookEditToolInput
+from iterate_harness.tools.remote_trigger_tool import RemoteTriggerTool, RemoteTriggerToolInput
+from iterate_harness.tools.skill_tool import SkillTool, SkillToolInput
+from iterate_harness.tools.todo_write_tool import TodoWriteTool, TodoWriteToolInput
+from iterate_harness.tools.tool_search_tool import ToolSearchTool, ToolSearchToolInput
+from iterate_harness.tools import create_default_tool_registry
 
 
 @pytest.mark.asyncio
@@ -84,7 +84,7 @@ async def test_glob_and_grep(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_glob_tool_accepts_absolute_patterns(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("openharness.tools.glob_tool.shutil.which", lambda _: None)
+    monkeypatch.setattr("iterate_harness.tools.glob_tool.shutil.which", lambda _: None)
     context = ToolExecutionContext(cwd=tmp_path.parent)
     nested = tmp_path / "pkg"
     nested.mkdir()
@@ -259,14 +259,14 @@ async def test_lsp_tool(tmp_path: Path):
 async def test_worktree_tools(tmp_path: Path):
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(
-        ["git", "config", "user.email", "openharness@example.com"],
+        ["git", "config", "user.email", "iterate_harness@example.com"],
         cwd=tmp_path,
         check=True,
         capture_output=True,
         text=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "OpenHarness Tests"],
+        ["git", "config", "user.name", "IterateHarness Tests"],
         cwd=tmp_path,
         check=True,
         capture_output=True,

@@ -1,14 +1,14 @@
 """Tests for 0.5.0 features: trend library, last-run resume, pause select menu.
 
 Covers:
-- :mod:`openharness.iterate.trend_store` — fingerprint stability, the
+- :mod:`iterate_harness.iterate.trend_store` — fingerprint stability, the
   new/fixed/regressed/stubborn lifecycle, corrupt-library reset, summary
   rendering;
-- :mod:`openharness.iterate.last_state` — resume summary extraction from
+- :mod:`iterate_harness.iterate.last_state` — resume summary extraction from
   the decision log (severity buckets, preview, last intervention);
 - ``/iterate resume`` and ``/iterate trend`` slash commands;
 - the directional-key pause menu channel in
-  :func:`openharness.engine.query._handle_iterate_pause`.
+  :func:`iterate_harness.engine.query._handle_iterate_pause`.
 """
 
 from __future__ import annotations
@@ -17,18 +17,18 @@ from pathlib import Path
 
 import pytest
 
-from openharness.commands.iterate import iterate_command_handler
-from openharness.commands.registry import CommandContext
-from openharness.config.settings import PermissionSettings
-from openharness.engine.query import (
+from iterate_harness.commands.iterate import iterate_command_handler
+from iterate_harness.commands.registry import CommandContext
+from iterate_harness.config.settings import PermissionSettings
+from iterate_harness.engine.query import (
     QueryContext,
     _handle_iterate_pause,
 )
-from openharness.iterate import trend_store
-from openharness.iterate.decision_log import append_entry, make_entry, read_entries
-from openharness.iterate.last_state import summarize_last_run
-from openharness.permissions import PermissionChecker
-from openharness.tools import ToolRegistry
+from iterate_harness.iterate import trend_store
+from iterate_harness.iterate.decision_log import append_entry, make_entry, read_entries
+from iterate_harness.iterate.last_state import summarize_last_run
+from iterate_harness.permissions import PermissionChecker
+from iterate_harness.tools import ToolRegistry
 
 
 def make_context(cwd: Path) -> CommandContext:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from openharness.swarm.mailbox import (
+from iterate_harness.swarm.mailbox import (
     MailboxMessage,
     TeammateMailbox,
     create_idle_notification,

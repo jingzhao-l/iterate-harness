@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.iterate_tools import (
+from iterate_harness.tools.base import ToolExecutionContext
+from iterate_harness.tools.iterate_tools import (
     IterateConfigTool,
     IterateContextTool,
     IterateDecisionLogTool,
@@ -16,7 +16,7 @@ from openharness.tools.iterate_tools import (
     IterateTriageTool,
     IterateValidateTool,
 )
-from openharness.tools.iterate_tools import IterateValidateInput as IterateValidateInputModel
+from iterate_harness.tools.iterate_tools import IterateValidateInput as IterateValidateInputModel
 
 FINDING = {
     "dimension": "security",
@@ -65,7 +65,7 @@ class TestIterateConfigTool:
             IterateConfigTool(), None, make_context(tmp_path)  # type: ignore[arg-type]
         )
         assert result.is_error is False
-        from openharness.tools.iterate_tools import IterateConfigInput
+        from iterate_harness.tools.iterate_tools import IterateConfigInput
 
         result = await run_tool(
             IterateConfigTool(), IterateConfigInput(operation="validate"), make_context(tmp_path)
@@ -107,7 +107,7 @@ class TestIterateValidateTool:
 
 class TestIterateReviewTool:
     async def test_plan_lists_dimensions_and_schema(self, tmp_path):
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         write_config(tmp_path, "dimensions:\n  - security\n")
         result = await run_tool(
@@ -123,8 +123,8 @@ class TestIterateReviewTool:
         assert plan["dimensions"][0]["findingsSchema"]["type"] == "object"
 
     async def test_aggregate_dedupes_and_publishes_state(self, tmp_path):
-        from openharness.iterate.loop_policy import ITERATE_STATE_KEY
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         context = make_context(tmp_path)
         rounds = [
@@ -146,7 +146,7 @@ class TestIterateReviewTool:
         assert context.metadata[ITERATE_STATE_KEY]["total_findings"] == 1
 
     async def test_aggregate_rejects_malformed_findings(self, tmp_path):
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         bad_rounds = [{"round": 1, "findings": [{"dimension": "x"}]}]
         result = await run_tool(
@@ -159,7 +159,7 @@ class TestIterateReviewTool:
         assert "missing required fields" in payload["error"]
 
     async def test_meta_review_audits_report(self, tmp_path):
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         report_dict = {
             "mode": "dry-run",
@@ -183,7 +183,7 @@ class TestIterateReviewTool:
         assert final["summary"]["totalFindings"] == 1
 
     async def test_meta_review_flags_corrupted_report(self, tmp_path):
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         report_dict = {
             "mode": "dry-run",
@@ -206,8 +206,8 @@ class TestIterateReviewTool:
 
     async def test_aggregate_audits_dimension_usage_against_budgets(self, tmp_path):
         """v1.1: aggregate with dimension_usage emits budgetAudit + exhausted state."""
-        from openharness.iterate.loop_policy import ITERATE_STATE_KEY
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         write_config(
             tmp_path,
@@ -236,8 +236,8 @@ class TestIterateReviewTool:
         assert state["all_dimensions_exhausted"] is False
 
     async def test_aggregate_without_budgets_omits_audit(self, tmp_path):
-        from openharness.iterate.loop_policy import ITERATE_STATE_KEY
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         context = make_context(tmp_path)
         rounds = [{"round": 1, "findings": [FINDING]}]
@@ -254,8 +254,8 @@ class TestIterateReviewTool:
 
     async def test_aggregate_sanitizes_dimension_usage(self, tmp_path):
         """v1.2-c: negative usage entries are clamped to zero in published state."""
-        from openharness.iterate.loop_policy import ITERATE_STATE_KEY
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         context = make_context(tmp_path)
         rounds = [{"round": 1, "findings": [FINDING]}]
@@ -274,7 +274,7 @@ class TestIterateReviewTool:
 
     async def test_meta_review_emits_threshold_gate_when_configured(self, tmp_path):
         """v1.1: meta-review folds project thresholds into the final verdict."""
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         write_config(
             tmp_path,
@@ -304,7 +304,7 @@ class TestIterateReviewTool:
         assert any(i["code"] == "THRESHOLD_EXCEEDED" for i in final["metaReview"]["issues"])
 
     async def test_meta_review_without_thresholds_omits_gate(self, tmp_path):
-        from openharness.tools.iterate_tools import IterateReviewInput
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
 
         report_dict = {
             "mode": "dry-run",
@@ -327,7 +327,7 @@ class TestIterateReviewTool:
 
 class TestIterateDecisionLogTool:
     async def test_append_and_read_roundtrip(self, tmp_path):
-        from openharness.tools.iterate_tools import IterateDecisionLogInput
+        from iterate_harness.tools.iterate_tools import IterateDecisionLogInput
 
         context = make_context(tmp_path)
         result = await run_tool(
@@ -347,7 +347,7 @@ class TestIterateDecisionLogTool:
         assert payload["entries"][0]["type"] == "round_start"
 
     async def test_append_rejects_bad_type_and_missing_round(self, tmp_path):
-        from openharness.tools.iterate_tools import IterateDecisionLogInput
+        from iterate_harness.tools.iterate_tools import IterateDecisionLogInput
 
         context = make_context(tmp_path)
         result = await run_tool(
@@ -370,7 +370,7 @@ class TestIterateContextTool:
         monkeypatch.setenv("HOME", str(tmp_path))  # isolate personalization store
         (tmp_path / "SKILL.md").write_text("# skill docs")
         (tmp_path / "ITERATE.md").write_text("# project knowledge")
-        from openharness.iterate.personalization import PersonalizationData, save
+        from iterate_harness.iterate.personalization import PersonalizationData, save
 
         save(None, tmp_path, PersonalizationData(review_focus_areas=["security"]))
         result = await run_tool(IterateContextTool(), None, make_context(tmp_path))  # type: ignore[arg-type]
@@ -421,7 +421,7 @@ TRIAGE_FINDINGS = [
 
 
 def make_triage_input(**overrides):
-    from openharness.tools.iterate_tools import IterateTriageInput
+    from iterate_harness.tools.iterate_tools import IterateTriageInput
 
     payload = {"findings": TRIAGE_FINDINGS, "round": 2}
     payload.update(overrides)
@@ -449,14 +449,14 @@ class TestIterateTriageTool:
         )
         payload = json.loads(result.output)
         assert payload["persistedKnownIntentional"] == 3
-        from openharness.iterate import personalization
+        from iterate_harness.iterate import personalization
 
         known = personalization.known_intentional_of(None, tmp_path)
         assert len(known) == 3
         assert all(k.reason == "legacy API contract" for k in known)
         assert known[0].file == "src/auth.py" and known[0].dimension == "security"
         # Decision log got one triage decision entry on round 2.
-        from openharness.iterate import decision_log
+        from iterate_harness.iterate import decision_log
 
         entries = decision_log.read_entries(tmp_path)
         triage_entries = [e for e in entries if e.type == "decision" and (e.data or {}).get("kind") == "triage"]
@@ -516,8 +516,8 @@ class TestIterateTriageTool:
             make_triage_input(default="ignore", note="intentional"),
             make_context(tmp_path),
         )
-        from openharness.iterate import personalization, review
-        from openharness.iterate.types import ReviewFinding
+        from iterate_harness.iterate import personalization, review
+        from iterate_harness.iterate.types import ReviewFinding
 
         findings = [
             ReviewFinding(
@@ -535,7 +535,7 @@ class TestIterateTriageTool:
         assert review.filter_known_intentional(findings, known) == []
 
     async def test_too_many_findings_rejected(self, tmp_path):
-        from openharness.tools.iterate_tools import IterateTriageInput
+        from iterate_harness.tools.iterate_tools import IterateTriageInput
 
         findings = [
             {"file": "a.py", "dimension": "d", "summary": "s", "line": i}

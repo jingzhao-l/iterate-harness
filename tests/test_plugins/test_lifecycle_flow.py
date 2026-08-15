@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from openharness.config.settings import Settings, load_settings
-from openharness.mcp.client import McpClientManager
-from openharness.mcp.config import load_mcp_server_configs
-from openharness.plugins import load_plugins
-from openharness.plugins.installer import install_plugin_from_path, uninstall_plugin
-from openharness.tools import create_default_tool_registry
-from openharness.tools.base import ToolExecutionContext
+from iterate_harness.config.settings import Settings, load_settings
+from iterate_harness.mcp.client import McpClientManager
+from iterate_harness.mcp.config import load_mcp_server_configs
+from iterate_harness.plugins import load_plugins
+from iterate_harness.plugins.installer import install_plugin_from_path, uninstall_plugin
+from iterate_harness.tools import create_default_tool_registry
+from iterate_harness.tools.base import ToolExecutionContext
 
 
 def _write_plugin(source_root: Path, server_script: Path) -> Path:

@@ -1,5 +1,5 @@
 {
-  "name": "@openharness/terminal",
+  "name": "@iterate_harness/terminal",
   "private": true,
   "type": "module",
   "scripts": {

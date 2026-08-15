@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openharness.config.settings import (
+from iterate_harness.config.settings import (
     DockerSandboxSettings,
     SandboxNetworkSettings,
     SandboxSettings,
     Settings,
 )
-from openharness.sandbox.docker_backend import (
+from iterate_harness.sandbox.docker_backend import (
     DockerSandboxSession,
     get_docker_availability,
 )
@@ -40,8 +40,8 @@ def test_docker_availability_disabled_when_sandbox_off():
 
 def test_docker_availability_when_not_installed(monkeypatch):
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
-    monkeypatch.setattr("openharness.sandbox.docker_backend.get_platform", lambda: "linux")
-    monkeypatch.setattr("openharness.sandbox.docker_backend.shutil.which", lambda name: None)
+    monkeypatch.setattr("iterate_harness.sandbox.docker_backend.get_platform", lambda: "linux")
+    monkeypatch.setattr("iterate_harness.sandbox.docker_backend.shutil.which", lambda name: None)
 
     result = get_docker_availability(settings)
     assert result.available is False
@@ -50,16 +50,16 @@ def test_docker_availability_when_not_installed(monkeypatch):
 
 def test_docker_availability_when_daemon_not_running(monkeypatch):
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
-    monkeypatch.setattr("openharness.sandbox.docker_backend.get_platform", lambda: "linux")
+    monkeypatch.setattr("iterate_harness.sandbox.docker_backend.get_platform", lambda: "linux")
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
 
     import subprocess
 
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.subprocess.run",
+        "iterate_harness.sandbox.docker_backend.subprocess.run",
         MagicMock(side_effect=subprocess.CalledProcessError(1, "docker info")),
     )
 
@@ -70,7 +70,7 @@ def test_docker_availability_when_daemon_not_running(monkeypatch):
 
 def test_docker_availability_when_platform_unsupported(monkeypatch):
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
-    monkeypatch.setattr("openharness.sandbox.docker_backend.get_platform", lambda: "windows")
+    monkeypatch.setattr("iterate_harness.sandbox.docker_backend.get_platform", lambda: "windows")
 
     result = get_docker_availability(settings)
     assert result.available is False
@@ -79,13 +79,13 @@ def test_docker_availability_when_platform_unsupported(monkeypatch):
 
 def test_docker_availability_when_all_ok(monkeypatch):
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
-    monkeypatch.setattr("openharness.sandbox.docker_backend.get_platform", lambda: "linux")
+    monkeypatch.setattr("iterate_harness.sandbox.docker_backend.get_platform", lambda: "linux")
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.subprocess.run",
+        "iterate_harness.sandbox.docker_backend.subprocess.run",
         MagicMock(return_value=MagicMock(returncode=0)),
     )
 
@@ -101,7 +101,7 @@ def test_docker_availability_when_all_ok(monkeypatch):
 
 def test_container_start_builds_correct_docker_args(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
@@ -114,7 +114,7 @@ def test_container_start_builds_correct_docker_args(monkeypatch):
     assert "--rm" in argv
     assert "--name" in argv
     name_idx = argv.index("--name")
-    assert argv[name_idx + 1] == "openharness-sandbox-abc123"
+    assert argv[name_idx + 1] == "iterate_harness-sandbox-abc123"
     assert "tail" in argv
     assert "-f" in argv
     assert "/dev/null" in argv
@@ -122,7 +122,7 @@ def test_container_start_builds_correct_docker_args(monkeypatch):
 
 def test_network_none_by_default(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
@@ -136,7 +136,7 @@ def test_network_none_by_default(monkeypatch):
 
 def test_network_none_and_warning_when_domain_policy_is_configured(monkeypatch, caplog):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     settings = Settings(
@@ -160,7 +160,7 @@ def test_network_none_and_warning_when_domain_policy_is_configured(monkeypatch, 
 
 def test_resource_limits_applied(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     settings = Settings(
@@ -182,7 +182,7 @@ def test_resource_limits_applied(monkeypatch):
 
 def test_resource_limits_omitted_when_zero(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
@@ -196,7 +196,7 @@ def test_resource_limits_omitted_when_zero(monkeypatch):
 
 def test_bind_mount_uses_same_path(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
@@ -216,7 +216,7 @@ def test_bind_mount_uses_same_path(monkeypatch):
 
 async def test_exec_command_delegates_to_docker_exec(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
@@ -242,20 +242,20 @@ async def test_exec_command_delegates_to_docker_exec(monkeypatch):
 
     assert captured_args[0] == "/usr/bin/docker"
     assert captured_args[1] == "exec"
-    assert "openharness-sandbox-abc" in captured_args
+    assert "iterate_harness-sandbox-abc" in captured_args
     assert "bash" in captured_args
 
 
 async def test_exec_command_raises_when_not_running(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
     session = DockerSandboxSession(settings=settings, session_id="abc", cwd=Path("/repo"))
     # _running is False by default
 
-    from openharness.sandbox.adapter import SandboxUnavailableError
+    from iterate_harness.sandbox.adapter import SandboxUnavailableError
 
     with pytest.raises(SandboxUnavailableError):
         await session.exec_command(["echo", "hi"], cwd="/repo")
@@ -268,7 +268,7 @@ async def test_exec_command_raises_when_not_running(monkeypatch):
 
 async def test_stop_calls_docker_stop(monkeypatch):
     monkeypatch.setattr(
-        "openharness.sandbox.docker_backend.shutil.which",
+        "iterate_harness.sandbox.docker_backend.shutil.which",
         lambda name: "/usr/bin/docker",
     )
     settings = Settings(sandbox=SandboxSettings(enabled=True, backend="docker"))
@@ -289,5 +289,5 @@ async def test_stop_calls_docker_stop(monkeypatch):
     await session.stop()
 
     assert "stop" in captured
-    assert "openharness-sandbox-abc" in captured
+    assert "iterate_harness-sandbox-abc" in captured
     assert session.is_running is False

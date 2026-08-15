@@ -7,19 +7,19 @@ from pathlib import Path
 
 import pytest
 
-import openharness.commands.registry as registry_module
-from openharness.commands.registry import CommandContext, create_default_command_registry, lookup_skill_slash_command
-from openharness.autopilot import RepoVerificationStep
-from openharness.config.paths import get_feedback_log_path, get_project_issue_file, get_project_pr_comments_file
-from openharness.config.settings import load_settings, save_settings, Settings
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.engine.query_engine import QueryEngine
-from openharness.mcp.types import McpHttpServerConfig, McpStdioServerConfig
-from openharness.permissions import PermissionChecker
-from openharness.plugins.types import PluginCommandDefinition
-from openharness.state import AppState, AppStateStore
-from openharness.tasks import get_task_manager
-from openharness.tools import create_default_tool_registry
+import iterate_harness.commands.registry as registry_module
+from iterate_harness.commands.registry import CommandContext, create_default_command_registry, lookup_skill_slash_command
+from iterate_harness.autopilot import RepoVerificationStep
+from iterate_harness.config.paths import get_feedback_log_path, get_project_issue_file, get_project_pr_comments_file
+from iterate_harness.config.settings import load_settings, save_settings, Settings
+from iterate_harness.engine.messages import ConversationMessage, TextBlock
+from iterate_harness.engine.query_engine import QueryEngine
+from iterate_harness.mcp.types import McpHttpServerConfig, McpStdioServerConfig
+from iterate_harness.permissions import PermissionChecker
+from iterate_harness.plugins.types import PluginCommandDefinition
+from iterate_harness.state import AppState, AppStateStore
+from iterate_harness.tasks import get_task_manager
+from iterate_harness.tools import create_default_tool_registry
 
 
 class FakeApiClient:
@@ -592,11 +592,11 @@ async def test_ship_command_queues_and_executes_card(tmp_path: Path, monkeypatch
         return [RepoVerificationStep(command="uv run pytest -q", returncode=0, status="success")]
 
     monkeypatch.setattr(
-        "openharness.autopilot.service.RepoAutopilotStore._run_agent_prompt",
+        "iterate_harness.autopilot.service.RepoAutopilotStore._run_agent_prompt",
         fake_run_agent_prompt,
     )
     monkeypatch.setattr(
-        "openharness.autopilot.service.RepoAutopilotStore._run_verification_steps",
+        "iterate_harness.autopilot.service.RepoAutopilotStore._run_verification_steps",
         fake_run_verification_steps,
     )
 
@@ -895,11 +895,11 @@ async def test_version_context_and_share_commands(tmp_path: Path, monkeypatch):
 
     version_command, version_args = registry.lookup("/version")
     version_result = await version_command.handler(version_args, context)
-    assert "OpenHarness" in version_result.message
+    assert "IterateHarness" in version_result.message
 
     context_command, context_args = registry.lookup("/context")
     context_result = await context_command.handler(context_args, context)
-    assert "OpenHarness" in context_result.message or "interactive agent" in context_result.message
+    assert "IterateHarness" in context_result.message or "interactive agent" in context_result.message
 
     share_command, share_args = registry.lookup("/share")
     share_result = await share_command.handler(share_args, context)
@@ -1038,7 +1038,7 @@ async def test_init_and_bridge_commands(tmp_path: Path, monkeypatch):
     init_result = await init_command.handler(init_args, context)
     assert "Initialized project files" in init_result.message or "already initialized" in init_result.message
     assert (tmp_path / "CLAUDE.md").exists()
-    assert (tmp_path / ".openharness" / "memory" / "MEMORY.md").exists()
+    assert (tmp_path / ".iterate-harness" / "memory" / "MEMORY.md").exists()
 
     bridge_show_command, bridge_show_args = registry.lookup("/bridge show")
     bridge_show_result = await bridge_show_command.handler(bridge_show_args, context)
@@ -1160,14 +1160,14 @@ async def test_git_commands_report_repository_state(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(
-        ["git", "config", "user.email", "openharness@example.com"],
+        ["git", "config", "user.email", "iterate_harness@example.com"],
         cwd=tmp_path,
         check=True,
         capture_output=True,
         text=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "OpenHarness Tests"],
+        ["git", "config", "user.name", "IterateHarness Tests"],
         cwd=tmp_path,
         check=True,
         capture_output=True,

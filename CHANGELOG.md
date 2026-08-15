@@ -6,6 +6,25 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-15
+
+Identity migration: the fork now runs under its own name end to end — `openharness` (package/CLI/paths) → `iterate-harness` / `ih`.
+
+### Changed
+
+- **Python package renamed** `openharness` → `iterate_harness` (`src/openharness/` → `src/iterate_harness/`, all 1.8k+ imports and module-path strings across 271 files migrated). Class identifiers and user-visible strings followed (`OpenHarnessSessionBackend` → `IterateHarnessSessionBackend`, banners/messages now brand iterate-harness).
+- **CLI entry points replaced**: `oh` / `openh` / `openharness` launchers removed; the package now installs `ih` (short) and `iterate-harness` (full) — `ih iterate review`, `ih iterate report --pr`, … `python -m iterate_harness` works too. All in-repo docs, install scripts (`install.sh` / `install.ps1` / `install_dev.sh`), the managed pre-commit hook (`shutil.which("ih")`), and bundled skill content now reference `ih`.
+- **Data directories migrated** `~/.openharness/` → `~/.iterate-harness/` (sessions, settings, themes, plugins, worktrees, teams, copilot auth) and project-level `.openharness/` → `.iterate-harness/`. venv exclude paths and hatch wheel/force-include mappings updated to the new package layout. Existing local data under the old name is not migrated automatically — move it by hand if you have state worth keeping.
+- Frontend workspace package renamed `@openharness/terminal` → `@iterate-harness/terminal` (package.json + lockfile).
+- README (en + zh-CN) CLI cheat-sheet and feature tables now use `ih`; CONTRIBUTING / SHOWCASE rebranded; historical CHANGELOG / RELEASE_NOTES entries keep the original `oh` wording on purpose (they describe what shipped at the time).
+- `pyproject` description keeps the "fork of OpenHarness" attribution; upstream links in README/CONTRIBUTING are preserved.
+
+### Upgrade Notes
+
+- After `git pull`, re-run the installer (or `uv pip install -e .`) so the new `ih` / `iterate-harness` console scripts are generated; stale `oh` shims from previous installs can be deleted.
+- Managed pre-commit hooks installed by ≤1.3.0 embed the old absolute `oh` path — run `ih iterate hook uninstall && ih iterate hook install` to re-render them.
+- Scheduled quick-review jobs store a `ih iterate review --changed …` command string resolved via PATH at fire time — jobs created by ≤1.3.0 still reference `oh` and must be re-registered (`ih iterate schedule add …`) after upgrading.
+
 ## [1.3.0] - 2026-08-15
 
 CI visibility: PR comment mode, medium/low threshold gates, per-dimension USD estimates.

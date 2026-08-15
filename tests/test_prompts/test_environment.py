@@ -1,11 +1,11 @@
-"""Tests for openharness.prompts.environment."""
+"""Tests for iterate_harness.prompts.environment."""
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
 
-from openharness.prompts.environment import (
+from iterate_harness.prompts.environment import (
     EnvironmentInfo,
     detect_git_info,
     detect_os,
@@ -67,7 +67,7 @@ def test_detect_git_info_uses_devnull_for_git_subprocess(monkeypatch):
             return _Completed(0, "true\n")
         return _Completed(0, "main\n")
 
-    monkeypatch.setattr("openharness.prompts.environment.subprocess.run", _fake_run)
+    monkeypatch.setattr("iterate_harness.prompts.environment.subprocess.run", _fake_run)
 
     is_git, branch = detect_git_info("/tmp/project")
 
@@ -90,7 +90,7 @@ def test_get_environment_info_returns_dataclass():
 
 
 def test_get_environment_info_detects_virtual_env_from_python_executable(monkeypatch, tmp_path: Path):
-    venv_root = tmp_path / ".openharness-venv"
+    venv_root = tmp_path / ".iterate-harness-venv"
     bin_dir = venv_root / "bin"
     bin_dir.mkdir(parents=True)
     (venv_root / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
@@ -98,7 +98,7 @@ def test_get_environment_info_detects_virtual_env_from_python_executable(monkeyp
     fake_python.write_text("", encoding="utf-8")
 
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
-    monkeypatch.setattr("openharness.prompts.environment.sys.executable", str(fake_python))
+    monkeypatch.setattr("iterate_harness.prompts.environment.sys.executable", str(fake_python))
 
     info = get_environment_info(cwd=str(tmp_path))
 

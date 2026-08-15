@@ -204,7 +204,7 @@ if ($NodeOk) {
 # ---------------------------------------------------------------------------
 Write-Step "Setting up iterate-harness config directory"
 
-$ConfigDir = "$env:USERPROFILE\.openharness"
+$ConfigDir = "$env:USERPROFILE\.iterate-harness"
 $SkillsDir = "$ConfigDir\skills"
 $PluginsDir = "$ConfigDir\plugins"
 
@@ -212,7 +212,7 @@ New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
 New-Item -ItemType Directory -Force -Path $SkillsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $PluginsDir | Out-Null
 
-Write-Success "Config directory ready: ~/.openharness/"
+Write-Success "Config directory ready: ~/.iterate-harness/"
 
 # ---------------------------------------------------------------------------
 # Step 7: Add to PATH (Windows environment variable)
@@ -237,19 +237,19 @@ if ($CurrentPath -like "*$VenvBinDir*") {
 # ---------------------------------------------------------------------------
 Write-Step "Verifying installation"
 
-$OhPath = "$VenvBinDir\oh.exe"
+$OhPath = "$VenvBinDir\ih.exe"
 $IterateHarnessPath = "$VenvBinDir\iterate-harness.exe"
 
 # Prefer the dedicated 'iterate-harness' launcher (no PowerShell alias
-# collisions); fall back to 'oh' (which collides with PowerShell's
-# Out-Host alias unless invoked as oh.exe).
+# collisions); fall back to 'ih' (which collides with PowerShell's
+# Out-Host alias unless invoked as ih.exe).
 $Launcher = $null
 $LauncherExe = $null
 if (Test-Path $IterateHarnessPath) {
     $Launcher = "iterate-harness"
     $LauncherExe = $IterateHarnessPath
 } elseif (Test-Path $OhPath) {
-    $Launcher = "oh"
+    $Launcher = "ih"
     $LauncherExe = $OhPath
 }
 
@@ -258,19 +258,19 @@ if ($LauncherExe) {
     Write-Success "Installation successful!"
     Write-Host ""
     Write-Host "  $Launcher is ready: $OhVersion" -ForegroundColor Green
-    if ($Launcher -eq "oh") {
-        Write-Host "  Note: 'oh' collides with PowerShell's built-in Out-Host alias." -ForegroundColor Yellow
-        Write-Host "        Invoke it as 'oh.exe', or use 'iterate-harness' instead." -ForegroundColor Yellow
+    if ($Launcher -eq "ih") {
+        Write-Host "  Note: 'ih' collides with PowerShell's built-in Out-Host alias." -ForegroundColor Yellow
+        Write-Host "        Invoke it as 'ih.exe', or use 'iterate-harness' instead." -ForegroundColor Yellow
     }
 } else {
     # Try module execution
-    $ModuleVersion = python -m openharness --version 2>&1
+    $ModuleVersion = python -m iterate_harness --version 2>&1
     if ($ModuleVersion) {
-        Write-Warn "Launcher commands not yet available on PATH. Run via: python -m openharness"
+        Write-Warn "Launcher commands not yet available on PATH. Run via: python -m iterate_harness"
         Write-Host "  Version: $ModuleVersion"
     } else {
         Write-Warn "Could not verify launcher commands. The package may need a PATH update."
-        Write-Host "  Try: python -m openharness --version"
+        Write-Host "  Try: python -m iterate_harness --version"
     }
 }
 
@@ -287,8 +287,8 @@ Write-Host "    2. Set your API key:        `$env:ANTHROPIC_API_KEY = 'your_key'
 if ($Launcher -eq "iterate-harness") {
     Write-Host "    3. Launch (PowerShell):     iterate-harness"
 } else {
-    Write-Host "    3. Launch (PowerShell):     oh.exe"
-    Write-Host "       ('oh' alone collides with PowerShell's Out-Host alias — use 'oh.exe' or 'iterate-harness'.)"
+    Write-Host "    3. Launch (PowerShell):     ih.exe"
+    Write-Host "       ('ih' alone collides with PowerShell's Out-Host alias — use 'ih.exe' or 'iterate-harness'.)"
 }
 Write-Host "    4. First run in a project:  /iterate review   (dry-run review)"
 Write-Host "       or headless:             iterate-harness iterate init"

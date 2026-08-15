@@ -1,10 +1,10 @@
-"""Tests for openharness.iterate.decision_log (port of the decision-log tool core)."""
+"""Tests for iterate_harness.iterate.decision_log (port of the decision-log tool core)."""
 
 from __future__ import annotations
 
 import json
 
-from openharness.iterate.decision_log import (
+from iterate_harness.iterate.decision_log import (
     LOG_DIR,
     LOG_FILE,
     append_entry,
@@ -12,7 +12,7 @@ from openharness.iterate.decision_log import (
     make_entry,
     read_entries,
 )
-from openharness.iterate.types import DecisionLogEntry
+from iterate_harness.iterate.types import DecisionLogEntry
 
 
 def entry(**kwargs: object) -> DecisionLogEntry:
@@ -95,7 +95,7 @@ class TestMakeEntry:
         assert made.timestamp.endswith("+00:00")  # UTC
 
     def test_entry_types_cover_skill_vocabulary(self):
-        from openharness.iterate.decision_log import VALID_ENTRY_TYPES
+        from iterate_harness.iterate.decision_log import VALID_ENTRY_TYPES
 
         assert VALID_ENTRY_TYPES == {
             "round_start", "review_result", "atomic_fix", "architectural_fix",

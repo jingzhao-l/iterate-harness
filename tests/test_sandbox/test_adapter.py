@@ -10,14 +10,14 @@ from pathlib import Path
 
 import pytest
 
-from openharness.config.settings import SandboxSettings, Settings
-from openharness.sandbox.adapter import (
+from iterate_harness.config.settings import SandboxSettings, Settings
+from iterate_harness.sandbox.adapter import (
     SandboxUnavailableError,
     build_sandbox_runtime_config,
     get_sandbox_availability,
     wrap_command_for_sandbox,
 )
-from openharness.utils.shell import create_shell_subprocess
+from iterate_harness.utils.shell import create_shell_subprocess
 
 
 def test_build_sandbox_runtime_config_maps_settings():
@@ -39,7 +39,7 @@ def test_build_sandbox_runtime_config_maps_settings():
 
 def test_sandbox_availability_reports_native_windows_unsupported(monkeypatch):
     settings = Settings(sandbox=SandboxSettings(enabled=True))
-    monkeypatch.setattr("openharness.sandbox.adapter.get_platform", lambda: "windows")
+    monkeypatch.setattr("iterate_harness.sandbox.adapter.get_platform", lambda: "windows")
 
     availability = get_sandbox_availability(settings)
 
@@ -80,8 +80,8 @@ def test_wrap_command_for_sandbox_writes_settings_file(monkeypatch):
         }
         return mapping.get(name)
 
-    monkeypatch.setattr("openharness.sandbox.adapter.get_platform", lambda: "linux")
-    monkeypatch.setattr("openharness.sandbox.adapter.shutil.which", fake_which)
+    monkeypatch.setattr("iterate_harness.sandbox.adapter.get_platform", lambda: "linux")
+    monkeypatch.setattr("iterate_harness.sandbox.adapter.shutil.which", fake_which)
 
     command, settings_path = wrap_command_for_sandbox(["bash", "-lc", "echo hi"], settings=settings)
 
@@ -95,8 +95,8 @@ def test_wrap_command_for_sandbox_writes_settings_file(monkeypatch):
 
 def test_wrap_command_for_sandbox_raises_when_required(monkeypatch):
     settings = Settings(sandbox=SandboxSettings(enabled=True, fail_if_unavailable=True))
-    monkeypatch.setattr("openharness.sandbox.adapter.get_platform", lambda: "linux")
-    monkeypatch.setattr("openharness.sandbox.adapter.shutil.which", lambda name: None)
+    monkeypatch.setattr("iterate_harness.sandbox.adapter.get_platform", lambda: "linux")
+    monkeypatch.setattr("iterate_harness.sandbox.adapter.shutil.which", lambda name: None)
 
     with pytest.raises(SandboxUnavailableError):
         wrap_command_for_sandbox(["bash", "-lc", "echo hi"], settings=settings)
@@ -104,12 +104,12 @@ def test_wrap_command_for_sandbox_raises_when_required(monkeypatch):
 
 @pytest.mark.skipif(shutil.which("srt") is None or shutil.which("bwrap") is None, reason="Needs local sandbox runtime")
 def test_create_shell_subprocess_preserves_exit_code_with_sandbox(monkeypatch):
-    import openharness.config.paths as config_paths
+    import iterate_harness.config.paths as config_paths
 
     async def _run() -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = Path(tmpdir) / "settings.json"
-            from openharness.config.settings import save_settings
+            from iterate_harness.config.settings import save_settings
 
             save_settings(Settings(sandbox=SandboxSettings(enabled=True, fail_if_unavailable=True)), cfg)
             orig = config_paths.get_config_file_path
@@ -117,7 +117,7 @@ def test_create_shell_subprocess_preserves_exit_code_with_sandbox(monkeypatch):
             try:
                 process = await create_shell_subprocess(
                     "exit 7",
-                    cwd=Path("/home/tangjiabin/OpenHarness-new"),
+                    cwd=Path("/home/tangjiabin/IterateHarness-new"),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )

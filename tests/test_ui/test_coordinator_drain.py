@@ -6,13 +6,13 @@ from __future__ import annotations
 
 import pytest
 
-from openharness.ui import coordinator_drain
-from openharness.ui.backend_host import BackendHostConfig, ReactBackendHost
-from openharness.ui.coordinator_drain import (
+from iterate_harness.ui import coordinator_drain
+from iterate_harness.ui.backend_host import BackendHostConfig, ReactBackendHost
+from iterate_harness.ui.coordinator_drain import (
     drain_coordinator_async_agents,
     pending_async_agent_entries,
 )
-from openharness.ui.runtime import build_runtime, close_runtime, start_runtime
+from iterate_harness.ui.runtime import build_runtime, close_runtime, start_runtime
 
 from .test_react_backend import StaticApiClient
 
@@ -101,8 +101,8 @@ async def test_react_backend_drains_async_agents_in_coordinator_mode(tmp_path, m
         del bundle, line, print_system, render_event, clear_output
         return True
 
-    monkeypatch.setattr("openharness.ui.backend_host.handle_line", _fake_handle_line)
-    monkeypatch.setattr("openharness.ui.backend_host.is_coordinator_mode", lambda: True)
+    monkeypatch.setattr("iterate_harness.ui.backend_host.handle_line", _fake_handle_line)
+    monkeypatch.setattr("iterate_harness.ui.backend_host.is_coordinator_mode", lambda: True)
 
     drain_calls: list[dict[str, object]] = []
 
@@ -115,7 +115,7 @@ async def test_react_backend_drains_async_agents_in_coordinator_mode(tmp_path, m
         )
 
     monkeypatch.setattr(
-        "openharness.ui.backend_host.drain_coordinator_async_agents",
+        "iterate_harness.ui.backend_host.drain_coordinator_async_agents",
         _fake_drain,
     )
 
@@ -149,15 +149,15 @@ async def test_react_backend_skips_drain_when_not_coordinator(tmp_path, monkeypa
         del bundle, line, print_system, render_event, clear_output
         return True
 
-    monkeypatch.setattr("openharness.ui.backend_host.handle_line", _fake_handle_line)
-    monkeypatch.setattr("openharness.ui.backend_host.is_coordinator_mode", lambda: False)
+    monkeypatch.setattr("iterate_harness.ui.backend_host.handle_line", _fake_handle_line)
+    monkeypatch.setattr("iterate_harness.ui.backend_host.is_coordinator_mode", lambda: False)
 
     async def _fake_drain(*args, **kwargs):  # pragma: no cover
         del args, kwargs
         raise AssertionError("drain must not be called outside coordinator mode")
 
     monkeypatch.setattr(
-        "openharness.ui.backend_host.drain_coordinator_async_agents",
+        "iterate_harness.ui.backend_host.drain_coordinator_async_agents",
         _fake_drain,
     )
 

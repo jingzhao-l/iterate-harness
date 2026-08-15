@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from openharness.engine.messages import ConversationMessage, ImageBlock, TextBlock
-from openharness.api.client import AnthropicApiClient, OAUTH_BETA_HEADER
+from iterate_harness.engine.messages import ConversationMessage, ImageBlock, TextBlock
+from iterate_harness.api.client import AnthropicApiClient, OAUTH_BETA_HEADER
 
 
 def test_anthropic_client_adds_oauth_beta_header(monkeypatch):
@@ -11,7 +11,7 @@ def test_anthropic_client_adds_oauth_beta_header(monkeypatch):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("openharness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
+    monkeypatch.setattr("iterate_harness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
 
     AnthropicApiClient(auth_token="oauth-token")
 
@@ -26,7 +26,7 @@ def test_anthropic_client_uses_api_key_without_oauth_beta(monkeypatch):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("openharness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
+    monkeypatch.setattr("iterate_harness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
 
     AnthropicApiClient(api_key="api-key")
 
@@ -41,21 +41,21 @@ def test_anthropic_client_adds_claude_oauth_identity_headers(monkeypatch):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("openharness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
+    monkeypatch.setattr("iterate_harness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
     monkeypatch.setattr(
-        "openharness.auth.external.get_claude_code_version",
+        "iterate_harness.auth.external.get_claude_code_version",
         lambda: "2.1.92",
     )
     monkeypatch.setattr(
-        "openharness.auth.external.get_claude_code_session_id",
+        "iterate_harness.auth.external.get_claude_code_session_id",
         lambda: "session-123",
     )
     monkeypatch.setattr(
-        "openharness.api.client.get_claude_code_session_id",
+        "iterate_harness.api.client.get_claude_code_session_id",
         lambda: "session-123",
     )
     monkeypatch.setattr(
-        "openharness.api.client.claude_attribution_header",
+        "iterate_harness.api.client.claude_attribution_header",
         lambda: "x-anthropic-billing-header: cc_version=2.1.92; cc_entrypoint=cli;",
     )
 
@@ -141,17 +141,17 @@ def test_anthropic_client_refreshes_claude_token_on_request(monkeypatch):
             self.beta = _FakeBeta()
             self.messages = _FakeMessages()
 
-    monkeypatch.setattr("openharness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
+    monkeypatch.setattr("iterate_harness.api.client.AsyncAnthropic", _FakeAsyncAnthropic)
     monkeypatch.setattr(
-        "openharness.auth.external.get_claude_code_session_id",
+        "iterate_harness.auth.external.get_claude_code_session_id",
         lambda: "session-123",
     )
     monkeypatch.setattr(
-        "openharness.api.client.get_claude_code_session_id",
+        "iterate_harness.api.client.get_claude_code_session_id",
         lambda: "session-123",
     )
     monkeypatch.setattr(
-        "openharness.api.client.claude_attribution_header",
+        "iterate_harness.api.client.claude_attribution_header",
         lambda: "x-anthropic-billing-header: cc_version=2.1.92; cc_entrypoint=cli;",
     )
 
@@ -164,7 +164,7 @@ def test_anthropic_client_refreshes_claude_token_on_request(monkeypatch):
     )
     current_token["value"] = "refreshed-token"
 
-    from openharness.api.client import ApiMessageRequest
+    from iterate_harness.api.client import ApiMessageRequest
 
     async def _run():
         events = []
@@ -185,7 +185,7 @@ def test_anthropic_client_refreshes_claude_token_on_request(monkeypatch):
     assert captured_tokens == ["initial-token", "refreshed-token"]
     assert events
     assert client._client.beta.messages.last_params["metadata"] == {
-        "user_id": '{"device_id":"openharness","session_id":"session-123","account_uuid":""}'
+        "user_id": '{"device_id":"iterate_harness","session_id":"session-123","account_uuid":""}'
     }
     assert "oauth-2025-04-20" in client._client.beta.messages.last_params["betas"]
     assert client._client.beta.messages.last_params["system"].startswith(

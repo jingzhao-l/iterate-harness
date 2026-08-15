@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from openharness.commands.iterate import iterate_command_handler
-from openharness.commands.registry import CommandContext
-from openharness.iterate import config_loader, review
-from openharness.iterate.types import DimensionResources, IterateConfig
+from iterate_harness.commands.iterate import iterate_command_handler
+from iterate_harness.commands.registry import CommandContext
+from iterate_harness.iterate import config_loader, review
+from iterate_harness.iterate.types import DimensionResources, IterateConfig
 
 
 def make_context(cwd) -> CommandContext:

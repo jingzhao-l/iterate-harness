@@ -7,9 +7,9 @@ from typing import ClassVar
 import pytest
 from typer.testing import CliRunner
 
-from openharness import cli
-from openharness.iterate import ci_report
-from openharness.iterate.decision_log import append_entry, make_entry, read_entries
+from iterate_harness import cli
+from iterate_harness.iterate import ci_report
+from iterate_harness.iterate.decision_log import append_entry, make_entry, read_entries
 
 
 def report_entry(
@@ -258,7 +258,7 @@ class TestThresholdGate:
 
 
 class TestIterateReportCli:
-    """`oh iterate report` CLI end-to-end (decision log → render + exit code)."""
+    """`ih iterate report` CLI end-to-end (decision log → render + exit code)."""
 
     def test_text_render_and_exit_zero_when_below_gate(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -318,8 +318,8 @@ class TestIterateReportSlashCommand:
 
     @staticmethod
     async def _run(args: str, cwd):
-        from openharness.commands.iterate import iterate_command_handler
-        from openharness.commands.registry import CommandContext
+        from iterate_harness.commands.iterate import iterate_command_handler
+        from iterate_harness.commands.registry import CommandContext
 
         return await iterate_command_handler(args, CommandContext(engine=None, cwd=str(cwd)))  # type: ignore[arg-type]
 

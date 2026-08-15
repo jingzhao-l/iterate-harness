@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from openharness.config.settings import Settings
-from openharness.mcp.config import load_mcp_server_configs
-from openharness.plugins.loader import load_plugins
+from iterate_harness.config.settings import Settings
+from iterate_harness.mcp.config import load_mcp_server_configs
+from iterate_harness.plugins.loader import load_plugins
 
 
 def _write_stdio_plugin(plugins_root: Path) -> None:
@@ -34,7 +34,7 @@ def _write_stdio_plugin(plugins_root: Path) -> None:
 def test_project_plugin_mcp_not_loaded_by_default(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".iterate-harness" / "plugins"
     plugins_root.mkdir(parents=True)
     _write_stdio_plugin(plugins_root)
 
@@ -49,7 +49,7 @@ def test_project_plugin_mcp_not_loaded_by_default(tmp_path: Path, monkeypatch) -
 def test_project_plugin_mcp_requires_explicit_opt_in(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".iterate-harness" / "plugins"
     plugins_root.mkdir(parents=True)
     _write_stdio_plugin(plugins_root)
 

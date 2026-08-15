@@ -4,24 +4,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openharness.iterate import prompts
-from openharness.iterate.personalization import (
+from iterate_harness.iterate import prompts
+from iterate_harness.iterate.personalization import (
     PersonalizationData,
     known_intentional_of,
     load,
     save,
 )
-from openharness.iterate.settings import (
+from iterate_harness.iterate.settings import (
     IterateSettings,
     effective_review_rounds,
     project_config,
 )
-from openharness.iterate.types import KnownIntentional
+from iterate_harness.iterate.types import KnownIntentional
 
 
 class TestSettingsBridge:
     def test_defaults_round_trip_through_settings_model(self):
-        from openharness.config.settings import Settings
+        from iterate_harness.config.settings import Settings
 
         settings = Settings()
         assert settings.iterate.enabled is True
@@ -68,7 +68,7 @@ class TestPersonalization:
         assert load(tmp_path, other).project_quirks == "two"
 
     def test_corrupt_file_resets_to_empty(self, tmp_path):
-        from openharness.iterate.personalization import storage_dir
+        from iterate_harness.iterate.personalization import storage_dir
 
         storage_dir(tmp_path, tmp_path)
         (storage_dir(tmp_path, tmp_path) / "personalization.json").write_text("{not json")
@@ -151,9 +151,9 @@ class TestWorktreeFlow:
         import asyncio
 
         repo = self._git_repo(tmp_path)
-        monkeypatch.setenv("HOME", str(tmp_path))  # isolate ~/.openharness worktrees
-        from openharness.iterate import worktree_flow
-        from openharness.swarm.worktree import WorktreeManager
+        monkeypatch.setenv("HOME", str(tmp_path))  # isolate ~/.iterate-harness worktrees
+        from iterate_harness.iterate import worktree_flow
+        from iterate_harness.swarm.worktree import WorktreeManager
 
         manager = WorktreeManager(base_dir=tmp_path / "wts")
 
@@ -177,8 +177,8 @@ class TestWorktreeFlow:
 
         repo = self._git_repo(tmp_path)
         monkeypatch.setenv("HOME", str(tmp_path))
-        from openharness.iterate import worktree_flow
-        from openharness.swarm.worktree import WorktreeManager
+        from iterate_harness.iterate import worktree_flow
+        from iterate_harness.swarm.worktree import WorktreeManager
 
         manager = WorktreeManager(base_dir=tmp_path / "wts")
 
@@ -197,8 +197,8 @@ class TestWorktreeFlow:
 
         repo = self._git_repo(tmp_path)
         monkeypatch.setenv("HOME", str(tmp_path))
-        from openharness.iterate import worktree_flow
-        from openharness.swarm.worktree import WorktreeManager
+        from iterate_harness.iterate import worktree_flow
+        from iterate_harness.swarm.worktree import WorktreeManager
 
         manager = WorktreeManager(base_dir=tmp_path / "wts")
 

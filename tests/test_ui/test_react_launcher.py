@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 from types import SimpleNamespace
 
-from openharness.ui.app import run_print_mode, run_repl, run_task_worker
-from openharness.engine.stream_events import AssistantTurnComplete
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.ui.react_launcher import build_backend_command
+from iterate_harness.ui.app import run_print_mode, run_repl, run_task_worker
+from iterate_harness.engine.stream_events import AssistantTurnComplete
+from iterate_harness.engine.messages import ConversationMessage, TextBlock
+from iterate_harness.ui.react_launcher import build_backend_command
 
 
 class _AsyncIterator:
@@ -27,7 +27,7 @@ def test_build_backend_command_includes_flags():
         system_prompt="system",
         api_key="secret",
     )
-    assert command[:3] == [command[0], "-m", "openharness"]
+    assert command[:3] == [command[0], "-m", "iterate_harness"]
     assert "--backend-only" in command
     assert "--cwd" in command
     assert "--model" in command
@@ -44,7 +44,7 @@ async def test_run_repl_uses_react_launcher_by_default(monkeypatch):
         seen.update(kwargs)
         return 0
 
-    monkeypatch.setattr("openharness.ui.app.launch_react_tui", _launch)
+    monkeypatch.setattr("iterate_harness.ui.app.launch_react_tui", _launch)
     await run_repl(prompt="hi", cwd="/tmp/demo", model="kimi-k2.5")
 
     assert seen["prompt"] == "hi"
@@ -74,10 +74,10 @@ async def test_run_print_mode_passes_cwd_to_build_runtime(monkeypatch):
     async def _close_runtime(_bundle):
         return None
 
-    monkeypatch.setattr("openharness.ui.app.build_runtime", _build_runtime)
-    monkeypatch.setattr("openharness.ui.app.start_runtime", _start_runtime)
-    monkeypatch.setattr("openharness.ui.app.handle_line", _handle_line)
-    monkeypatch.setattr("openharness.ui.app.close_runtime", _close_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.build_runtime", _build_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.start_runtime", _start_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.handle_line", _handle_line)
+    monkeypatch.setattr("iterate_harness.ui.app.close_runtime", _close_runtime)
 
     await run_print_mode(prompt="hi", cwd="/tmp/demo")
 
@@ -129,11 +129,11 @@ async def test_run_task_worker_reads_one_shot_json_line(monkeypatch):
     async def _close_runtime(_bundle):
         return None
 
-    monkeypatch.setattr("openharness.ui.app.build_runtime", _build_runtime)
-    monkeypatch.setattr("openharness.ui.app.start_runtime", _start_runtime)
-    monkeypatch.setattr("openharness.ui.app.handle_line", _handle_line)
-    monkeypatch.setattr("openharness.ui.app.close_runtime", _close_runtime)
-    monkeypatch.setattr("openharness.ui.app.sys.stdin", _FakeStdin())
+    monkeypatch.setattr("iterate_harness.ui.app.build_runtime", _build_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.start_runtime", _start_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.handle_line", _handle_line)
+    monkeypatch.setattr("iterate_harness.ui.app.close_runtime", _close_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.sys.stdin", _FakeStdin())
 
     await run_task_worker(cwd="/tmp/demo")
 
@@ -185,11 +185,11 @@ async def test_run_task_worker_decodes_multiline_json_payload(monkeypatch):
     async def _close_runtime(_bundle):
         return None
 
-    monkeypatch.setattr("openharness.ui.app.build_runtime", _build_runtime)
-    monkeypatch.setattr("openharness.ui.app.start_runtime", _start_runtime)
-    monkeypatch.setattr("openharness.ui.app.handle_line", _handle_line)
-    monkeypatch.setattr("openharness.ui.app.close_runtime", _close_runtime)
-    monkeypatch.setattr("openharness.ui.app.sys.stdin", _FakeStdin())
+    monkeypatch.setattr("iterate_harness.ui.app.build_runtime", _build_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.start_runtime", _start_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.handle_line", _handle_line)
+    monkeypatch.setattr("iterate_harness.ui.app.close_runtime", _close_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.sys.stdin", _FakeStdin())
 
     await run_task_worker(cwd="/tmp/demo")
 
@@ -283,21 +283,21 @@ async def test_run_print_mode_waits_for_coordinator_async_agents(monkeypatch):
 
     fake_manager = _FakeTaskManager()
 
-    monkeypatch.setattr("openharness.ui.app.build_runtime", _build_runtime)
-    monkeypatch.setattr("openharness.ui.app.start_runtime", _start_runtime)
-    monkeypatch.setattr("openharness.ui.app.handle_line", _handle_line)
-    monkeypatch.setattr("openharness.ui.app.close_runtime", _close_runtime)
-    monkeypatch.setattr("openharness.ui.coordinator_drain.get_task_manager", lambda: fake_manager)
-    monkeypatch.setattr("openharness.ui.app.is_coordinator_mode", lambda: True)
+    monkeypatch.setattr("iterate_harness.ui.app.build_runtime", _build_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.start_runtime", _start_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.handle_line", _handle_line)
+    monkeypatch.setattr("iterate_harness.ui.app.close_runtime", _close_runtime)
+    monkeypatch.setattr("iterate_harness.ui.coordinator_drain.get_task_manager", lambda: fake_manager)
+    monkeypatch.setattr("iterate_harness.ui.app.is_coordinator_mode", lambda: True)
     monkeypatch.setattr(
-        "openharness.ui.coordinator_drain.build_runtime_system_prompt",
+        "iterate_harness.ui.coordinator_drain.build_runtime_system_prompt",
         lambda *args, **kwargs: "coordinator",
     )
 
     async def _sleep(_seconds):
         return None
 
-    monkeypatch.setattr("openharness.ui.coordinator_drain.asyncio.sleep", _sleep)
+    monkeypatch.setattr("iterate_harness.ui.coordinator_drain.asyncio.sleep", _sleep)
 
     await run_print_mode(prompt="research this", cwd="/tmp/demo")
 

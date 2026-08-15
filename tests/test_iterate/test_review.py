@@ -1,8 +1,8 @@
-"""Tests for openharness.iterate.review (port of review.test.ts)."""
+"""Tests for iterate_harness.iterate.review (port of review.test.ts)."""
 
 from __future__ import annotations
 
-from openharness.iterate.review import (
+from iterate_harness.iterate.review import (
     SEVERITY_RANK,
     aggregate_rounds,
     build_review_plan,
@@ -16,7 +16,7 @@ from openharness.iterate.review import (
     reviewer_task_prompt,
     sort_findings,
 )
-from openharness.iterate.types import (
+from iterate_harness.iterate.types import (
     IterateConfig,
     KnownIntentional,
     ReviewFinding,

@@ -1,4 +1,4 @@
-"""Tests for the single-file HTML report (openharness.iterate.html_report)."""
+"""Tests for the single-file HTML report (iterate_harness.iterate.html_report)."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 import typer
 
-from openharness.commands.iterate import iterate_command_handler
-from openharness.commands.registry import CommandContext
-from openharness.iterate import html_report
-from openharness.iterate.decision_log import DecisionLogEntry, make_entry
+from iterate_harness.commands.iterate import iterate_command_handler
+from iterate_harness.commands.registry import CommandContext
+from iterate_harness.iterate import html_report
+from iterate_harness.iterate.decision_log import DecisionLogEntry, make_entry
 
 # ---- module fixtures ----------------------------------------------------
 
@@ -177,7 +177,7 @@ def _write_log(tmp_path: Path, entries: list[DecisionLogEntry]) -> None:
 
 class TestCliHtmlOption:
     def test_writes_default_path(self, tmp_path, monkeypatch):
-        from openharness.cli import iterate_report
+        from iterate_harness.cli import iterate_report
 
         monkeypatch.chdir(tmp_path)
         _write_log(tmp_path, _entries_with_report(_report_data()))
@@ -194,7 +194,7 @@ class TestCliHtmlOption:
         assert "src/app.py" in content
 
     def test_missing_report_writes_nothing(self, tmp_path, monkeypatch, capsys):
-        from openharness.cli import iterate_report
+        from iterate_harness.cli import iterate_report
 
         monkeypatch.chdir(tmp_path)
         try:

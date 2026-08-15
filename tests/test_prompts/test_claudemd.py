@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openharness.config.paths import (
+from iterate_harness.config.paths import (
     get_project_active_repo_context_path,
     get_project_issue_file,
     get_project_pr_comments_file,
 )
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.personalization import rules as personalization_rules
-from openharness.personalization.session_hook import update_rules_from_session
-from openharness.prompts import build_runtime_system_prompt, discover_claude_md_files, load_claude_md_prompt
-from openharness.config.settings import Settings
+from iterate_harness.engine.messages import ConversationMessage, TextBlock
+from iterate_harness.personalization import rules as personalization_rules
+from iterate_harness.personalization.session_hook import update_rules_from_session
+from iterate_harness.prompts import build_runtime_system_prompt, discover_claude_md_files, load_claude_md_prompt
+from iterate_harness.config.settings import Settings
 
 
 def test_discover_claude_md_files(tmp_path: Path):
