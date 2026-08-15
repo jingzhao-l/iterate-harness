@@ -249,6 +249,28 @@ class TestIterateReviewTool:
         payload = json.loads(result.output)
         assert "budgetAudit" not in payload
         assert "exhausted_dimensions" not in context.metadata[ITERATE_STATE_KEY]
+        # v1.2-c: usage is relayed to the engine even without budgets.
+        assert context.metadata[ITERATE_STATE_KEY]["dimension_usage"] == {"security": 10}
+
+    async def test_aggregate_sanitizes_dimension_usage(self, tmp_path):
+        """v1.2-c: negative usage entries are clamped to zero in published state."""
+        from openharness.iterate.loop_policy import ITERATE_STATE_KEY
+        from openharness.tools.iterate_tools import IterateReviewInput
+
+        context = make_context(tmp_path)
+        rounds = [{"round": 1, "findings": [FINDING]}]
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(
+                operation="aggregate",
+                rounds=rounds,
+                dimension_usage={"security": -50, "correctness": 120},
+            ),
+            context,
+        )
+        assert result.is_error is False
+        state = context.metadata[ITERATE_STATE_KEY]
+        assert state["dimension_usage"] == {"security": 0, "correctness": 120}
 
     async def test_meta_review_emits_threshold_gate_when_configured(self, tmp_path):
         """v1.1: meta-review folds project thresholds into the final verdict."""

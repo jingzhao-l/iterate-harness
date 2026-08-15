@@ -92,6 +92,55 @@ class TestLoopPolicy:
             assert decision.progress is None
 
 
+class TestDimensionUsageRelay:
+    """v1.2-c: reviewer-reported per-dimension token totals reach the CostMeter."""
+
+    def test_new_aggregate_records_dimension_usage(self):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        snapshot = state(dimension_usage={"security": 1_200, "correctness": 800})
+        policy.on_turn_end({ITERATE_STATE_KEY: snapshot}, UsageSnapshot(), "m")
+        assert policy.cost_meter.dimension_tokens() == {"security": 1_200, "correctness": 800}
+        summary = policy.cost_meter.format_summary()
+        assert "dimension security: 1,200 tokens" in summary
+
+    def test_running_totals_are_monotonic_never_summed(self):
+        """Round 2 reports RUNNING totals; the meter keeps the max (no double-count)."""
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        first = state(rounds_seen=1, findings_by_round=[3], dimension_usage={"security": 1_000})
+        second = state(rounds_seen=2, findings_by_round=[2], dimension_usage={"security": 1_500})
+        policy.on_turn_end({ITERATE_STATE_KEY: first}, UsageSnapshot(), "m")
+        policy.on_turn_end({ITERATE_STATE_KEY: second}, UsageSnapshot(), "m")
+        assert policy.cost_meter.dimension_tokens() == {"security": 1_500}
+
+    def test_repeated_aggregate_does_not_double_record(self):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        snapshot = {ITERATE_STATE_KEY: state(dimension_usage={"security": 900})}
+        policy.on_turn_end(snapshot, UsageSnapshot(), "m")
+        policy.on_turn_end(snapshot, UsageSnapshot(), "m")  # no new aggregate
+        assert policy.cost_meter.dimension_tokens() == {"security": 900}
+
+    def test_budget_stop_path_still_records_usage(self):
+        policy = IterateLoopPolicy(max_review_rounds=3, total_token_budget=100)
+        snapshot = state(dimension_usage={"security": 700})
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: snapshot},
+            UsageSnapshot(input_tokens=200, output_tokens=100),
+            "m",
+        )
+        assert decision.stop_reason is not None
+        assert "token budget exhausted" in decision.stop_reason
+        assert policy.cost_meter.dimension_tokens() == {"security": 700}
+
+    def test_dimension_usage_excluded_from_main_loop_token_total(self):
+        """Reported subagent usage must not inflate the main-loop meter totals."""
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        snapshot = state(dimension_usage={"security": 500_000})
+        policy.on_turn_end(
+            {ITERATE_STATE_KEY: snapshot}, UsageSnapshot(input_tokens=100, output_tokens=50), "m"
+        )
+        assert policy.cost_meter.total_tokens == 150
+
+
 class TestPauseMechanics:
     """Esc intervention: pause_requested consumed at the round boundary."""
 

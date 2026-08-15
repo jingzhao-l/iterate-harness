@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-15
+
+Daily-driver ergonomics: detection-driven init wizard, managed pre-commit hook, engine-level per-dimension usage relay.
+
+### Added
+
+- Detection-driven config wizard (`openharness.iterate.init_wizard` + `oh iterate init` / `/iterate init`): probes project marker files (package.json / pyproject.toml / setup.py / requirements.txt / go.mod / Cargo.toml / Gemfile / pom.xml / build.gradle / composer.json), infers the language stack, derives the test command ONLY from explicit evidence (a real `scripts.test` entry, a pytest table or tests/ layout, a go.mod…), and recommends dimensions (frontend deps unlock `frontend-backend` / `ui-ux`). The wizard prints the evidence lines, previews the yaml, and writes `iterate.config.yaml` only after confirmation (`--yes` skips prompts; `--force` overwrites). Dimension selection accepts 1-based indexes or names (`2,4` / `security ui-ux`); the emitted yaml goes through `yaml.safe_dump` so goal text can never inject yaml structure. Malformed marker files degrade gracefully to evidence notes. Replaces the older marker-lite `init` command (same CLI name, richer behavior; `--defaults` became `--yes`).
+- Managed pre-commit hook (`openharness.iterate.git_hook` + `oh iterate hook install|uninstall|status`): writes a MARKED `.git/hooks/pre-commit` that runs ONE dry-run changed-only review round (`oh iterate review --changed --clean-ok --ref HEAD --rounds 1`) and gates the commit via the exact CI exit-code policy (`--fail-on`, default `high`). Refuses to install over or remove foreign hooks (marker check); `ITERATE_SKIP_HOOK=1` / `git commit --no-verify` skips; the `oh` binary is resolved to an absolute path at install time because hook environments often lack the user's PATH. The generated script is pure POSIX sh.
+- Engine-level per-dimension usage relay (closes the v1.1 audit gap): `iterate_review(operation="aggregate", dimension_usage=…)` now publishes the reported per-dimension token totals into the loop-policy state; `IterateLoopPolicy.on_turn_end` relays them into the `CostMeter` (monotonic max — running totals never double-count), so `format_summary()` and future progress reporting see reviewer-subagent spend without polluting main-loop token totals. Budget-stop and normal round paths both record; malformed usage maps are dropped defensively.
+
+### Changed
+
+- README (en + zh-CN): feature table gains the detection-driven init / pre-commit hook rows; the token-budget row now mentions the usage relay; the CLI block shows `oh iterate hook install`; version badges updated to 1.2.0.
+
 ## [1.1.0] - 2026-08-15
 
 Policy layer: engine-enforced token budgets, project threshold gates, timezone-aware schedules.

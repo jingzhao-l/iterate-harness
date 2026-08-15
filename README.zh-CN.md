@@ -28,7 +28,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-1.1.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.2.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -61,6 +61,7 @@ oh iterate report        # 渲染最终报告（CI 模式，见下）
 oh iterate report --html # 单文件 HTML 报告（收敛曲线、内嵌 diff、可直接分享）
 oh iterate batch a/ b/   # 顺序评审多个仓库，按严重度加权排出最差榜
 oh iterate schedule add "0 9 * * 1-5" # 每日 changed-only 快审（cron，UTC）
+oh iterate hook install  # 托管 pre-commit 钩子：1 轮 changed-only 提交门禁
 ```
 
 先设置 API Key：`export ANTHROPIC_API_KEY=your_key`（也支持
@@ -88,9 +89,11 @@ OpenAI 兼容供应商，见 `oh --help`）。
 | **HTML 单文件报告** | `oh iterate report --html` 把整次运行渲染成一个可离线打开的 `.html`：SVG 收敛曲线、severity/维度分布条、含失败场景的 findings 表、按修复着色的 diff——可直接作为 CI 产物分享 |
 | **评审回放** | `oh iterate log --replay` 按时间序回放整次运行（`[+90s] r1 review_result newFindings=3`），像看录像一样还原闭环展开过程 |
 | **per-dimension 资源** | `iterate.config.yaml` 的 `dimension_resources` 支持按维度设置 `model` / `concurrency`（1–8）/ `token_budget`——security 用强模型、style-tests 用快模型；评审计划会携带到每次 reviewer 派发 |
-| **token 预算强制** | `token_budget` 在引擎层封顶整轮运行（超限硬停并转入收尾报告）；`iterate_review(operation="aggregate", dimension_usage=…)` 审计各维度用量，下一轮自动跳过已超限维度 |
+| **token 预算强制** | `token_budget` 在引擎层封顶整轮运行（超限硬停并转入收尾报告）；`iterate_review(operation="aggregate", dimension_usage=…)` 审计各维度用量，把 reviewer 上报的累计 token 回传引擎成本表，下一轮自动跳过已超限维度 |
 | **阈值门禁** | `thresholds.max_critical` / `max_high`（全局或按维度）封顶最终报告中的发现数量——违规即把结论翻转为 `needs_revision`，并让 `oh iterate report` 退出码失败（`threshold gate: FAIL`） |
 | **定时评审时区** | `oh iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` 按本地时区解释 cron（存储为 UTC 标准化时间），"每天 9 点"就是你所在地的 9 点 |
+| **检测式 init** | `oh iterate init` 探测项目标记文件（package.json / pyproject / go.mod / Cargo.toml / …），基于真实证据推断测试命令，推荐评审维度（前端依赖解锁 `frontend-backend` / `ui-ux`），预览 yaml 并确认后才写入；TUI 内 `/iterate init` 同效 |
+| **pre-commit 钩子** | `oh iterate hook install` 写入带标记的托管 `.git/hooks/pre-commit`：提交前跑 1 轮 changed-only 评审并按 `--fail-on` 严重度门禁；拒绝覆盖第三方钩子，可用 `ITERATE_SKIP_HOOK=1` / `--no-verify` 跳过 |
 | **决策日志** | append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘 |
 | **项目知识** | `ITERATE.md` 项目知识 + 按项目隔离的 9 类结构化个性化数据 |
 

@@ -59,6 +59,10 @@ class AggregateSnapshot:
     # (empty when no budgets are configured or no usage was reported).
     exhausted_dimensions: list[str] = field(default_factory=list)
     all_dimensions_exhausted: bool = False
+    # Reviewer-reported cumulative token totals per dimension (v1.2-c).
+    # Subagent usage bills outside the main API stream, so these are reported
+    # figures the policy relays into the CostMeter (monotonic running totals).
+    dimension_usage: dict[str, int] = field(default_factory=dict)
 
 
 def read_state(tool_metadata: dict[str, object] | None) -> AggregateSnapshot | None:
@@ -85,6 +89,12 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
     fbr = [int(x) for x in fbr_raw] if isinstance(fbr_raw, list) else []
     exhausted_raw = state.get("exhausted_dimensions")
     exhausted = [str(x) for x in exhausted_raw if isinstance(x, str)] if isinstance(exhausted_raw, list) else []
+    usage_raw = state.get("dimension_usage")
+    usage = (
+        {str(k): max(0, int(v)) for k, v in usage_raw.items() if isinstance(v, int) and not isinstance(v, bool)}
+        if isinstance(usage_raw, dict)
+        else {}
+    )
     return AggregateSnapshot(
         rounds_seen=int(state.get("rounds_seen", 0) or 0),
         total_findings=int(state.get("total_findings", 0) or 0),
@@ -94,6 +104,7 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
         mode=str(state.get("mode", "dry-run")),
         exhausted_dimensions=exhausted,
         all_dimensions_exhausted=bool(state.get("all_dimensions_exhausted", False)),
+        dimension_usage=usage,
     )
 
 
@@ -151,6 +162,7 @@ class IterateLoopPolicy:
         budget_stop = self._budget_stop_reason()
         if budget_stop is not None:
             snapshot = read_state(tool_metadata) or AggregateSnapshot(mode=self.mode)
+            self._record_dimension_usage(snapshot)
             return self._stop_decision(snapshot, budget_stop, self._build_progress(snapshot, usage))
         snapshot = read_state(tool_metadata)
         if snapshot is None or snapshot.rounds_seen <= self._rounds_seen:
@@ -158,8 +170,18 @@ class IterateLoopPolicy:
             return LoopDecision()
         self._rounds_seen = snapshot.rounds_seen
         self._emitted_progress += 1
+        self._record_dimension_usage(snapshot)
         progress = self._build_progress(snapshot, usage)
         return self._decide(snapshot, progress)
+
+    def _record_dimension_usage(self, snapshot: AggregateSnapshot) -> None:
+        """Relay reviewer-reported per-dimension token totals into the meter.
+
+        The aggregate tool reports each dimension's RUNNING total, so the
+        meter keeps the monotonic max (never double-counts).
+        """
+        for dimension, tokens in snapshot.dimension_usage.items():
+            self.cost_meter.record_dimension_total(dimension, tokens)
 
     def _budget_stop_reason(self) -> str | None:
         """Return the token-budget stop reason, or None when within budget."""

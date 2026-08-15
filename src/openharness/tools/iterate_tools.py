@@ -248,6 +248,16 @@ class IterateReviewTool(BaseTool):
             "by_dimension": dict(report.summary.by_dimension),
         }
         payload: dict[str, Any] = {"report": review.report_to_dict(report)}
+        if args.dimension_usage:
+            usage = {
+                str(dim): max(0, int(tokens))
+                for dim, tokens in args.dimension_usage.items()
+                if isinstance(tokens, int) and not isinstance(tokens, bool)
+            }
+            if usage:
+                # Engine-level per-dimension usage passthrough (v1.2-c): the
+                # loop policy bills these reported totals into its CostMeter.
+                state["dimension_usage"] = usage
         if budget_audit is not None:
             state["exhausted_dimensions"] = budget_audit.exceeded_dimensions
             state["all_dimensions_exhausted"] = budget_audit.all_budgeted_exhausted

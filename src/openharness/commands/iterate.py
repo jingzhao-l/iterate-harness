@@ -239,6 +239,42 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             message=ci_report.render_text(ci_report.ReportSummary.from_entry(report_entry))
         )
 
+    if sub == "init":
+        from openharness.iterate import init_wizard
+
+        config_path = init_wizard.existing_config_path(cwd)
+        if config_path.exists() and "--force" not in rest:
+            return _result(
+                message=(
+                    f"{init_wizard.CONFIG_FILENAME} already exists — use `/iterate init --force` "
+                    "to overwrite, or edit it directly."
+                )
+            )
+        profile = init_wizard.detect_project(cwd)
+        config = init_wizard.build_config_dict(
+            goal=f"Iterative review for this {profile.languages[0] if profile.languages else 'software'} project",
+            dimensions=profile.suggested_dimensions,
+            max_rounds=3,
+            test_command=profile.test_command,
+        )
+        lines = [
+            f"Detected stack: {', '.join(profile.languages) if profile.languages else 'unknown'}",
+            *profile.evidence,
+            f"Suggested test command: {profile.test_command or '(none)'}",
+            "",
+            "--- suggested iterate.config.yaml ---",
+            init_wizard.render_config_text(config).rstrip(),
+            "--- end ---",
+        ]
+        if "--write" in rest or "--force" in rest:
+            written = init_wizard.write_config(cwd, config)
+            lines.append(f"\nWrote {written}")
+        else:
+            lines.append(
+                "\nPreview only — run `/iterate init --write` to accept, or `oh iterate init` for the interactive wizard."
+            )
+        return _result(message="\n".join(lines))
+
     if sub == "validate":
         if not rest:
             allowed = config_loader.flatten_commands(
@@ -259,7 +295,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
 
     return _result(
         message=(
-            "Usage: /iterate [status|config|review|run|resume|log|trend|report|validate]\n"
+            "Usage: /iterate [status|config|review|run|resume|log|trend|report|init|validate]\n"
             "- status|config: effective config summary\n"
             "- review [--changed] [--ref <ref>]: dry-run pure review (read-only, convergence-enforced);\n"
             "  --changed pins the loop to files changed vs <ref> (default HEAD)\n"
@@ -268,6 +304,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             "- log [n]: tail the decision log (or `log trend`)\n"
             "- trend: cross-run finding trend (new/fixed/stubborn)\n"
             "- report: render the final report from the decision log\n"
+            "- init [--write]: detect the stack and suggest an iterate.config.yaml\n"
             "- validate <command>: run a preconfigured validation command"
         )
     )

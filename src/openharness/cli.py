@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -838,90 +838,6 @@ def mcp_remove(
 
 # ---- iterate subcommands ----
 
-_ITERATE_DIMENSIONS = [
-    "correctness",
-    "security",
-    "performance",
-    "architecture",
-    "style-tests",
-    "tech-debt",
-    "spec-compliance",
-    "frontend-backend",
-    "ui-ux",
-]
-
-
-def _detect_project(cwd: Path) -> tuple[list[str], dict[str, list[str]]]:
-    """Detect dimensions + validation commands from project manifests."""
-    dimensions = ["correctness", "security", "style-tests"]
-    commands: dict[str, list[str]] = {}
-    if (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists():
-        dimensions.append("tech-debt")
-        test_cmd = "pytest tests/ -x -q" if (cwd / "tests").exists() else "pytest -x -q"
-        commands["python"] = [test_cmd, "ruff check src/"]
-    if (cwd / "package.json").exists():
-        dimensions.extend(["frontend-backend", "ui-ux"])
-        commands["typescript"] = ["npm run compile"] if _has_script(cwd, "compile") else ["npx tsc --noEmit"]
-    if (cwd / "go.mod").exists():
-        commands["go"] = ["go test ./..."]
-    if (cwd / "Cargo.toml").exists():
-        commands["rust"] = ["cargo test"]
-    return dimensions, commands
-
-
-def _has_script(cwd: Path, name: str) -> bool:
-    try:
-        pkg = json.loads((cwd / "package.json").read_text(encoding="utf-8"))
-        return name in (pkg.get("scripts") or {})
-    except (OSError, json.JSONDecodeError):
-        return False
-
-
-def _render_config_yaml(goal: str, dimensions: list[str], commands: dict[str, list[str]]) -> str:
-    lines = [f'goal: "{goal}"', "max_rounds: 7", "language: en", "dimensions:"]
-    lines.extend(f"  - {d}" for d in dimensions)
-    lines.append("validation:")
-    lines.append("  command_whitelist: []")
-    if commands:
-        lines.append("  commands:")
-        for module, cmds in commands.items():
-            lines.append(f"    {module}:")
-            lines.extend(f"      - '{cmd}'" for cmd in cmds)
-    else:
-        lines.append("  commands: {}")
-    return "\n".join(lines) + "\n"
-
-
-@iterate_app.command("init")
-def iterate_init(
-    defaults: bool = typer.Option(False, "--defaults", help="Non-interactive; use detected defaults"),
-    force: bool = typer.Option(False, "--force", help="Overwrite an existing config"),
-    goal: str = typer.Option("Improve code quality and maintainability", "--goal"),
-) -> None:
-    """Initialize iterate.config.yaml with detected project settings."""
-    cwd = Path.cwd()
-    target = cwd / "iterate.config.yaml"
-    if target.exists() and not force:
-        print(f"iterate.config.yaml already exists (use --force to overwrite): {target}", file=sys.stderr)
-        raise typer.Exit(1)
-    dimensions, commands = _detect_project(cwd)
-    if not defaults and sys.stdin.isatty():
-        try:
-            import questionary
-
-            selected = questionary.checkbox(
-                "Select review dimensions",
-                choices=[questionary.Choice(d, checked=d in dimensions) for d in _ITERATE_DIMENSIONS],
-            ).ask()
-            if selected:
-                dimensions = [d for d in _ITERATE_DIMENSIONS if d in selected]
-        except Exception:  # noqa: BLE001 - fall back to detected defaults
-            pass
-    target.write_text(_render_config_yaml(goal, dimensions, commands), encoding="utf-8")
-    print(f"Wrote {target}")
-    print(f"  dimensions: {', '.join(dimensions)}")
-    total_cmds = sum(len(v) for v in commands.values())
-    print(f"  validation commands: {total_cmds}")
 
 
 def _run_headless(kickoff: str) -> None:
@@ -955,6 +871,70 @@ def _resolve_changed_files(
         raise typer.Exit(0 if clean_ok else 1)
     print(f"Changed-only quick review: {len(files)} file(s) vs {ref}")
     return files
+
+
+@iterate_app.command("init")
+def iterate_init(
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Accept all suggestions and write without prompting"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing iterate.config.yaml"
+    ),
+    goal: str = typer.Option(
+        "", "--goal", help="Review goal (default: detection-based suggestion)"
+    ),
+) -> None:
+    """Detection-driven config wizard: probe the project, suggest, write."""
+    from openharness.iterate import init_wizard
+
+    cwd = Path.cwd()
+    config_path = init_wizard.existing_config_path(cwd)
+    if config_path.exists() and not force:
+        print(f"{init_wizard.CONFIG_FILENAME} already exists ({config_path}); use --force to overwrite.")
+        raise typer.Exit(1)
+
+    profile = init_wizard.detect_project(cwd)
+    print(f"Detected stack: {', '.join(profile.languages) if profile.languages else 'unknown'}")
+    for line in profile.evidence:
+        print(f"  - {line}")
+    print(f"Suggested test command: {profile.test_command or '(none — configure manually)'}")
+
+    offered = profile.suggested_dimensions
+    print("Suggested dimensions:")
+    for index, dim in enumerate(offered, 1):
+        print(f"  {index}. {dim}")
+    chosen: list[str] | None = offered
+    final_goal = goal.strip() or (
+        f"Iterative review for this {profile.languages[0] if profile.languages else 'software'} project"
+    )
+    rounds = 3
+    if not yes:
+        raw = typer.prompt(
+            "Dimensions to keep (comma-separated numbers/names, empty = all)", default=""
+        )
+        chosen = init_wizard.parse_dimension_selection(raw, offered)
+        while chosen is None:
+            print("Invalid selection — use numbers or exact dimension names.")
+            raw = typer.prompt("Dimensions to keep (empty = all)", default="")
+            chosen = init_wizard.parse_dimension_selection(raw, offered)
+        if not goal.strip():
+            final_goal = typer.prompt("Review goal", default=final_goal)
+        rounds = typer.prompt("Max review rounds", default=3, type=int)
+
+    config = init_wizard.build_config_dict(
+        goal=final_goal, dimensions=chosen, max_rounds=rounds, test_command=profile.test_command
+    )
+    print("\n--- iterate.config.yaml (preview) ---")
+    print(init_wizard.render_config_text(config), end="")
+    print("--- end preview ---\n")
+
+    if yes or typer.confirm(f"Write {config_path}"):
+        written = init_wizard.write_config(cwd, config)
+        print(f"Wrote {written}")
+        print("Next: `oh iterate review --changed` for a quick changed-only review.")
+    else:
+        print("Aborted — nothing written.")
 
 
 @iterate_app.command("review")
@@ -998,6 +978,57 @@ def iterate_run(
 
 
 schedule_app = typer.Typer(help="Manage the scheduled changed-only quick review (cron)")
+
+hook_app = typer.Typer(help="Manage the pre-commit changed-only quick-review git hook")
+
+
+@hook_app.command("install")
+def iterate_hook_install(
+    fail_on: str = typer.Option(
+        "high", "--fail-on", help="Block the commit at this severity (none|low|medium|high|critical)"
+    ),
+) -> None:
+    """Install the managed pre-commit hook for this repo."""
+    from openharness.iterate import git_hook
+
+    try:
+        target = git_hook.install_hook(str(Path.cwd()), fail_on=fail_on)
+    except git_hook.HookError as exc:
+        print(f"Rejected: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from exc
+    print(f"Installed pre-commit hook: {target}")
+    print(f"  review: 1 round, changed-only vs HEAD, fail-on {fail_on}")
+    print("  skip once: ITERATE_SKIP_HOOK=1 git commit … (or --no-verify)")
+
+
+@hook_app.command("uninstall")
+def iterate_hook_uninstall() -> None:
+    """Remove the managed pre-commit hook (foreign hooks are refused)."""
+    from openharness.iterate import git_hook
+
+    try:
+        removed = git_hook.uninstall_hook(str(Path.cwd()))
+    except git_hook.HookError as exc:
+        print(f"Rejected: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from exc
+    print("Removed pre-commit hook." if removed else "No pre-commit hook installed.")
+
+
+@hook_app.command("status")
+def iterate_hook_status() -> None:
+    """Show whether the pre-commit hook is installed/managed."""
+    from openharness.iterate import git_hook
+
+    info = git_hook.hook_status(str(Path.cwd()))
+    if info.get("error"):
+        print(info["error"])
+        return
+    if not info["installed"]:
+        print(f"pre-commit hook: not installed ({info.get('path', '?')})")
+        return
+    state = "managed" if info["managed"] else "FOREIGN (not managed by iterate)"
+    print(f"pre-commit hook: {state} — {info['path']}")
+    print(f"  skip once: {info['skippable']}")
 
 
 @schedule_app.command("add")
@@ -1073,6 +1104,7 @@ def iterate_schedule_status() -> None:
 
 
 iterate_app.add_typer(schedule_app, name="schedule")
+iterate_app.add_typer(hook_app, name="hook")
 
 
 @iterate_app.command("batch")

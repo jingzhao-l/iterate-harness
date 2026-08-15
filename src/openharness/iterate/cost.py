@@ -82,6 +82,11 @@ class CostMeter:
 
     price_overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
     _by_model: dict[str, ModelUsage] = field(default_factory=dict)
+    # Per-reviewer-dimension cumulative token totals (monotonic max — the
+    # aggregate tool reports each dimension's RUNNING total every round, so
+    # plain addition would double-count). Reviewer subagents bill outside the
+    # main API stream, so these are reported figures, not metered ones.
+    _dimension_tokens: dict[str, int] = field(default_factory=dict)
 
     def accumulate(self, usage: UsageSnapshot, model: str) -> None:
         """Add one usage snapshot billed against ``model``."""
@@ -93,6 +98,15 @@ class CostMeter:
             usage.input_tokens * in_price / TOKENS_PER_MILLION
             + usage.output_tokens * out_price / TOKENS_PER_MILLION
         )
+
+    def record_dimension_total(self, dimension: str, total_tokens: int) -> None:
+        """Record one dimension's reported cumulative token total (monotonic)."""
+        clamped = max(0, int(total_tokens))
+        self._dimension_tokens[dimension] = max(self._dimension_tokens.get(dimension, 0), clamped)
+
+    def dimension_tokens(self) -> dict[str, int]:
+        """Return a copy of the per-dimension cumulative token totals."""
+        return dict(self._dimension_tokens)
 
     @property
     def total_cost_usd(self) -> float:
@@ -117,5 +131,7 @@ class CostMeter:
             f"(${entry.cost_usd:.4f})"
             for entry in self._by_model.values()
         ]
+        for dimension, tokens in sorted(self._dimension_tokens.items()):
+            parts.append(f"dimension {dimension}: {tokens:,} tokens (reviewer-reported)")
         header = f"Total: {self.total_tokens:,} tokens, ${self.total_cost_usd:.4f}"
         return header + ("\n" + "\n".join(parts) if parts else "")
