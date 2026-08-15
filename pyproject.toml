@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iterate-harness"
-version = "1.7.0"
+version = "1.8.0"
 description = "iterate-skill powered fork of OpenHarness - dedicated agent harness for the iterate review/fix loop"
 readme = "README.md"
 license = "MIT"
@@ -75,6 +75,12 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+# Pin the rule set explicitly: ruff 0.16 expanded its default rules, which
+# would suddenly fail CI on version bumps. This is the set the codebase
+# was written and reviewed against.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
 python_version = "3.11"

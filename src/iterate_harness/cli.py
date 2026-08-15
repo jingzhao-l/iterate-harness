@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -944,6 +944,20 @@ def iterate_status() -> None:
         print("Validation commands: (none configured)")
     for line in render_status_onboarding_lines(Path.cwd()):
         print(line)
+
+
+@iterate_app.command("doctor")
+def iterate_doctor() -> None:
+    """Check skill↔harness dimension-system consistency (exit 1 on drift)."""
+    from iterate_harness.iterate.dimension_check import (
+        render_doctor_report,
+        run_dimension_doctor,
+    )
+
+    report = run_dimension_doctor(str(Path.cwd()))
+    print(render_doctor_report(report))
+    if not report.ok:
+        raise typer.Exit(1)
 
 
 @iterate_app.command("init")

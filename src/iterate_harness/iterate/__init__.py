@@ -14,6 +14,7 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
 - :mod:`.personalization` — 9-category per-project personalization
 - :mod:`.onboarding` / :mod:`.onboard_cmd` — ITERATE.md knowledge base + fingerprints
 - :mod:`.personalize_cmd` — skill-parity 9-category personalize wizard
+- :mod:`.dimension_check` — skill↔harness dimension-system consistency doctor
 - :mod:`.prompts` — canonical workflow prompt templates
 - :mod:`.trend_store` — finding fingerprint trend library (new/fixed/stubborn)
 - :mod:`.worktree_flow` — fix-round git isolation orchestration
@@ -47,6 +48,11 @@ _EXPORTS: dict[str, str] = {
     "log_path": ".decision_log",
     "make_entry": ".decision_log",
     "read_entries": ".decision_log",
+    # dimension_check
+    "DimensionDoctorReport": ".dimension_check",
+    "load_canonical_dimensions": ".dimension_check",
+    "render_doctor_report": ".dimension_check",
+    "run_dimension_doctor": ".dimension_check",
     # loop_policy
     "AggregateSnapshot": ".loop_policy",
     "ITERATE_STATE_KEY": ".loop_policy",
@@ -116,6 +122,7 @@ __all__ = [
     "SEVERITY_RANK",
     "AggregateSnapshot",
     "CostMeter",
+    "DimensionDoctorReport",
     "EffectiveConfig",
     "IterateConfig",
     "IterateLoopPolicy",
@@ -147,6 +154,7 @@ __all__ = [
     "findings_schema",
     "flatten_commands",
     "is_command_allowed",
+    "load_canonical_dimensions",
     "load_config",
     "load_effective_config",
     "load_library",
@@ -164,12 +172,14 @@ __all__ = [
     "project_config",
     "read_entries",
     "record_run",
+    "render_doctor_report",
     "render_markdown",
     "render_trend_summary",
     "report_from_dict",
     "report_to_dict",
     "reviewer_task_prompt",
     "run_command",
+    "run_dimension_doctor",
     "run_validation",
     "sort_findings",
     "summarize",

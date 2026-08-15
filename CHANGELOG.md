@@ -6,6 +6,24 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-15
+
+Closes the last v1.22 v2 candidate: the skill↔harness dimension-system consistency check. The 9 review dimensions are defined in six places across the two repositories (canonical yaml, JSON-schema enum, skill wizard constants, harness `ALL_DIMENSIONS`, harness default config, and every project's config references) — any of them can drift during a rename. This release bundles the canonical definitions inside the harness and ships a `doctor` command that answers "are my dimensions consistent?" in one shot, plus a six-source lock test in the skill repository that fails CI on drift.
+
+### Added
+
+- **`ih iterate doctor` / `/iterate doctor`** (`iterate_harness.iterate.dimension_check`): dimension-system consistency check. Loads the bundled canonical `data/dimensions.yaml` (byte-identical to the skill's `config/dimensions.yaml`), verifies the harness-internal constants (`personalize_cmd.ALL_DIMENSIONS` order, `IterateConfig` default set) against it, then validates every dimension reference in the project's effective `iterate.config.yaml`: enabled `dimensions` (unknown key = error, e.g. a `securty` typo), `dimension_resources` / `thresholds.dimensions` keys (unknown = error; configured-but-not-enabled = inert warning), and `personalization` references (`fix_priority_order` / `dimension_focus` / `known_intentional` outside the enabled set = error, mirroring the skill's `scripts/validate.py` semantics). Canonical dimensions not enabled are reported as informational. CLI exits 1 on drift (CI-gateable); the TUI renders the same report.
+- **Bundled canonical dimension data** (`iterate_harness/iterate/data/dimensions.yaml`): packaged in the wheel; `load_canonical_dimensions` parses it defensively (missing file / bad yaml / malformed entry / invalid priority are reported as errors, never raised).
+- **Six-source dimension lock test** (skill repository, `tests/test_dimension_lock.py`): locks the canonical yaml against the JSON-schema enum, the skill wizard's `ALL_DIMENSIONS` + `DIMENSION_LABELS`, the harness `personalize_cmd` constants, the harness default-config dimensions, `init_wizard.BASE_DIMENSIONS` (subset), and byte-identity of the bundled copy. Extraction is AST/regex/json only — zero third-party dependencies.
+
+### Changed
+
+- **Ruff rule set pinned explicitly** (`[tool.ruff.lint] select = ["E4", "E7", "E9", "F"]`): ruff 0.16 expanded its default rule set, which would have failed the CI quality job on the next dependency resolve (uv.lock is not distributed). The pin keeps the lint scope identical to what the codebase was written against, independent of ruff version bumps.
+
+### Fixed
+
+- Removed an unused `prompts` import in the pause-handler path (`engine/query.py`) and an f-string without placeholders in onboarding output (`iterate/onboard_cmd.py`) — the only two violations under the pinned rule set.
+
 ## [1.7.0] - 2026-08-15
 
 Closes the three v1.21 leftovers: giant-PR comment pagination, exact per-dimension USD billing, and per-dimension cost in the TUI convergence panel. Also removes the inherited OpenHarness logo from the READMEs (trademark hygiene for the fork).

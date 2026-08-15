@@ -12,6 +12,7 @@ Subcommands:
 - ``/iterate log [n]`` — tail the decision log (default 20 entries)
 - ``/iterate report`` — render the final report entry from the decision log
 - ``/iterate config`` — show the effective config
+- ``/iterate doctor`` — skill↔harness dimension-system consistency check
 - ``/iterate validate <command>`` — run one preconfigured validation command
 
 ``--changed`` switches review/run into a changed-only quick review pinned to
@@ -376,6 +377,15 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             )
         return _result(message="\n".join(lines))
 
+    if sub == "doctor":
+        from iterate_harness.iterate.dimension_check import (
+            render_doctor_report,
+            run_dimension_doctor,
+        )
+
+        report = run_dimension_doctor(cwd)
+        return _result(message=render_doctor_report(report))
+
     if sub == "validate":
         if not rest:
             allowed = config_loader.flatten_commands(
@@ -396,7 +406,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
 
     return _result(
         message=(
-            "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|report|init|validate]\n"
+            "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|report|init|doctor|validate]\n"
             "- status|config: effective config summary\n"
             "- onboard [goal]: model-driven project scan that writes ITERATE.md\n"
             "- personalize: show personalization state (wizard: `ih iterate personalize`)\n"
@@ -408,6 +418,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             "- trend: cross-run finding trend (new/fixed/stubborn)\n"
             "- report: render the final report from the decision log\n"
             "- init [--write]: detect the stack and suggest an iterate.config.yaml\n"
+            "- doctor: skill↔harness dimension-system consistency check\n"
             "- validate <command>: run a preconfigured validation command"
         )
     )
