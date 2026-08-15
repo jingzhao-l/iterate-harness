@@ -6,6 +6,21 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-15
+
+CI visibility: PR comment mode, medium/low threshold gates, per-dimension USD estimates.
+
+### Added
+
+- PR comment mode (`openharness.iterate.pr_comment` + `oh iterate report --pr`): renders the final report as a Markdown PR comment (marker-anchored, findings table capped at 50 rows, threshold-gate status with inline violations) and posts it via the GitHub CLI. Idempotent — the hidden `<!-- iterate-report -->` marker lets subsequent runs UPDATE the existing comment instead of duplicating one per CI run (`gh api` PATCH by comment id; POST only when none exists yet). Every failure mode degrades to a `skipped` status without raising: gh not installed, no PR context, auth missing, API errors, 60s timeouts — so the `--fail-on` exit-code semantics stay untouched. `--pr` composes with `--github` (annotations + comment) and suppresses the plain-text render. The process boundary is a single injectable runner, keeping the module fully unit-testable.
+- Threshold gates extended to `max_medium` / `max_low` (closes the v1.1 note): `thresholds` and `thresholds.dimensions.<dim>` now accept all four severity caps. Parsing (`_parse_threshold_metric`), gate evaluation (`evaluate_threshold_gates` counts findings at EXACTLY each severity, global + per-dimension), and yaml round-trip serialization are driven by one `SEVERITY_METRICS` tuple in `types.py`, so adding a metric later is a one-line change. Invalid values still degrade to per-field errors, never exceptions.
+- Per-dimension USD estimates (closes the v1.2 note): `CostMeter.dimension_cost_usd(model)` converts the reviewer-reported per-dimension token totals into estimated USD at the model's blended (input+output)/2 price; `format_summary(dimension_model=…)` appends `(~$X.XXXX)` to each dimension line. Estimates stay OUT of `total_cost_usd` / `total_tokens` (main-loop metered accounting is never polluted by reviewer-reported figures).
+
+### Changed
+
+- `oh iterate report` renders plain text only when neither `--github` nor `--pr` is given.
+- README (en + zh-CN): CI/PR 模式 row now mentions `--pr`; version badges updated to 1.3.0.
+
 ## [1.2.0] - 2026-08-15
 
 Daily-driver ergonomics: detection-driven init wizard, managed pre-commit hook, engine-level per-dimension usage relay.

@@ -205,3 +205,39 @@ class TestCostMeter:
         summary = meter.format_summary()
         assert "claude-sonnet-4-6" in summary
         assert "deepseek-chat" in summary
+
+
+class TestDimensionCostUsd:
+    """v1.3-c: reviewer-reported dimension tokens → estimated USD."""
+
+    def test_dimension_cost_uses_blended_price(self):
+        meter = CostMeter()
+        meter.record_dimension_total("security", 1_000_000)
+        meter.record_dimension_total("style", 500_000)
+        # claude-sonnet-4 blend = (3 + 15) / 2 = $9 per 1M
+        assert meter.dimension_cost_usd("claude-sonnet-4-6") == {"security": 9.0, "style": 4.5}
+
+    def test_dimension_cost_respects_price_overrides(self):
+        meter = CostMeter(price_overrides={"m1": (1.0, 3.0)})
+        meter.record_dimension_total("security", 2_000_000)
+        # blend = (1 + 3) / 2 = $2 per 1M → 2M = $4
+        assert meter.dimension_cost_usd("m1") == {"security": 4.0}
+
+    def test_dimension_cost_empty_without_reports(self):
+        assert CostMeter().dimension_cost_usd("claude-sonnet-4-6") == {}
+
+    def test_dimension_cost_not_folded_into_total(self):
+        meter = CostMeter()
+        meter.record_dimension_total("security", 1_000_000)
+        assert meter.total_cost_usd == 0.0
+        assert meter.total_tokens == 0
+
+    def test_format_summary_appends_usd_when_model_given(self):
+        meter = CostMeter()
+        meter.record_dimension_total("security", 1_000_000)
+        with_usd = meter.format_summary(dimension_model="claude-sonnet-4-6")
+        assert "dimension security: 1,000,000 tokens" in with_usd
+        assert "(~$9.0000)" in with_usd
+        without_usd = meter.format_summary()
+        assert "tokens (reviewer-reported)" in without_usd
+        assert "$" not in without_usd.split("dimension security")[1]

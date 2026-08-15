@@ -24,6 +24,7 @@ from pathlib import Path
 import yaml
 
 from .types import (
+    SEVERITY_METRICS,
     AtomicConfig,
     DimensionResources,
     DimensionThresholds,
@@ -182,24 +183,32 @@ def parse_token_budget(raw: object) -> tuple[int | None, list[str]]:
     return raw, []
 
 
+def _parse_threshold_metric(
+    raw: object,
+    field_name: str,
+    errors: list[str],
+) -> int | None:
+    """Parse one ``max_<metric>`` threshold (non-negative int, defensive)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
+        errors.append(f"{field_name} must be a non-negative integer")
+        return None
+    return raw
+
+
 def _parse_dimension_thresholds(dim: str, raw: object, errors: list[str]) -> DimensionThresholds:
     """Parse one ``thresholds.dimensions.<dim>`` mapping defensively."""
     if not isinstance(raw, dict):
         errors.append(f"thresholds.dimensions.{dim} must be a mapping")
         return DimensionThresholds()
-    max_critical = raw.get("max_critical")
-    if max_critical is not None and (
-        not isinstance(max_critical, int) or isinstance(max_critical, bool) or max_critical < 0
-    ):
-        errors.append(f"thresholds.dimensions.{dim}.max_critical must be a non-negative integer")
-        max_critical = None
-    max_high = raw.get("max_high")
-    if max_high is not None and (
-        not isinstance(max_high, int) or isinstance(max_high, bool) or max_high < 0
-    ):
-        errors.append(f"thresholds.dimensions.{dim}.max_high must be a non-negative integer")
-        max_high = None
-    return DimensionThresholds(max_critical=max_critical, max_high=max_high)
+    values = {
+        f"max_{metric}": _parse_threshold_metric(
+            raw.get(f"max_{metric}"), f"thresholds.dimensions.{dim}.max_{metric}", errors
+        )
+        for metric in SEVERITY_METRICS
+    }
+    return DimensionThresholds(**values)
 
 
 def parse_thresholds(raw: object) -> tuple[ThresholdsConfig, list[str]]:
@@ -214,18 +223,12 @@ def parse_thresholds(raw: object) -> tuple[ThresholdsConfig, list[str]]:
         return ThresholdsConfig(), ["thresholds must be a mapping"]
 
     errors: list[str] = []
-    max_critical = raw.get("max_critical")
-    if max_critical is not None and (
-        not isinstance(max_critical, int) or isinstance(max_critical, bool) or max_critical < 0
-    ):
-        errors.append("thresholds.max_critical must be a non-negative integer")
-        max_critical = None
-    max_high = raw.get("max_high")
-    if max_high is not None and (
-        not isinstance(max_high, int) or isinstance(max_high, bool) or max_high < 0
-    ):
-        errors.append("thresholds.max_high must be a non-negative integer")
-        max_high = None
+    global_values = {
+        f"max_{metric}": _parse_threshold_metric(
+            raw.get(f"max_{metric}"), f"thresholds.max_{metric}", errors
+        )
+        for metric in SEVERITY_METRICS
+    }
 
     dimensions: dict[str, DimensionThresholds] = {}
     dims_raw = raw.get("dimensions")
@@ -238,9 +241,8 @@ def parse_thresholds(raw: object) -> tuple[ThresholdsConfig, list[str]]:
 
     return (
         ThresholdsConfig(
-            max_critical=max_critical,
-            max_high=max_high,
             dimensions=dimensions,
+            **global_values,
         ),
         errors,
     )
@@ -249,13 +251,17 @@ def parse_thresholds(raw: object) -> tuple[ThresholdsConfig, list[str]]:
 def thresholds_to_dict(thresholds: ThresholdsConfig) -> dict[str, object]:
     """Serialize ThresholdsConfig back to its yaml shape (set fields only)."""
     out: dict[str, object] = {}
-    if thresholds.max_critical is not None:
-        out["max_critical"] = thresholds.max_critical
-    if thresholds.max_high is not None:
-        out["max_high"] = thresholds.max_high
+    for metric in SEVERITY_METRICS:
+        value = getattr(thresholds, f"max_{metric}")
+        if value is not None:
+            out[f"max_{metric}"] = value
     if thresholds.dimensions:
         out["dimensions"] = {
-            name: {k: v for k, v in (("max_critical", dim.max_critical), ("max_high", dim.max_high)) if v is not None}
+            name: {
+                f"max_{metric}": value
+                for metric in SEVERITY_METRICS
+                if (value := getattr(dim, f"max_{metric}")) is not None
+            }
             for name, dim in thresholds.dimensions.items()
         }
     return out

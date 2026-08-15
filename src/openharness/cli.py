@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -1215,6 +1215,9 @@ def iterate_report(
     github: bool = typer.Option(
         False, "--github", help="Emit GitHub Actions workflow commands (PR annotations)"
     ),
+    pr: bool = typer.Option(
+        False, "--pr", help="Post/update the report as a PR comment via the gh CLI (degrades gracefully)"
+    ),
     html_out: str = typer.Option(
         "",
         "--html",
@@ -1231,7 +1234,7 @@ def iterate_report(
     Exit code is 1 when any finding is at or above --fail-on severity;
     a missing or malformed report degrades to an empty report (exit 0).
     """
-    from openharness.iterate import ci_report, decision_log as iter_log, html_report
+    from openharness.iterate import ci_report, decision_log as iter_log, html_report, pr_comment
 
     threshold = fail_on.strip().lower()
     if threshold not in ci_report.SEVERITY_ORDER:
@@ -1254,7 +1257,11 @@ def iterate_report(
 
     if github:
         print(ci_report.render_github(summary))
-    else:
+    if pr:
+        body = pr_comment.render_markdown(summary, gate)
+        result = pr_comment.post_pr_comment(body, str(Path.cwd()))
+        print(f"PR comment: {result}", file=sys.stderr)
+    if not github and not pr:
         print(ci_report.render_text(summary, gate))
     exit_code = max(
         ci_report.severity_gate(summary, threshold),

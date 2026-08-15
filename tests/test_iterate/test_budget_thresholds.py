@@ -166,6 +166,47 @@ class TestEvaluateThresholdGates:
         assert ("global", "high") in scopes
         assert ("dimension:security", "high") in scopes
 
+    def test_global_medium_cap_violated(self):
+        thresholds = ThresholdsConfig(max_medium=1)
+        findings = [f(severity="medium"), f(severity="medium")]
+        result = evaluate_threshold_gates(thresholds, findings)
+        assert result.passed is False
+        assert result.violations == [
+            {"scope": "global", "metric": "medium", "limit": 1, "actual": 2}
+        ]
+
+    def test_global_low_cap_violated(self):
+        thresholds = ThresholdsConfig(max_low=0)
+        result = evaluate_threshold_gates(thresholds, [f(severity="low")])
+        assert result.passed is False
+        assert result.violations[0]["metric"] == "low"
+
+    def test_medium_cap_counts_only_medium_findings(self):
+        """Each metric counts findings at EXACTLY that severity."""
+        thresholds = ThresholdsConfig(max_medium=0, max_high=0)
+        findings = [f(severity="high"), f(severity="critical"), f(severity="low")]
+        result = evaluate_threshold_gates(thresholds, findings)
+        assert result.passed is False
+        assert result.violations == [
+            {"scope": "global", "metric": "high", "limit": 0, "actual": 1}
+        ]
+
+    def test_per_dimension_medium_and_low_caps(self):
+        thresholds = ThresholdsConfig(
+            dimensions={"style": DimensionThresholds(max_medium=0, max_low=0)}
+        )
+        findings = [
+            f(dimension="style", severity="medium"),
+            f(dimension="style", severity="low"),
+            f(dimension="correctness", severity="low"),
+        ]
+        result = evaluate_threshold_gates(thresholds, findings)
+        assert result.passed is False
+        scopes = {(v["scope"], v["metric"]) for v in result.violations}
+        assert ("dimension:style", "medium") in scopes
+        assert ("dimension:style", "low") in scopes
+        assert ("global", "low") not in scopes
+
 
 # --- config parsing -----------------------------------------------------------
 
@@ -185,13 +226,19 @@ class TestConfigParsing:
         raw = {
             "max_critical": 1,
             "max_high": 3,
-            "dimensions": {"security": {"max_critical": 0}},
+            "max_medium": 5,
+            "max_low": 9,
+            "dimensions": {"security": {"max_critical": 0, "max_medium": 2, "max_low": 4}},
         }
         thresholds, errors = parse_thresholds(raw)
         assert errors == []
         assert thresholds.max_critical == 1
         assert thresholds.max_high == 3
+        assert thresholds.max_medium == 5
+        assert thresholds.max_low == 9
         assert thresholds.dimensions["security"].max_critical == 0
+        assert thresholds.dimensions["security"].max_medium == 2
+        assert thresholds.dimensions["security"].max_low == 4
         assert thresholds_to_dict(thresholds) == raw
 
     def test_thresholds_invalid_entries_report_errors_and_skip(self):
@@ -199,14 +246,19 @@ class TestConfigParsing:
             {
                 "max_critical": -1,
                 "max_high": "many",
-                "dimensions": {"security": "none", "perf": {"max_high": -2}},
+                "max_medium": True,
+                "max_low": 1.5,
+                "dimensions": {"security": "none", "perf": {"max_high": -2, "max_low": "few"}},
             }
         )
         assert thresholds.max_critical is None
         assert thresholds.max_high is None
+        assert thresholds.max_medium is None
+        assert thresholds.max_low is None
         assert thresholds.dimensions["security"].is_empty()
         assert thresholds.dimensions["perf"].is_empty()
-        assert len(errors) == 4
+        # 4 global + perf.max_high + perf.max_low + security "must be a mapping"
+        assert len(errors) == 7
 
     def test_thresholds_non_mapping_rejected(self):
         _, errors = parse_thresholds(["nope"])

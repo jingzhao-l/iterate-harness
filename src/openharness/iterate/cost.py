@@ -108,6 +108,23 @@ class CostMeter:
         """Return a copy of the per-dimension cumulative token totals."""
         return dict(self._dimension_tokens)
 
+    def dimension_cost_usd(self, model: str) -> dict[str, float]:
+        """Estimate per-dimension USD from the reported token totals.
+
+        Reviewer subagents report a single running token total per dimension
+        (no input/output split), so the estimate bills the whole total at
+        the average of ``model``'s input and output prices. The result is
+        informational and deliberately NOT folded into
+        :attr:`total_cost_usd` (which stays on the metered main-loop
+        accounting).
+        """
+        in_price, out_price = price_for(model, self.price_overrides)
+        blended_price = (in_price + out_price) / 2
+        return {
+            dimension: round(tokens * blended_price / TOKENS_PER_MILLION, 6)
+            for dimension, tokens in self._dimension_tokens.items()
+        }
+
     @property
     def total_cost_usd(self) -> float:
         """Sum of every model's accumulated cost."""
@@ -124,14 +141,23 @@ class CostMeter:
         """Return a copy of per-model totals keyed by model name."""
         return dict(self._by_model)
 
-    def format_summary(self) -> str:
-        """Human-readable one-line cost summary (for TUI / slash commands)."""
+    def format_summary(self, dimension_model: str | None = None) -> str:
+        """Human-readable one-line cost summary (for TUI / slash commands).
+
+        ``dimension_model`` optionally names the reviewer model used to
+        estimate per-dimension USD (``dimension_cost_usd``); when omitted
+        the dimension lines stay token-only.
+        """
         parts = [
             f"{entry.model}: {entry.input_tokens:,} in / {entry.output_tokens:,} out "
             f"(${entry.cost_usd:.4f})"
             for entry in self._by_model.values()
         ]
+        dimension_usd = self.dimension_cost_usd(dimension_model) if dimension_model else {}
         for dimension, tokens in sorted(self._dimension_tokens.items()):
-            parts.append(f"dimension {dimension}: {tokens:,} tokens (reviewer-reported)")
+            line = f"dimension {dimension}: {tokens:,} tokens (reviewer-reported)"
+            if dimension in dimension_usd:
+                line += f" (~${dimension_usd[dimension]:.4f})"
+            parts.append(line)
         header = f"Total: {self.total_tokens:,} tokens, ${self.total_cost_usd:.4f}"
         return header + ("\n" + "\n".join(parts) if parts else "")

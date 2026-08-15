@@ -120,35 +120,42 @@ class DimensionResources:
         return self.model is None and self.concurrency is None and self.token_budget is None
 
 
+#: Severity metrics supported by threshold gates (field prefix ``max_``).
+SEVERITY_METRICS: tuple[str, ...] = ("critical", "high", "medium", "low")
+
+
 @dataclass
 class DimensionThresholds:
     """Per-dimension severity caps (unset = inherit the global threshold)."""
 
     max_critical: int | None = None
     max_high: int | None = None
+    max_medium: int | None = None
+    max_low: int | None = None
 
     def is_empty(self) -> bool:
-        return self.max_critical is None and self.max_high is None
+        return all(getattr(self, f"max_{metric}") is None for metric in SEVERITY_METRICS)
 
 
 @dataclass
 class ThresholdsConfig:
     """Project threshold gates evaluated on the final report.
 
-    ``max_critical`` / ``max_high`` cap the number of findings at or above
-    that severity; ``dimensions`` caps specific dimensions. ``None`` means
-    "no gate for this metric". Violations flip the final verdict to
-    ``needs_revision`` and fail the CI exit-code gate.
+    ``max_critical`` / ``max_high`` / ``max_medium`` / ``max_low`` cap the
+    number of findings at each severity; ``dimensions`` caps specific
+    dimensions. ``None`` means "no gate for this metric". Violations flip
+    the final verdict to ``needs_revision`` and fail the CI exit-code gate.
     """
 
     max_critical: int | None = None
     max_high: int | None = None
+    max_medium: int | None = None
+    max_low: int | None = None
     dimensions: dict[str, DimensionThresholds] = field(default_factory=dict)
 
     def is_empty(self) -> bool:
         return (
-            self.max_critical is None
-            and self.max_high is None
+            all(getattr(self, f"max_{metric}") is None for metric in SEVERITY_METRICS)
             and not self.dimensions
         )
 

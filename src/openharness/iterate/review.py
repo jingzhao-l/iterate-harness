@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 
 from .config_loader import resources_to_dict
 from .types import (
+    SEVERITY_METRICS,
     ConvergenceInfo,
     DimensionResources,
     IterateConfig,
@@ -417,10 +418,12 @@ def evaluate_threshold_gates(
     thresholds: ThresholdsConfig,
     findings: list[ReviewFinding],
 ) -> ThresholdGateResult:
-    """Evaluate ``thresholds.max_critical`` / ``max_high`` (+ per-dimension).
+    """Evaluate ``thresholds.max_<metric>`` caps (+ per-dimension).
 
-    A violation is ``{scope, metric, limit, actual}``; the gate passes only
-    when every configured cap holds. Pure and deterministic.
+    Metrics cover critical / high / medium / low; each counts findings at
+    exactly that severity. A violation is ``{scope, metric, limit,
+    actual}``; the gate passes only when every configured cap holds.
+    Pure and deterministic.
     """
     if thresholds.is_empty():
         return ThresholdGateResult(passed=True, violations=[])
@@ -433,20 +436,20 @@ def evaluate_threshold_gates(
                 {"scope": scope, "metric": metric, "limit": limit, "actual": actual}
             )
 
-    def _counts(scope_findings: list[ReviewFinding]) -> tuple[int, int]:
-        critical = sum(1 for f in scope_findings if f.severity == "critical")
-        high = sum(1 for f in scope_findings if f.severity == "high")
-        return critical, high
+    def _check_scope(scope: str, caps: object, scope_findings: list[ReviewFinding]) -> None:
+        counts = {metric: 0 for metric in SEVERITY_METRICS}
+        for finding in scope_findings:
+            if finding.severity in counts:
+                counts[finding.severity] += 1
+        for metric in SEVERITY_METRICS:
+            limit = getattr(caps, f"max_{metric}")
+            if limit is not None:
+                _check(scope, metric, limit, counts[metric])
 
-    global_critical, global_high = _counts(findings)
-    _check("global", "critical", thresholds.max_critical, global_critical)
-    _check("global", "high", thresholds.max_high, global_high)
-
+    _check_scope("global", thresholds, findings)
     for dimension, dim_thresholds in thresholds.dimensions.items():
         dim_findings = [f for f in findings if f.dimension == dimension]
-        dim_critical, dim_high = _counts(dim_findings)
-        _check(f"dimension:{dimension}", "critical", dim_thresholds.max_critical, dim_critical)
-        _check(f"dimension:{dimension}", "high", dim_thresholds.max_high, dim_high)
+        _check_scope(f"dimension:{dimension}", dim_thresholds, dim_findings)
 
     return ThresholdGateResult(passed=not violations, violations=violations)
 
