@@ -28,7 +28,7 @@ convergence policy are layered on top.
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-1.7.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.8.0-brightgreen" alt="Version">
 </p>
 
 ---
