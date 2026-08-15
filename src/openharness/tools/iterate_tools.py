@@ -169,6 +169,10 @@ class IterateReviewInput(BaseModel):
     report: dict[str, Any] | None = Field(
         default=None, description="The report JSON for meta-review"
     )
+    changed_files: list[str] | None = Field(
+        default=None,
+        description="Changed-only quick review: repo-relative delta files to pin the review scope",
+    )
 
 
 class IterateReviewTool(BaseTool):
@@ -203,6 +207,7 @@ class IterateReviewTool(BaseTool):
             mode=args.mode,  # type: ignore[arg-type]
             max_review_rounds=min(args.max_review_rounds, effective.config.max_rounds),
             known_intentional=_load_known_intentional(context),
+            changed_files=args.changed_files,
         )
         return _json_output({"plan": review.plan_to_dict(plan)})
 

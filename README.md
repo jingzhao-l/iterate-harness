@@ -30,7 +30,7 @@ convergence policy are layered on top.
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-0.5.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.6.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -51,13 +51,16 @@ oh
 CLI-first instead:
 
 ```bash
-oh iterate init        # detect the project, generate iterate.config.yaml
-oh iterate review      # headless dry-run (stream-json output available)
-oh iterate run         # headless autonomous fix loop
-oh iterate resume      # resume the last session
-oh iterate log         # tail the decision log
-oh iterate log --trend # cross-run finding trend (new/fixed/regressed/stubborn)
-oh iterate report      # render the final report (CI mode, see below)
+oh iterate init          # detect the project, generate iterate.config.yaml
+oh iterate review        # headless dry-run (stream-json output available)
+oh iterate review --changed # quick review: only files changed vs --ref (default HEAD)
+oh iterate run           # headless autonomous fix loop
+oh iterate resume        # resume the last session
+oh iterate log           # tail the decision log
+oh iterate log --trend   # cross-run finding trend (new/fixed/regressed/stubborn)
+oh iterate report        # render the final report (CI mode, see below)
+oh iterate batch a/ b/   # review multiple repos sequentially, rank worst-first
+oh iterate schedule add "0 9 * * 1-5" # daily changed-only quick review (cron, UTC)
 ```
 
 Set your API key first: `export ANTHROPIC_API_KEY=your_key` (OpenAI-compatible
@@ -79,6 +82,9 @@ providers are also supported — see `oh --help`).
 | **Finding trend library** | Every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `oh iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs |
 | **Breakpoint resume** | The TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings |
 | **CI / PR mode** | `oh iterate report --github --fail-on high` turns the final report into GitHub Actions annotations with a severity-based exit-code gate for PRs |
+| **Changed-only quick review** | `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing |
+| **Batch ranking** | `oh iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch |
+| **Scheduled review** | `oh iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library |
 | **Decision log** | Append-only `.iterate/decision-log.jsonl`: every round, fix, validation and triage decision is recorded |
 | **Project knowledge** | `ITERATE.md` project knowledge + per-project structured personalization (9 categories) |
 

@@ -2,13 +2,16 @@
 
 Subcommands:
 - ``/iterate`` or ``/iterate status`` — effective config + decision-log summary
-- ``/iterate review [--dry-run]`` — kick off the canonical dry-run loop
-- ``/iterate run`` — kick off the canonical normal-mode autonomous loop
+- ``/iterate review [--changed] [--ref <ref>]`` — kick off the canonical dry-run loop
+- ``/iterate run [--changed] [--ref <ref>]`` — kick off the canonical normal-mode autonomous loop
 - ``/iterate resume`` — continue the last finished run from its decision log
 - ``/iterate log [n]`` — tail the decision log (default 20 entries)
 - ``/iterate report`` — render the final report entry from the decision log
 - ``/iterate config`` — show the effective config
 - ``/iterate validate <command>`` — run one preconfigured validation command
+
+``--changed`` switches review/run into a changed-only quick review pinned to
+the files that differ from ``--ref`` (default ``HEAD``).
 
 Kickoffs submit a canonical prompt; the engine-level IterateLoopPolicy
 (auto-attached by QueryEngine) enforces convergence deterministically.
@@ -22,7 +25,14 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from openharness.iterate import ci_report, config_loader, decision_log, prompts, trend_store
+from openharness.iterate import (
+    ci_report,
+    config_loader,
+    decision_log,
+    git_scope,
+    prompts,
+    trend_store,
+)
 from openharness.iterate import validate as validate_mod
 from openharness.iterate.settings import IterateSettings, effective_review_rounds, project_config
 
@@ -79,6 +89,26 @@ def _format_log_tail(cwd: str, limit: int) -> str:
     return "\n".join(lines)
 
 
+def _parse_changed_flags(rest: list[str]) -> tuple[bool, str]:
+    """Parse ``--changed`` / ``--ref <ref>`` tokens from a subcommand tail."""
+    changed = "--changed" in rest
+    ref = git_scope.DEFAULT_REF
+    if "--ref" in rest:
+        index = rest.index("--ref")
+        if index + 1 < len(rest):
+            ref = rest[index + 1]
+    return changed, ref
+
+
+def _collect_changed_or_none(cwd: str, ref: str) -> list[str] | None:
+    """Collect the changed-file delta; ``None`` means flag absent or unusable.
+
+    Raises ``ValueError`` (propagated to the caller as a friendly message)
+    when the ref token is invalid.
+    """
+    return git_scope.collect_changed_files(cwd, ref) or None
+
+
 async def iterate_command_handler(args: str, context: CommandContext) -> CommandResult:
     """Handle ``/iterate [subcommand]``."""
     tokens = args.split()
@@ -93,18 +123,52 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
     if sub == "review":
         effective = config_loader.load_effective_config(cwd)
         rounds = _resolve_rounds(cwd)
-        kickoff = prompts.dry_run_kickoff(effective.config.goal, rounds)
+        changed, ref = _parse_changed_flags(rest)
+        changed_files: list[str] | None = None
+        if changed:
+            try:
+                changed_files = _collect_changed_or_none(cwd, ref)
+            except ValueError as exc:
+                return _result(message=f"Rejected: {exc}")
+            if changed_files is None:
+                return _result(
+                    message=(
+                        f"No changed files detected vs {ref} "
+                        "(clean tree / not a git repo) — nothing to quick-review."
+                    )
+                )
+        kickoff = prompts.dry_run_kickoff(effective.config.goal, rounds, changed_files)
+        scope_note = (
+            f"changed-only, {len(changed_files)} file(s)" if changed_files else "full codebase"
+        )
         return _result(
-            message=f"Starting dry-run review ({rounds} round cap)…",
+            message=f"Starting dry-run review ({scope_note}, {rounds} round cap)…",
             submit_prompt=kickoff,
         )
 
     if sub in ("run", "iterate", "loop"):
         effective = config_loader.load_effective_config(cwd)
         rounds = _resolve_rounds(cwd)
-        kickoff = prompts.normal_kickoff(effective.config.goal, rounds)
+        changed, ref = _parse_changed_flags(rest)
+        changed_files = None
+        if changed:
+            try:
+                changed_files = _collect_changed_or_none(cwd, ref)
+            except ValueError as exc:
+                return _result(message=f"Rejected: {exc}")
+            if changed_files is None:
+                return _result(
+                    message=(
+                        f"No changed files detected vs {ref} "
+                        "(clean tree / not a git repo) — nothing to quick-review."
+                    )
+                )
+        kickoff = prompts.normal_kickoff(effective.config.goal, rounds, changed_files)
+        scope_note = (
+            f"changed-only, {len(changed_files)} file(s)" if changed_files else "full codebase"
+        )
         return _result(
-            message=f"Starting autonomous iterate loop ({rounds} round cap)…",
+            message=f"Starting autonomous iterate loop ({scope_note}, {rounds} round cap)…",
             submit_prompt=kickoff,
         )
 
@@ -171,8 +235,9 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
         message=(
             "Usage: /iterate [status|config|review|run|resume|log|trend|report|validate]\n"
             "- status|config: effective config summary\n"
-            "- review: dry-run pure review (read-only, convergence-enforced)\n"
-            "- run: autonomous review-fix-validate loop\n"
+            "- review [--changed] [--ref <ref>]: dry-run pure review (read-only, convergence-enforced);\n"
+            "  --changed pins the loop to files changed vs <ref> (default HEAD)\n"
+            "- run [--changed] [--ref <ref>]: autonomous review-fix-validate loop (same flags)\n"
             "- resume: continue the last finished run from its decision log\n"
             "- log [n]: tail the decision log (or `log trend`)\n"
             "- trend: cross-run finding trend (new/fixed/stubborn)\n"

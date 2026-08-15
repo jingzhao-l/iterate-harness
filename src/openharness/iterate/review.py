@@ -301,18 +301,27 @@ def reviewer_task_prompt(
     output_language: str,
     already_known: list[ReviewFinding] | None = None,
     atomic_max_lines: int = DEFAULT_ATOMIC_MAX_LINES,
+    changed_files: list[str] | None = None,
 ) -> str:
     """Build the task prompt for one dimension's reviewer subagent.
 
     In dry-run mode, pass ``already_known`` (the findings from earlier
     rounds) so the reviewer hunts for NEW issues only — that is what makes
-    "反复审查" converge.
+    "反复审查" converge. Pass ``changed_files`` for changed-only quick
+    reviews: the reviewer then restricts itself to the listed delta.
     """
     parts: list[str] = [
         f'You are the "{dimension}" reviewer for the iterate review.',
         f"Goal: {goal}",
         f"Scope: {'entire codebase' if scope == 'full' else 'changed files only'}.",
     ]
+    if changed_files:
+        listing = "\n".join(f"- {path}" for path in changed_files)
+        parts.append(
+            "Changed files in this quick review (review ONLY these files; "
+            "touch other files solely when directly implicated by a change "
+            f"above):\n{listing}"
+        )
     if mode == "dry-run":
         parts.append(
             "MODE: dry-run / pure review. You MUST NOT modify, create, or delete "
@@ -368,28 +377,34 @@ def build_review_plan(
     mode: ReviewMode,
     max_review_rounds: int,
     known_intentional: list[KnownIntentional] | None = None,
+    changed_files: list[str] | None = None,
 ) -> ReviewPlan:
     """Build a review plan: rounds, dimensions, and per-dimension prompts.
 
     Used by the ``iterate_review`` tool's ``plan`` operation to give the
-    orchestrator a canonical spec.
+    orchestrator a canonical spec. When ``changed_files`` is non-empty the
+    plan switches to changed-only scope and embeds the file list into every
+    reviewer prompt (changed-only quick review).
     """
     language = "Chinese (中文)" if config.language == "zh" else "English"
+    safe_changed = [f for f in (changed_files or []) if isinstance(f, str) and f.strip()]
+    scope: Scope = "changed-only" if safe_changed else config.review.scope
     return ReviewPlan(
         mode=mode,
         goal=config.goal,
-        scope=config.review.scope,
+        scope=scope,
         dimensions=[
             DimensionPlan(
                 id=d,
                 reviewer_prompt=reviewer_task_prompt(
                     dimension=d,
                     goal=config.goal,
-                    scope=config.review.scope,
+                    scope=scope,
                     mode=mode,
                     already_known=[],
                     output_language=language,
                     atomic_max_lines=config.atomic.max_lines,
+                    changed_files=safe_changed or None,
                 ),
             )
             for d in config.dimensions

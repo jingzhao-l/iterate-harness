@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-15
+
+Unattended scenarios: changed-only quick review, multi-repo batch ranking, scheduled reviews.
+
+### Added
+
+- Changed-only quick review (`openharness.iterate.git_scope`): `oh iterate review --changed [--ref <ref>]` / `oh iterate run --changed` / `/iterate review --changed` collect the delta via `git diff --name-only <ref>` + `git status --porcelain` (renames contribute the new path, only on-disk files qualify, ref tokens are validated against an option-injection pattern, 200-file cap) and pin the entire loop to those files. The kickoff embeds the file list and directs the model to `iterate_review(operation="plan", changed_files=[...])`; the plan then flips to `changed-only` scope and every per-dimension reviewer prompt carries the explicit listing. `--clean-ok` exits 0 on a clean tree for scheduled runs.
+- Multi-repo batch review with ranking (`openharness.iterate.batch` + `oh iterate batch <repo...>`): reviews each repo sequentially through the headless print pipeline (per-repo stdout captured, one failing repo never kills the batch), then ranks all repos worst-first by a severity-weighted score (critical 10 / high 5 / medium 2 / low 1). Clean repos and errors are surfaced as their own statuses; `--json` emits machine-readable records, `--full` opts out of changed-only.
+- Scheduled quick review (`oh iterate schedule add <cron> [--ref] [--rounds] [--mode] [--timeout]`): registers the `iterate.review-changed` cron job (UTC, 5-field) that runs `oh iterate review --changed --clean-ok` in the repo; `schedule remove` / `schedule status` manage it, and cross-run new-vs-stubborn findings surface via the trend library (`oh iterate log --trend`). Cron jobs gained an optional per-job `timeout` field (default 300s, clamped to [1, 7200]s) honored by `execute_job`.
+
+### Changed
+
+- README (en + zh-CN): feature table gains changed-only quick review / batch ranking / scheduled review rows; the CLI block shows `--changed`, `oh iterate batch` and `oh iterate schedule add`.
+
 ## [0.5.0] - 2026-08-15
 
 Data accumulation + UX polish: finding trend library, componentized Esc menu, breakpoint resume.

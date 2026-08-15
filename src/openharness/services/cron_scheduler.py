@@ -33,6 +33,22 @@ logger = logging.getLogger(__name__)
 TICK_INTERVAL_SECONDS = 30
 """How often the scheduler checks for due jobs."""
 
+DEFAULT_JOB_TIMEOUT_SECONDS = 300
+"""Fallback job timeout when the registry entry carries no ``timeout``."""
+
+MAX_JOB_TIMEOUT_SECONDS = 7200
+"""Upper bound for a per-job ``timeout`` override (guards typos)."""
+
+
+def _job_timeout(job: dict[str, Any]) -> int:
+    """Resolve the job's timeout (clamped to ``[1, MAX]``; bad values fall
+    back to the default)."""
+    try:
+        value = int(job.get("timeout", DEFAULT_JOB_TIMEOUT_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_JOB_TIMEOUT_SECONDS
+    return max(1, min(value, MAX_JOB_TIMEOUT_SECONDS))
+
 
 # ---------------------------------------------------------------------------
 # History helpers
@@ -155,6 +171,7 @@ async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc)
 
     logger.info("Executing cron job %r: %s", name, command)
+    timeout = _job_timeout(job)
     try:
         process = await create_shell_subprocess(
             command,
@@ -164,7 +181,7 @@ async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         )
         stdout, stderr = await asyncio.wait_for(
             process.communicate(),
-            timeout=300,
+            timeout=timeout,
         )
     except asyncio.TimeoutError:
         try:
@@ -180,7 +197,7 @@ async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
             "returncode": -1,
             "status": "timeout",
             "stdout": "",
-            "stderr": "Job timed out after 300s",
+            "stderr": f"Job timed out after {timeout}s",
         }
         mark_job_run(name, success=False)
         append_history(entry)

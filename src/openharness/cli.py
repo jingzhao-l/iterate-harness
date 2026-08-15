@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -933,28 +933,166 @@ def _run_headless(kickoff: str) -> None:
     asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
 
 
+def _resolve_changed_files(
+    changed: bool, ref: str, clean_ok: bool = False
+) -> list[str] | None:
+    """Collect the changed-file delta for ``--changed``; exit early when empty.
+
+    ``clean_ok`` (scheduled runs) turns "no changes" into a graceful exit 0
+    instead of a failure, keeping cron history free of noise.
+    """
+    from openharness.iterate import git_scope
+
+    if not changed:
+        return None
+    try:
+        files = git_scope.collect_changed_files(str(Path.cwd()), ref)
+    except ValueError as exc:
+        print(f"Invalid --ref: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from exc
+    if not files:
+        print(f"No changed files vs {ref} (clean tree / not a git repo).")
+        raise typer.Exit(0 if clean_ok else 1)
+    print(f"Changed-only quick review: {len(files)} file(s) vs {ref}")
+    return files
+
+
 @iterate_app.command("review")
 def iterate_review(
     rounds: int = typer.Option(3, "--rounds", min=1, max=20, help="Review round cap"),
+    changed: bool = typer.Option(
+        False, "--changed", help="Quick review: only files changed vs --ref (default HEAD)"
+    ),
+    ref: str = typer.Option("HEAD", "--ref", help="Git ref used as the --changed baseline"),
+    clean_ok: bool = typer.Option(
+        False, "--clean-ok", help="Exit 0 when there are no changes (scheduled runs)"
+    ),
 ) -> None:
     """Dry-run pure review: multi-round convergence, read-only, audited report."""
     from openharness.iterate import prompts as iterate_prompts
     from openharness.iterate.config_loader import load_effective_config
 
     effective_goal = load_effective_config(str(Path.cwd())).config.goal
-    _run_headless(iterate_prompts.dry_run_kickoff(effective_goal, rounds))
+    changed_files = _resolve_changed_files(changed, ref, clean_ok)
+    _run_headless(iterate_prompts.dry_run_kickoff(effective_goal, rounds, changed_files))
 
 
 @iterate_app.command("run")
 def iterate_run(
     rounds: int = typer.Option(3, "--rounds", min=1, max=20, help="Loop round cap"),
+    changed: bool = typer.Option(
+        False, "--changed", help="Quick loop: only files changed vs --ref (default HEAD)"
+    ),
+    ref: str = typer.Option("HEAD", "--ref", help="Git ref used as the --changed baseline"),
+    clean_ok: bool = typer.Option(
+        False, "--clean-ok", help="Exit 0 when there are no changes (scheduled runs)"
+    ),
 ) -> None:
     """Autonomous loop: review -> fix atomic findings -> validate -> repeat."""
     from openharness.iterate import prompts as iterate_prompts
     from openharness.iterate.config_loader import load_effective_config
 
     effective_goal = load_effective_config(str(Path.cwd())).config.goal
-    _run_headless(iterate_prompts.normal_kickoff(effective_goal, rounds))
+    changed_files = _resolve_changed_files(changed, ref, clean_ok)
+    _run_headless(iterate_prompts.normal_kickoff(effective_goal, rounds, changed_files))
+
+
+schedule_app = typer.Typer(help="Manage the scheduled changed-only quick review (cron)")
+
+
+@schedule_app.command("add")
+def iterate_schedule_add(
+    schedule: str = typer.Argument(..., help="5-field cron expression (UTC)"),
+    ref: str = typer.Option("HEAD", "--ref", help="Git ref used as the changed baseline"),
+    rounds: int = typer.Option(3, "--rounds", min=1, max=20, help="Review round cap"),
+    mode: str = typer.Option("dry-run", "--mode", help="dry-run|normal"),
+    timeout: int = typer.Option(
+        3600, "--timeout", min=1, max=7200, help="Per-run timeout in seconds"
+    ),
+) -> None:
+    """Register the scheduled quick-review cron job for this repo (UTC)."""
+    from openharness.iterate import batch as iterate_batch
+
+    try:
+        job = iterate_batch.install_schedule(
+            cwd=str(Path.cwd()),
+            schedule=schedule,
+            ref=ref,
+            rounds=rounds,
+            mode=mode,
+            timeout=timeout,
+        )
+    except ValueError as exc:
+        print(f"Rejected: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from exc
+    print(f"Scheduled {job['name']}: '{schedule}' (UTC)")
+    print(f"  command: {job['command']}")
+    print(f"  cwd: {job['cwd']}")
+    print(f"  next run: {job.get('next_run', '?')}")
+    print("Start the scheduler with `oh cron start` if it is not running.")
+
+
+@schedule_app.command("remove")
+def iterate_schedule_remove() -> None:
+    """Remove the scheduled quick-review cron job."""
+    from openharness.iterate import batch as iterate_batch
+
+    if iterate_batch.remove_schedule():
+        print("Scheduled quick-review job removed.")
+    else:
+        print("No scheduled quick-review job was registered.")
+        raise typer.Exit(1)
+
+
+@schedule_app.command("status")
+def iterate_schedule_status() -> None:
+    """Show the scheduled quick-review job and its last execution."""
+    from openharness.iterate import batch as iterate_batch
+
+    info = iterate_batch.schedule_status()
+    if info is None:
+        print("No scheduled quick-review job registered (`oh iterate schedule add ...`).")
+        raise typer.Exit(1)
+    job = info["job"]
+    print(f"job: {job['name']}  enabled={job.get('enabled')}")
+    print(f"schedule: {job['schedule']} (UTC)  timeout: {job.get('timeout', 300)}s")
+    print(f"command: {job['command']}")
+    print(f"cwd: {job['cwd']}")
+    print(f"next run: {job.get('next_run', '?')}  last run: {job.get('last_run', '-')}")
+    last = info.get("lastRun")
+    if last:
+        print(
+            f"last execution: {last.get('status')} (rc={last.get('returncode')}) "
+            f"at {last.get('started_at')}"
+        )
+
+
+iterate_app.add_typer(schedule_app, name="schedule")
+
+
+@iterate_app.command("batch")
+def iterate_batch_review(
+    repos: list[str] = typer.Argument(..., help="Repository paths (reviewed sequentially)"),
+    ref: str = typer.Option("HEAD", "--ref", help="Git ref used as the --changed baseline"),
+    rounds: int = typer.Option(3, "--rounds", min=1, max=20, help="Review round cap"),
+    full: bool = typer.Option(False, "--full", help="Full-codebase review (skip changed-only)"),
+    mode: str = typer.Option("dry-run", "--mode", help="dry-run|normal"),
+    as_json: bool = typer.Option(False, "--json", help="Emit the ranking as JSON"),
+) -> None:
+    """Review multiple repos sequentially and rank them by findings (worst first)."""
+    import asyncio
+
+    from openharness.iterate import batch as iterate_batch
+
+    if mode not in ("dry-run", "normal"):
+        raise typer.BadParameter("mode must be dry-run|normal")
+    records = asyncio.run(
+        iterate_batch.run_batch(repos=repos, ref=ref, rounds=rounds, full=full, mode=mode)
+    )
+    if as_json:
+        print(json.dumps(iterate_batch.rank_records(records), ensure_ascii=False, indent=2))
+    else:
+        print(iterate_batch.render_ranking(records))
 
 
 @iterate_app.command("resume")

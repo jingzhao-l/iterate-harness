@@ -10,6 +10,8 @@ with convergence enforced deterministically by the engine-level
 
 from __future__ import annotations
 
+import json
+
 ITERATE_SKILL_PROMPT = """## Iterate Workflow (autonomous code iteration)
 
 You have the iterate harness installed, which registers these tools:
@@ -98,11 +100,34 @@ architectural findings.
 """
 
 
-def dry_run_kickoff(goal: str, max_rounds: int) -> str:
+def changed_scope_clause(changed_files: list[str] | None) -> str:
+    """Extra instruction block for changed-only quick reviews.
+
+    Embeds the delta file list and directs the model to forward it to
+    ``iterate_review(operation="plan", changed_files=[...])`` so every
+    reviewer prompt carries the same restricted scope.
+    """
+    if not changed_files:
+        return ""
+    listing = json.dumps(changed_files, ensure_ascii=False)
+    return (
+        " This is a CHANGED-ONLY quick review: restrict the entire loop to "
+        "the files below (relative to the repo root). Call "
+        f'iterate_review(operation="plan", changed_files={listing}) so the '
+        "review plan pins this exact scope; fix findings (normal mode) also "
+        "stay within these files. Changed files:\n"
+        + "\n".join(f"- {path}" for path in changed_files)
+    )
+
+
+def dry_run_kickoff(
+    goal: str, max_rounds: int, changed_files: list[str] | None = None
+) -> str:
     """First-turn prompt that boots the canonical dry-run loop."""
     return (
         f"Run an iterate dry-run review of this project now. Goal: {goal}. "
-        f"Max review rounds: {max_rounds}. Follow the dry-run canonical loop "
+        f"Max review rounds: {max_rounds}.{changed_scope_clause(changed_files)} "
+        "Follow the dry-run canonical loop "
         "exactly: plan via iterate_review, parallel per-dimension review, "
         "deterministic aggregate each round, stop on convergence (0 new "
         "findings) or the round cap, then meta-review the final report and "
@@ -110,11 +135,14 @@ def dry_run_kickoff(goal: str, max_rounds: int) -> str:
     )
 
 
-def normal_kickoff(goal: str, max_rounds: int) -> str:
+def normal_kickoff(
+    goal: str, max_rounds: int, changed_files: list[str] | None = None
+) -> str:
     """First-turn prompt that boots the canonical normal-mode loop."""
     return (
         f"Run the iterate autonomous loop on this project now. Goal: {goal}. "
-        f"Max rounds: {max_rounds}. Follow the normal-mode canonical loop "
+        f"Max rounds: {max_rounds}.{changed_scope_clause(changed_files)} "
+        "Follow the normal-mode canonical loop "
         "exactly: config + plan, parallel per-dimension review of the current "
         "state, deterministic aggregate, fix ONLY atomic findings with "
         "minimal changes, validate every round via iterate_validate, roll "
