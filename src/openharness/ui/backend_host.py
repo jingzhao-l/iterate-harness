@@ -25,6 +25,7 @@ from openharness.engine.stream_events import (
     AssistantTurnComplete,
     CompactProgressEvent,
     ErrorEvent,
+    ReviewProgressEvent,
     StatusEvent,
     StreamEvent,
     ToolExecutionCompleted,
@@ -248,6 +249,29 @@ class ReactBackendHost:
         async def _render_event(event: StreamEvent) -> None:
             if isinstance(event, AssistantTextDelta):
                 await self._emit(BackendEvent(type="assistant_delta", message=event.text))
+                return
+            if isinstance(event, ReviewProgressEvent):
+                await self._emit(
+                    BackendEvent(
+                        type="review_progress",
+                        review_mode=event.mode,
+                        review_round=event.round,
+                        review_new_findings=event.new_findings,
+                        review_total_findings=event.total_findings,
+                        review_per_dimension=dict(event.per_dimension),
+                        review_converged=event.converged,
+                        review_cost_usd=event.cost_usd,
+                        review_input_tokens=event.input_tokens,
+                        review_output_tokens=event.output_tokens,
+                        message=(
+                            f"iterate {event.mode} round {event.round}: "
+                            f"+{event.new_findings} findings "
+                            f"({event.total_findings} total) "
+                            f"cost ${event.cost_usd:.4f}"
+                            + (" — converged" if event.converged else "")
+                        ),
+                    )
+                )
                 return
             if isinstance(event, CompactProgressEvent):
                 await self._emit(

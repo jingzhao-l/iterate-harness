@@ -290,6 +290,60 @@ async def test_backend_host_emits_compact_progress_event(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_backend_host_emits_review_progress_event(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+
+    from openharness.engine.stream_events import ReviewProgressEvent
+
+    host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
+    host._bundle = await build_runtime(api_client=StaticApiClient("unused"))
+    events = []
+
+    async def _emit(event):
+        events.append(event)
+
+    async def _fake_handle_line(bundle, line, print_system, render_event, clear_output):
+        del bundle, line, print_system, clear_output
+        await render_event(
+            ReviewProgressEvent(
+                round=2,
+                new_findings=1,
+                total_findings=5,
+                per_dimension={"security": 3, "performance": 2},
+                converged=False,
+                input_tokens=1200,
+                output_tokens=300,
+                cost_usd=0.0123,
+                mode="dry-run",
+            )
+        )
+        return True
+
+    monkeypatch.setattr("openharness.ui.backend_host.handle_line", _fake_handle_line)
+    host._emit = _emit  # type: ignore[method-assign]
+    await start_runtime(host._bundle)
+    try:
+        should_continue = await host._process_line("hi")
+    finally:
+        await close_runtime(host._bundle)
+
+    assert should_continue is True
+    match = [event for event in events if event.type == "review_progress"]
+    assert match, f"no review_progress event in {[e.type for e in events]}"
+    event = match[0]
+    assert event.review_mode == "dry-run"
+    assert event.review_round == 2
+    assert event.review_new_findings == 1
+    assert event.review_total_findings == 5
+    assert event.review_per_dimension == {"security": 3, "performance": 2}
+    assert event.review_converged is False
+    assert abs(event.review_cost_usd - 0.0123) < 1e-9
+    assert "round 2" in (event.message or "")
+
+
+@pytest.mark.asyncio
 async def test_backend_host_surfaces_query_errors(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))

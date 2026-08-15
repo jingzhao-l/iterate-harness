@@ -190,6 +190,7 @@ async def run_print_mode(
         AssistantTurnComplete,
         CompactProgressEvent,
         ErrorEvent,
+        ReviewProgressEvent,
         StatusEvent,
         ToolExecutionCompleted,
         ToolExecutionStarted,
@@ -276,6 +277,31 @@ async def run_print_mode(
                         "trigger": event.trigger,
                         "attempt": event.attempt,
                         "message": event.message,
+                    }
+                    print(json.dumps(obj), flush=True)
+                    events_list.append(obj)
+            elif isinstance(event, ReviewProgressEvent):
+                summary = (
+                    f"iterate {event.mode} round {event.round}: "
+                    f"+{event.new_findings} findings ({event.total_findings} total) "
+                    f"cost ${event.cost_usd:.4f}"
+                    + (" — converged" if event.converged else "")
+                )
+                if output_format == "text":
+                    print(summary, file=sys.stderr)
+                elif output_format == "stream-json":
+                    obj = {
+                        "type": "review_progress",
+                        "mode": event.mode,
+                        "round": event.round,
+                        "new_findings": event.new_findings,
+                        "total_findings": event.total_findings,
+                        "per_dimension": event.per_dimension,
+                        "converged": event.converged,
+                        "input_tokens": event.input_tokens,
+                        "output_tokens": event.output_tokens,
+                        "cost_usd": event.cost_usd,
+                        "message": summary,
                     }
                     print(json.dumps(obj), flush=True)
                     events_list.append(obj)

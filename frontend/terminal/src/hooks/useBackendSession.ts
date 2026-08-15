@@ -7,6 +7,7 @@ import type {
 	BridgeSessionSnapshot,
 	FrontendConfig,
 	McpServerSnapshot,
+	ReviewProgressSnapshot,
 	SelectOptionPayload,
 	SwarmNotificationSnapshot,
 	SwarmTeammateSnapshot,
@@ -37,6 +38,8 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 	const [todoMarkdown, setTodoMarkdown] = useState('');
 	const [swarmTeammates, setSwarmTeammates] = useState<SwarmTeammateSnapshot[]>([]);
 	const [swarmNotifications, setSwarmNotifications] = useState<SwarmNotificationSnapshot[]>([]);
+	const [reviewProgress, setReviewProgress] = useState<ReviewProgressSnapshot | null>(null);
+	const [reviewRoundTrend, setReviewRoundTrend] = useState<number[]>([]);
 	const statusRef = useRef<Record<string, unknown>>({});
 	const childRef = useRef<ChildProcessWithoutNullStreams | null>(null);
 	const sentInitialPrompt = useRef(false);
@@ -417,6 +420,22 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			}
 			return;
 		}
+		if (event.type === 'review_progress') {
+			const newFindings = Math.max(0, Number(event.review_new_findings ?? 0));
+			startTransition(() => {
+				setReviewProgress({
+					mode: String(event.review_mode ?? 'dry-run'),
+					round: Number(event.review_round ?? 0),
+					newFindings,
+					totalFindings: Number(event.review_total_findings ?? 0),
+					perDimension: event.review_per_dimension ?? {},
+					converged: Boolean(event.review_converged),
+					costUsd: Number(event.review_cost_usd ?? 0),
+				});
+				setReviewRoundTrend((prev) => [...prev, newFindings].slice(-12));
+			});
+			return;
+		}
 		if (event.type === 'plan_mode_change') {
 			if (event.plan_mode != null) {
 				startTransition(() => {
@@ -451,12 +470,14 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			todoMarkdown,
 			swarmTeammates,
 			swarmNotifications,
+			reviewProgress,
+			reviewRoundTrend,
 			setModal,
 			setSelectRequest,
 			setBusy,
 			setBusyLabel,
 			sendRequest,
 		}),
-		[assistantBuffer, bridgeSessions, busy, busyLabel, commands, mcpServers, modal, ready, selectRequest, status, swarmNotifications, swarmTeammates, tasks, todoMarkdown, transcript]
+		[assistantBuffer, bridgeSessions, busy, busyLabel, commands, mcpServers, modal, ready, reviewProgress, reviewRoundTrend, selectRequest, status, swarmNotifications, swarmTeammates, tasks, todoMarkdown, transcript]
 	);
 }

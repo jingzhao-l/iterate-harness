@@ -233,6 +233,119 @@ class TestPermissionIntegration:
         assert not read.allowed
 
 
+class TestIteratePermissionWiring:
+    """build_permission_checker auto-assembles iterate settings into the layer."""
+
+    def test_default_protected_paths_deny_reads_and_writes(self):
+        from openharness.permissions.checker import build_permission_checker
+
+        settings = Settings()  # default iterate.protected_paths (.env, *.key, ...)
+        checker = build_permission_checker(settings)
+        for path in ("/proj/.env", "/.env", "/proj/sub/server.key", "/proj/credentials.json"):
+            write = checker.evaluate("file_write", is_read_only=False, file_path=path)
+            assert not write.allowed and not write.requires_confirmation, path
+            assert "deny rule" in write.reason, path
+            read = checker.evaluate("file_read", is_read_only=True, file_path=path)
+            assert not read.allowed, path
+
+    def test_directory_scoped_protected_path_normalizes(self):
+        from openharness.permissions.checker import build_permission_checker
+
+        settings = Settings.model_validate({"iterate": {"protected_paths": ["secrets/*"]}})
+        checker = build_permission_checker(settings)
+        decision = checker.evaluate("file_write", is_read_only=False, file_path="/proj/secrets/token.txt")
+        assert not decision.allowed
+        # Directory root itself (grep/glob style) is blocked too.
+        decision = checker.evaluate("grep", is_read_only=True, file_path="/proj/secrets")
+        assert not decision.allowed
+
+    def test_disabled_iterate_passes_permission_settings_through(self):
+        from openharness.permissions.checker import build_permission_checker
+
+        settings = Settings.model_validate({"iterate": {"enabled": False}})
+        checker = build_permission_checker(settings)
+        # No iterate deny wiring: default mode falls back to confirmation flow.
+        decision = checker.evaluate("file_write", is_read_only=False, file_path="/proj/.env")
+        assert not decision.allowed
+        assert decision.requires_confirmation
+        assert "deny rule" not in decision.reason
+
+    def test_user_path_rules_are_never_duplicated_or_mutated(self):
+        from openharness.permissions.checker import build_permission_checker
+
+        settings = Settings.model_validate({"iterate": {"protected_paths": [".env", "*.pem"]}})
+        settings.permission.path_rules.append(PathRuleConfig(pattern="*/.env", allow=False))
+        original_rules = list(settings.permission.path_rules)
+        checker = build_permission_checker(settings)
+        env_rules = [r for r in checker._path_rules if r.pattern == "*/.env"]
+        assert len(env_rules) == 1
+        assert any(r.pattern == "*/*.pem" and not r.allow for r in checker._path_rules)
+        # Source settings untouched (factory works on a deep copy).
+        assert settings.permission.path_rules == original_rules
+
+    def test_forbidden_fix_patterns_block_matching_write_payloads(self):
+        from openharness.permissions.checker import build_permission_checker
+
+        settings = Settings.model_validate(
+            {"iterate": {"forbidden_fix_patterns": [r"AKIA[A-Z0-9]{16}"]}}
+        )
+        checker = build_permission_checker(settings)
+        blocked = checker.evaluate(
+            "file_write", is_read_only=False, file_path="/proj/app.py",
+            content='key = "AKIAIOSFODNN7EXAMPLE"',
+        )
+        assert not blocked.allowed and not blocked.requires_confirmation
+        assert "forbidden fix pattern" in blocked.reason
+        clean = checker.evaluate(
+            "file_write", is_read_only=False, file_path="/proj/app.py",
+            content='key = "helloworld"',
+        )
+        assert clean.requires_confirmation  # default-mode flow, not hard-denied
+
+    def test_forbidden_boundary_precedes_tool_allowlist(self):
+        from openharness.permissions.checker import build_permission_checker
+
+        settings = Settings.model_validate(
+            {
+                "iterate": {"forbidden_fix_patterns": [r"sk-[a-z]+"]},
+                "permission": {"allowed_tools": ["file_write"]},
+            }
+        )
+        checker = build_permission_checker(settings)
+        decision = checker.evaluate(
+            "file_write", is_read_only=False, content="token = sk-abc123"
+        )
+        assert not decision.allowed
+        assert "forbidden fix pattern" in decision.reason
+
+    def test_invalid_forbidden_regex_is_skipped_valid_still_enforced(self):
+        from openharness.permissions.checker import build_permission_checker
+
+        settings = Settings.model_validate(
+            {"iterate": {"forbidden_fix_patterns": ["[unclosed", r"BEGIN PRIVATE KEY"]}}
+        )
+        checker = build_permission_checker(settings)
+        decision = checker.evaluate(
+            "file_edit", is_read_only=False, content="-----BEGIN PRIVATE KEY-----"
+        )
+        assert not decision.allowed
+        assert "BEGIN PRIVATE KEY" in decision.reason
+
+    def test_engine_extracts_write_payload_for_mutating_tools_only(self):
+        from openharness.engine.query import _extract_permission_content
+
+        assert _extract_permission_content({"content": "body"}, object()) == "body"
+        assert _extract_permission_content({"new_string": "edit"}, object()) == "edit"
+        assert _extract_permission_content({"diff": "+x"}, object()) == "+x"
+        assert _extract_permission_content({"patch": "-y"}, object()) == "-y"
+        assert _extract_permission_content({"file_path": "/a"}, object()) is None
+
+        class _Parsed:
+            content = "from-model"
+
+        assert _extract_permission_content({}, _Parsed()) == "from-model"
+
+
 class TestClaudemdInjection:
     def test_iterate_md_is_discovered_like_claude_md(self, tmp_path):
         from openharness.prompts.claudemd import discover_claude_md_files, load_claude_md_prompt
@@ -276,7 +389,7 @@ class TestSettingsAndCompact:
 
 
 class TestRegistration:
-    def test_five_iterate_tools_in_default_registry(self):
+    def test_six_iterate_tools_in_default_registry(self):
         registry = create_default_tool_registry()
         for name in (
             "iterate_config",
@@ -284,6 +397,7 @@ class TestRegistration:
             "iterate_review",
             "iterate_decision_log",
             "iterate_context",
+            "iterate_triage",
         ):
             assert registry.get(name) is not None, f"missing tool {name}"
 

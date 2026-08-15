@@ -12,6 +12,7 @@ findings converge, then (normal mode) atomic fixes validated each round.
 - `iterate_decision_log` — append-only decision log (.iterate/decision-log.jsonl)
 - `iterate_context` — SKILL.md / ITERATE.md / personalization context
 - `iterate_review` — deterministic engine: plan / aggregate / meta-review
+- `iterate_triage` — interactive y/n/a findings triage; `a` persists to known_intentional
 
 ## Modes
 - **dry-run**: read-only review. Multi-round convergence, auditable report,
@@ -35,6 +36,9 @@ findings converge, then (normal mode) atomic fixes validated each round.
 5. `iterate_review(operation="meta-review", report=...)` audits the report;
    verdict is `approved` only when every consistency check passes.
 6. Append exactly ONE `report` entry to the decision log.
+7. Offer `iterate_triage(findings=[...])` when the user wants to accept /
+   reject / permanently ignore individual findings — `a` answers are
+   persisted to known_intentional and filtered from future rounds.
 
 ## Findings schema
 { "dimension", "file" (relative), "line"?, "severity": critical|high|medium|low,

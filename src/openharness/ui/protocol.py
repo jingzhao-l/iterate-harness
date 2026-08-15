@@ -83,6 +83,7 @@ class BackendEvent(BaseModel):
         "todo_update",
         "plan_mode_change",
         "swarm_status",
+        "review_progress",
         "error",
         "shutdown",
     ]
@@ -109,6 +110,16 @@ class BackendEvent(BaseModel):
     plan_mode: str | None = None
     swarm_teammates: list[dict[str, Any]] | None = None
     swarm_notifications: list[dict[str, Any]] | None = None
+    # review_progress payload (iterate convergence dashboard)
+    review_mode: str | None = None
+    review_round: int | None = None
+    review_new_findings: int | None = None
+    review_total_findings: int | None = None
+    review_per_dimension: dict[str, int] | None = None
+    review_converged: bool | None = None
+    review_cost_usd: float | None = None
+    review_input_tokens: int | None = None
+    review_output_tokens: int | None = None
 
     @classmethod
     def ready(

@@ -1,10 +1,30 @@
 # Changelog
 
-All notable changes to OpenHarness should be recorded in this file.
+All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-08-15
+
+First iterate-harness release: a focused fork of OpenHarness v0.1.9 dedicated
+to the iterate review/fix loop (semantic layer ported from the iterate skill).
+
+### Added
+
+- `openharness.iterate` semantic layer (Python port of the TS skill): deterministic review engine (plan / aggregate / meta-review), Master+Overrides config loader, EXACT-match validation runner, append-only decision log, per-project structured personalization, cost meter (tokens → USD), git worktree isolation flow, and canonical dry-run/normal loop prompts.
+- Six `iterate_*` tools registered in the kernel tool registry: `iterate_config`, `iterate_validate`, `iterate_review`, `iterate_decision_log`, `iterate_context`, `iterate_triage`.
+- Engine-level `IterateLoopPolicy` in the kernel query loop: deterministic convergence enforcement, round caps, next-round steering, `ReviewProgressEvent` emission, and cost accumulation — auto-attached when `settings.iterate.enabled` is on.
+- `review_progress` protocol event wired through the React TUI backend host: live convergence dashboard panel (per-round findings trend, per-dimension counts, running USD cost, converged badge); print mode emits the same progress to stderr / stream-json.
+- `iterate_triage` interactive findings triage: y (fix) / n (skip) / a (always-ignore); `a` answers persist to `known_intentional` personalization and are filtered from future review rounds; headless sessions apply a configured default decision.
+- `protected_paths` and `forbidden_fix_patterns` from `Settings.iterate` are auto-assembled into the permission layer via `build_permission_checker` (deny path rules normalized to absolute-path globs + write-payload regex boundary evaluated before tool allowlists).
+- `/iterate` slash command (status / review / run / log / config / validate) and `oh iterate init|review|run|resume|log` CLI subcommands; bundled `iterate` skill.
+- `ITERATE.md` project knowledge discovery alongside CLAUDE.md; iterate state survives microcompaction via a dedicated compact attachment.
+
+### Changed
+
+- Fork identity: package renamed to `iterate-harness` with an `iterate-harness` console script; README/README.zh-CN rewritten for the fork; install.sh / install.ps1 / install_dev.sh install from `jingzhao-l/iterate-harness` (git clone + editable), register `oh` + `iterate-harness`, and no longer reference the removed `ohmo` / channels stack.
 
 ## [0.1.9] - 2026-05-07
 

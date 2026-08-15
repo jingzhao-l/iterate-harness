@@ -1,4 +1,4 @@
-"""Tests for the five iterate tools (BaseTool contract level)."""
+"""Tests for the six iterate tools (BaseTool contract level)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from openharness.tools.iterate_tools import (
     IterateContextTool,
     IterateDecisionLogTool,
     IterateReviewTool,
+    IterateTriageTool,
     IterateValidateTool,
 )
 from openharness.tools.iterate_tools import IterateValidateInput as IterateValidateInputModel
@@ -273,3 +274,160 @@ class TestIterateContextTool:
 )
 def test_read_only_tools_declared(tool):
     assert tool.is_read_only(None) is True  # type: ignore[arg-type]
+
+
+TRIAGE_FINDINGS = [
+    {
+        "file": "src/auth.py",
+        "dimension": "security",
+        "severity": "high",
+        "summary": "token logged in plaintext",
+        "line": 42,
+    },
+    {
+        "file": "src/api.py",
+        "dimension": "performance",
+        "severity": "medium",
+        "summary": "N+1 query in list handler",
+        "line": 7,
+    },
+    {
+        "file": "src/auth.py",
+        "dimension": "security",
+        "severity": "low",
+        "summary": "broad except swallows errors",
+    },
+]
+
+
+def make_triage_input(**overrides):
+    from openharness.tools.iterate_tools import IterateTriageInput
+
+    payload = {"findings": TRIAGE_FINDINGS, "round": 2}
+    payload.update(overrides)
+    return IterateTriageInput.model_validate(payload)
+
+
+class TestIterateTriageTool:
+    async def test_headless_applies_default_to_all(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))  # isolate personalization store
+        result = await run_tool(
+            IterateTriageTool(), make_triage_input(default="fix"), make_context(tmp_path)
+        )
+        payload = json.loads(result.output)
+        assert result.is_error is False
+        assert payload["triage"]["interactive"] is False
+        assert payload["triage"]["counts"] == {"fix": 3, "skip": 0, "ignore": 0}
+        assert payload["persistedKnownIntentional"] == 0
+
+    async def test_headless_ignore_persists_known_intentional(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = await run_tool(
+            IterateTriageTool(),
+            make_triage_input(default="ignore", note="legacy API contract"),
+            make_context(tmp_path),
+        )
+        payload = json.loads(result.output)
+        assert payload["persistedKnownIntentional"] == 3
+        from openharness.iterate import personalization
+
+        known = personalization.known_intentional_of(None, tmp_path)
+        assert len(known) == 3
+        assert all(k.reason == "legacy API contract" for k in known)
+        assert known[0].file == "src/auth.py" and known[0].dimension == "security"
+        # Decision log got one triage decision entry on round 2.
+        from openharness.iterate import decision_log
+
+        entries = decision_log.read_entries(tmp_path)
+        triage_entries = [e for e in entries if e.type == "decision" and (e.data or {}).get("kind") == "triage"]
+        assert len(triage_entries) == 1
+        assert triage_entries[0].round == 2
+
+    async def test_interactive_y_n_a_walkthrough(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        answers = iter(["y", "n", "a."])
+
+        async def fake_ask(question: str) -> str:
+            assert "Triage finding" in question
+            return next(answers)
+
+        context = ToolExecutionContext(cwd=tmp_path, metadata={"ask_user_prompt": fake_ask})
+        result = await run_tool(IterateTriageTool(), make_triage_input(), context)
+        payload = json.loads(result.output)
+        assert payload["triage"]["interactive"] is True
+        assert payload["triage"]["counts"] == {"fix": 1, "skip": 1, "ignore": 1}
+        assert payload["triage"]["fixIndexes"] == [1]
+        assert payload["triage"]["skipIndexes"] == [2]
+        assert payload["triage"]["ignoreIndexes"] == [3]
+        assert payload["persistedKnownIntentional"] == 1
+
+    async def test_interactive_unrecognized_answer_falls_back_to_default(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        async def fake_ask(question: str) -> str:
+            return "maybe??"
+
+        context = ToolExecutionContext(cwd=tmp_path, metadata={"ask_user_prompt": fake_ask})
+        result = await run_tool(
+            IterateTriageTool(), make_triage_input(default="skip"), context
+        )
+        payload = json.loads(result.output)
+        assert payload["triage"]["counts"] == {"fix": 0, "skip": 3, "ignore": 0}
+
+    async def test_ignore_dedupes_against_existing_entries(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        first = await run_tool(
+            IterateTriageTool(), make_triage_input(default="ignore"), make_context(tmp_path)
+        )
+        assert json.loads(first.output)["persistedKnownIntentional"] == 3
+        second = await run_tool(
+            IterateTriageTool(), make_triage_input(default="ignore"), make_context(tmp_path)
+        )
+        assert json.loads(second.output)["persistedKnownIntentional"] == 0
+
+    async def test_ignored_finding_is_filtered_from_future_reviews(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        await run_tool(
+            IterateTriageTool(),
+            make_triage_input(default="ignore", note="intentional"),
+            make_context(tmp_path),
+        )
+        from openharness.iterate import personalization, review
+        from openharness.iterate.types import ReviewFinding
+
+        findings = [
+            ReviewFinding(
+                dimension="security",
+                file="src/auth.py",
+                severity="high",
+                summary="token logged in plaintext",
+                failure_scenario="leak",
+                suggested_fix="redact",
+                is_atomic=True,
+                line=42,
+            )
+        ]
+        known = personalization.known_intentional_of(None, tmp_path)
+        assert review.filter_known_intentional(findings, known) == []
+
+    async def test_too_many_findings_rejected(self, tmp_path):
+        from openharness.tools.iterate_tools import IterateTriageInput
+
+        findings = [
+            {"file": "a.py", "dimension": "d", "summary": "s", "line": i}
+            for i in range(1, 52)
+        ]
+        result = await run_tool(
+            IterateTriageTool(),
+            IterateTriageInput.model_validate({"findings": findings}),
+            make_context(tmp_path),
+        )
+        assert result.is_error is True
+        assert "too many findings" in json.loads(result.output)["error"]
+
+    def test_is_not_read_only(self):
+        assert IterateTriageTool().is_read_only(None) is False  # type: ignore[arg-type]

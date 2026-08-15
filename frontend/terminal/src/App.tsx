@@ -5,6 +5,7 @@ import {CommandPicker} from './components/CommandPicker.js';
 import {ConversationView} from './components/ConversationView.js';
 import {ModalHost} from './components/ModalHost.js';
 import {PromptInput} from './components/PromptInput.js';
+import {ReviewProgressPanel} from './components/ReviewProgressPanel.js';
 import {SelectModal, type SelectOption} from './components/SelectModal.js';
 import {StatusBar} from './components/StatusBar.js';
 import {SwarmPanel} from './components/SwarmPanel.js';
@@ -77,6 +78,8 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const deferredTodoMarkdown = useDeferredValue(session.todoMarkdown);
 	const deferredSwarmTeammates = useDeferredValue(session.swarmTeammates);
 	const deferredSwarmNotifications = useDeferredValue(session.swarmNotifications);
+	const deferredReviewProgress = useDeferredValue(session.reviewProgress);
+	const deferredReviewRoundTrend = useDeferredValue(session.reviewRoundTrend);
 
 	useEffect(() => {
 		const nextTheme = session.status.theme;
@@ -448,9 +451,14 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			) : null}
 
 			{/* Todo panel */}
-			{session.ready && deferredTodoMarkdown ? (
-				<TodoPanel markdown={deferredTodoMarkdown} />
-			) : null}
+		{session.ready && deferredTodoMarkdown ? (
+			<TodoPanel markdown={deferredTodoMarkdown} />
+		) : null}
+
+		{/* Iterate review convergence dashboard */}
+		{session.ready && deferredReviewProgress ? (
+			<ReviewProgressPanel progress={deferredReviewProgress} roundTrend={deferredReviewRoundTrend} />
+		) : null}
 
 			{/* Swarm panel */}
 			{session.ready && (deferredSwarmTeammates.length > 0 || deferredSwarmNotifications.length > 0) ? (

@@ -1,9 +1,9 @@
 """Built-in tool registration."""
 
-from openharness.tools.ask_user_question_tool import AskUserQuestionTool
 from openharness.tools.agent_tool import AgentTool
-from openharness.tools.bash_tool import BashTool
+from openharness.tools.ask_user_question_tool import AskUserQuestionTool
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
+from openharness.tools.bash_tool import BashTool
 from openharness.tools.brief_tool import BriefTool
 from openharness.tools.config_tool import ConfigTool
 from openharness.tools.cron_create_tool import CronCreateTool
@@ -25,6 +25,7 @@ from openharness.tools.iterate_tools import (
     IterateContextTool,
     IterateDecisionLogTool,
     IterateReviewTool,
+    IterateTriageTool,
     IterateValidateTool,
 )
 from openharness.tools.list_mcp_resources_tool import ListMcpResourcesTool
@@ -98,6 +99,7 @@ def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
         IterateReviewTool(),
         IterateDecisionLogTool(),
         IterateContextTool(),
+        IterateTriageTool(),
     ):
         registry.register(tool)
     if mcp_manager is not None:

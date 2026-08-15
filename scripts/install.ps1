@@ -1,10 +1,9 @@
-# OpenHarness Windows Installer (PowerShell)
-# Usage: iex (Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/HKUDS/OpenHarness/main/scripts/install.ps1')
+# iterate-harness Windows Installer (PowerShell)
+# Usage: iex (Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.ps1')
 #        or: powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 
 param(
     [switch]$FromSource,
-    [switch]$WithChannels,
     [switch]$Help
 )
 
@@ -22,7 +21,7 @@ function Write-Step { Write-Host ""; Write-Host "==>$args" -ForegroundColor Blue
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "  ==============================" -ForegroundColor Cyan
-Write-Host "    OpenHarness Installer" -ForegroundColor Cyan
+Write-Host "    iterate-harness Installer" -ForegroundColor Cyan
 Write-Host "    Windows Native Setup" -ForegroundColor Cyan
 Write-Host "  ==============================" -ForegroundColor Cyan
 Write-Host ""
@@ -30,16 +29,14 @@ Write-Host ""
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
+# iterate-harness installs from its git source (clone + editable install);
+# -FromSource is kept as a compatibility alias for the upstream flag.
 if ($Help) {
-    Write-Host "Usage: .\install.ps1 [-FromSource] [-WithChannels]"
+    Write-Host "Usage: .\install.ps1 [-FromSource]"
     Write-Host ""
-    Write-Host "  -FromSource    Clone from GitHub and install in editable mode"
-    Write-Host "  -WithChannels  Deprecated compatibility flag (dependencies installed by default)"
+    Write-Host "  -FromSource    Compatibility alias; source install is the default"
+    Write-Host "                 (iterate-harness is installed from git in editable mode)."
     exit 0
-}
-
-if ($WithChannels) {
-    Write-Warn "-WithChannels is no longer required; common IM channel dependencies are installed by default."
 }
 
 # ---------------------------------------------------------------------------
@@ -122,13 +119,13 @@ if ($NodePath) {
 }
 
 # ---------------------------------------------------------------------------
-# Step 4: Install OpenHarness
+# Step 4: Install iterate-harness (git clone + editable install)
 # ---------------------------------------------------------------------------
-Write-Step "Installing OpenHarness"
+Write-Step "Installing iterate-harness"
 
-$RepoUrl = "https://github.com/HKUDS/OpenHarness.git"
-$InstallDir = "$env:USERPROFILE\.openharness-src"
-$VenvDir = "$env:USERPROFILE\.openharness-venv"
+$RepoUrl = "https://github.com/jingzhao-l/iterate-harness.git"
+$InstallDir = "$env:USERPROFILE\.iterate-harness-src"
+$VenvDir = "$env:USERPROFILE\.iterate-harness-venv"
 
 # Create virtual environment
 if (Test-Path $VenvDir) {
@@ -154,60 +151,42 @@ Write-Info "Activating virtual environment..."
 
 Write-Success "Virtual environment ready: $VenvDir"
 
-# Install OpenHarness
-if ($FromSource) {
-    Write-Info "Mode: -FromSource (git clone + pip install -e .)"
-    
-    $GitPath = Get-Command git -ErrorAction SilentlyContinue
-    if (-not $GitPath) {
-        Write-Error "git is required for -FromSource installation."
-        Write-Host "  Install git and retry:"
-        Write-Host "    winget install Git.Git"
-        Write-Host "    Or download from: https://git-scm.com/download/win"
-        exit 1
-    }
-    
-    if (Test-Path "$InstallDir\.git") {
-        Write-Info "Source directory exists, pulling latest changes..."
-        Push-Location $InstallDir
-        git pull --ff-only
-        Pop-Location
-    } else {
-        Write-Info "Cloning OpenHarness into $InstallDir..."
-        git clone $RepoUrl $InstallDir
-        if (-not (Test-Path $InstallDir)) {
-            Write-Error "Failed to clone repository"
-            exit 1
-        }
-    }
-    
-    Write-Info "Installing in editable mode (pip install -e .)..."
-    pip install -e $InstallDir --quiet
-} else {
-    Write-Info "Mode: pip install openharness-ai"
-    pip install openharness-ai --quiet --upgrade
+# Install iterate-harness (source install is the default; -FromSource is a
+# compatibility alias)
+$GitPath = Get-Command git -ErrorAction SilentlyContinue
+if (-not $GitPath) {
+    Write-Error "git is required to install iterate-harness from source."
+    Write-Host "  Install git and retry:"
+    Write-Host "    winget install Git.Git"
+    Write-Host "    Or download from: https://git-scm.com/download/win"
+    exit 1
 }
 
-Write-Success "OpenHarness package installed"
+if (Test-Path "$InstallDir\.git") {
+    Write-Info "Source directory exists, pulling latest changes..."
+    Push-Location $InstallDir
+    git pull --ff-only
+    Pop-Location
+} else {
+    Write-Info "Cloning iterate-harness into $InstallDir..."
+    git clone $RepoUrl $InstallDir
+    if (-not (Test-Path $InstallDir)) {
+        Write-Error "Failed to clone repository"
+        exit 1
+    }
+}
+
+Write-Info "Installing in editable mode (pip install -e .)..."
+pip install -e $InstallDir --quiet
+
+Write-Success "iterate-harness package installed"
 
 # ---------------------------------------------------------------------------
 # Step 5: Install frontend/terminal npm dependencies
 # ---------------------------------------------------------------------------
 if ($NodeOk) {
-    if ($FromSource) {
-        $FrontendDir = "$InstallDir\frontend\terminal"
-    } else {
-        # Find installed package location
-        $PackageInfo = pip show openharness-ai 2>&1
-        $LocationMatch = $PackageInfo -match "Location: (.+)"
-        if ($LocationMatch) {
-            $PackageLocation = $matches[1].Trim()
-            $FrontendDir = "$PackageLocation\openharness\_frontend"
-        } else {
-            $FrontendDir = $null
-        }
-    }
-    
+    $FrontendDir = "$InstallDir\frontend\terminal"
+
     if ($FrontendDir -and (Test-Path "$FrontendDir\package.json")) {
         Write-Step "Installing React TUI dependencies"
         Write-Info "Running npm install in $FrontendDir..."
@@ -221,9 +200,9 @@ if ($NodeOk) {
 }
 
 # ---------------------------------------------------------------------------
-# Step 6: Create OpenHarness config directory
+# Step 6: Create iterate-harness config directory
 # ---------------------------------------------------------------------------
-Write-Step "Setting up OpenHarness config directory"
+Write-Step "Setting up iterate-harness config directory"
 
 $ConfigDir = "$env:USERPROFILE\.openharness"
 $SkillsDir = "$ConfigDir\skills"
@@ -259,39 +238,30 @@ if ($CurrentPath -like "*$VenvBinDir*") {
 Write-Step "Verifying installation"
 
 $OhPath = "$VenvBinDir\oh.exe"
-$OpenhPath = "$VenvBinDir\openh.exe"
-$OpenharnessPath = "$VenvBinDir\openharness.exe"
-$OhmoPath = "$VenvBinDir\ohmo.exe"
+$IterateHarnessPath = "$VenvBinDir\iterate-harness.exe"
 
-# Pick the best available launcher. The 'openh' alias was added after v0.1.6,
-# so PyPI installs of older releases won't have openh.exe. Prefer it when
-# present, otherwise fall back to 'openharness', then 'oh' (which collides
-# with PowerShell's Out-Host alias unless invoked as oh.exe).
+# Prefer the dedicated 'iterate-harness' launcher (no PowerShell alias
+# collisions); fall back to 'oh' (which collides with PowerShell's
+# Out-Host alias unless invoked as oh.exe).
 $Launcher = $null
 $LauncherExe = $null
-if (Test-Path $OpenhPath) {
-    $Launcher = "openh"
-    $LauncherExe = $OpenhPath
-} elseif (Test-Path $OpenharnessPath) {
-    $Launcher = "openharness"
-    $LauncherExe = $OpenharnessPath
+if (Test-Path $IterateHarnessPath) {
+    $Launcher = "iterate-harness"
+    $LauncherExe = $IterateHarnessPath
 } elseif (Test-Path $OhPath) {
     $Launcher = "oh"
     $LauncherExe = $OhPath
 }
 
-if ($LauncherExe -and (Test-Path $OhmoPath)) {
+if ($LauncherExe) {
     $OhVersion = & $LauncherExe --version 2>&1
     Write-Success "Installation successful!"
     Write-Host ""
     Write-Host "  $Launcher is ready: $OhVersion" -ForegroundColor Green
     if ($Launcher -eq "oh") {
         Write-Host "  Note: 'oh' collides with PowerShell's built-in Out-Host alias." -ForegroundColor Yellow
-        Write-Host "        Invoke it as 'oh.exe', or use 'openharness' instead." -ForegroundColor Yellow
-    } elseif (Test-Path $OhPath) {
-        Write-Host "  'oh' is also installed, but PowerShell may resolve it to Out-Host first." -ForegroundColor Yellow
+        Write-Host "        Invoke it as 'oh.exe', or use 'iterate-harness' instead." -ForegroundColor Yellow
     }
-    Write-Host "  ohmo is ready" -ForegroundColor Green
 } else {
     # Try module execution
     $ModuleVersion = python -m openharness --version 2>&1
@@ -308,22 +278,19 @@ if ($LauncherExe -and (Test-Path $OhmoPath)) {
 # Done
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "OpenHarness is installed!" -ForegroundColor Green -BackgroundColor White
+Write-Host "iterate-harness is installed!" -ForegroundColor Green -BackgroundColor White
 Write-Host ""
 Write-Host "  Next steps:"
 Write-Host "    1. Restart terminal, or run: refreshenv (if using Chocolatey)"
 Write-Host "       Or manually refresh: `$env:PATH = [System.Environment]::GetEnvironmentVariable('PATH','User')"
 Write-Host "    2. Set your API key:        `$env:ANTHROPIC_API_KEY = 'your_key'"
-if ($Launcher -eq "openharness") {
-    Write-Host "    3. Launch (PowerShell):     openharness"
-    Write-Host "       ('openh' is not available on this release; 'oh' collides with PowerShell's Out-Host alias.)"
-} elseif ($Launcher -eq "oh") {
-    Write-Host "    3. Launch (PowerShell):     oh.exe"
-    Write-Host "       ('oh' alone collides with PowerShell's Out-Host alias — use 'oh.exe' or 'openharness'.)"
+if ($Launcher -eq "iterate-harness") {
+    Write-Host "    3. Launch (PowerShell):     iterate-harness"
 } else {
-    Write-Host "    3. Launch (PowerShell):     openh"
-    Write-Host "       Note: 'oh' may collide with the built-in Out-Host alias in PowerShell."
+    Write-Host "    3. Launch (PowerShell):     oh.exe"
+    Write-Host "       ('oh' alone collides with PowerShell's Out-Host alias — use 'oh.exe' or 'iterate-harness'.)"
 }
-Write-Host "    4. Launch ohmo:             ohmo"
-Write-Host "    5. Docs:                    https://github.com/HKUDS/OpenHarness"
+Write-Host "    4. First run in a project:  /iterate review   (dry-run review)"
+Write-Host "       or headless:             iterate-harness iterate init"
+Write-Host "    5. Docs:                    https://github.com/jingzhao-l/iterate-harness"
 Write-Host ""

@@ -1,417 +1,130 @@
-# <img src="assets/logo.png" alt="OpenHarness" width="40" style="vertical-align: middle;"> `oh` — OpenHarness 中文说明
+<h1 align="center">
+  <img src="assets/logo.png" alt="iterate-harness" width="64" style="vertical-align: middle;">
+  <br>
+  <code>iterate-harness</code>
+</h1>
 
 <p align="center">
   <a href="README.md"><strong>English</strong></a> ·
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
 </p>
 
-**OpenHarness** 是一个面向开源社区的 Agent Harness。它提供轻量、可扩展、可检查的 Agent 基础设施，包括：
+**iterate-harness** 是面向 iterate 评审/修复闭环的专用 agent harness：
+多维度代码评审反复执行直到发现**收敛**，确定性聚合，每轮验证的原子修复，
+以及全程可审计的 append-only 决策日志。
 
-- Agent loop
-- tools / skills / plugins
-- memory / session resume
-- permissions / hooks
-- multi-agent coordination
-- provider workflows
-- React TUI
-- `ohmo` personal-agent app
+它是 [OpenHarness](https://github.com/HKUDS/OpenHarness)（v0.1.9，MIT）的
+聚焦型 fork：内核 agent loop、React TUI、工具/技能/插件体系与权限层全部
+继承；在此之上叠加了从 iterate skill TypeScript 实现移植的语义层，以及
+引擎级的收敛控制策略。
 
----
+<p align="center">
+  <a href="#-快速开始"><img src="https://img.shields.io/badge/快速开始-5_分钟-blue?style=for-the-badge" alt="Quick Start"></a>
+  <a href="#-iterate-特性"><img src="https://img.shields.io/badge/Iterate-6_工具-ff69b4?style=for-the-badge" alt="Iterate Tools"></a>
+  <a href="#-iterate-特性"><img src="https://img.shields.io/badge/模式-dry--run_|_normal-61DAFB?style=for-the-badge" alt="Modes"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"></a>
+</p>
 
-## 最新更新
-
-### Unreleased · Dry-run 安全预览
-
-- 新增 `oh --dry-run`，可以在**不执行模型、不执行工具、不 spawn subagent** 的前提下，预览当前会话会使用的配置、skills、commands、tools 和 MCP 配置。
-- Dry-run 会给出 `ready / warning / blocked` 结论，并直接告诉你下一步该做什么，例如先修认证、先修 MCP 配置，或者可以直接运行。
-- 对普通 prompt，会给出可能命中的 skills / tools；对 slash command，会展示它更偏只读还是会改本地状态。
-
-### 2026-04-06 · v0.1.2
-
-- 新增统一配置入口 `oh setup`
-- provider 配置从“auth -> provider -> model”收敛成 workflow 视角
-- Anthropic/OpenAI 兼容接口支持 profile 级凭据，不再强制共用一把全局 key
-- 新增 `ohmo` personal-agent app
-- `ohmo` 使用 `~/.ohmo` 作为 home workspace，支持 gateway、bootstrap prompts 和交互式 channel 配置
+<p align="center">
+  <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
+  <img src="https://img.shields.io/badge/version-0.2.0-brightgreen" alt="Version">
+</p>
 
 ---
 
-## 快速开始
-
-### 一键安装
+## 🚀 快速开始
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HKUDS/OpenHarness/main/scripts/install.sh | bash
-```
+# 一键安装（macOS / Linux / WSL）
+curl -fsSL https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.sh | bash
 
-常用安装参数：
-
-- `--from-source`：从源码安装，适合贡献者
-- `--with-channels`：一并安装 IM channel 依赖
-
-例如：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/HKUDS/OpenHarness/main/scripts/install.sh | bash -s -- --from-source --with-channels
-```
-
-### 本地运行
-
-```bash
-git clone https://github.com/HKUDS/OpenHarness.git
-cd OpenHarness
-uv sync --extra dev
-uv run oh
-```
-
----
-
-## 配置模型与 Provider
-
-现在最推荐的入口是：
-
-```bash
-oh setup
-```
-
-`oh setup` 会按下面的顺序引导：
-
-1. 选择一个 workflow
-2. 如果需要，完成认证
-3. 选择具体后端 preset
-4. 确认模型
-5. 保存并激活 profile
-
-当前内置 workflow 包括：
-
-- `Anthropic-Compatible API`
-- `Claude Subscription`
-- `OpenAI-Compatible API`
-- `Codex Subscription`
-- `GitHub Copilot`
-
-### Anthropic-Compatible API
-
-适合这类后端：
-
-- Claude 官方 API
-- Moonshot / Kimi
-- Zhipu / GLM
-- MiniMax
-- 其他 Anthropic-compatible endpoint
-
-### OpenAI-Compatible API
-
-适合这类后端：
-
-- OpenAI 官方 API
-- OpenRouter
-- DashScope
-- DeepSeek
-- GitHub Models
-- SiliconFlow
-- Google Gemini
-- Groq
-- Ollama
-- 其他 OpenAI-compatible endpoint
-
-### 常用命令
-
-```bash
-# 统一配置入口
-oh setup
-
-# 查看已有 workflow/profile
-oh provider list
-
-# 切换当前 workflow
-oh provider use codex
-
-# 查看认证状态
-oh auth status
-```
-
-### 高级：添加自定义兼容接口
-
-如果内置 preset 不够，可以直接新增 profile：
-
-```bash
-oh provider add my-endpoint \
-  --label "My Endpoint" \
-  --provider anthropic \
-  --api-format anthropic \
-  --auth-source anthropic_api_key \
-  --model my-model \
-  --base-url https://example.com/anthropic
-```
-
-这一版开始，兼容接口可以按 profile 绑定凭据。  
-也就是说，`Kimi`、`GLM`、`MiniMax` 这类 Anthropic-compatible 后端，不需要再共用一把全局 `anthropic` key。
-
----
-
-## 交互模式与 TUI
-
-运行：
-
-```bash
+# 启动 TUI
 oh
+
+# REPL 内
+/iterate review        # dry-run：只读多轮评审，直到收敛
 ```
 
-你会得到 React/Ink TUI，支持：
-
-- `/` 命令选择器
-- 交互式权限确认
-- `/model` 模型切换
-- `/permissions` 权限模式切换
-- `/resume` 会话恢复
-- `/provider` workflow 选择
-
-非交互模式也支持：
+也可以走 CLI：
 
 ```bash
-oh -p "Explain this repository"
-oh -p "List all functions in main.py" --output-format json
-oh -p "Fix the bug" --output-format stream-json
+oh iterate init        # 检测项目，生成 iterate.config.yaml
+oh iterate review      # 无头 dry-run（支持 stream-json 输出）
+oh iterate run         # 无头自治修复闭环
+oh iterate resume      # 恢复上次会话
+oh iterate log         # 查看决策日志尾部
 ```
 
-### Dry-run 安全预览
+先设置 API Key：`export ANTHROPIC_API_KEY=your_key`（也支持
+OpenAI 兼容供应商，见 `oh --help`）。
 
-如果你想先看 OpenHarness **会怎么跑**，但又不想真的执行模型或工具，可以用：
+## ✨ Iterate 特性
+
+| 能力 | 说明 |
+| --- | --- |
+| **确定性评审引擎** | `iterate_review` plan / aggregate / meta-review：跨轮去重、`known_intentional` 过滤、severity 排序、收敛统计、6 项报告一致性审计——全部纯计算，零 LLM 判断 |
+| **两种模式** | `dry-run`（纯评审，绝不改文件）与 `normal`（评审 → 原子修复 → 验证 → 循环，验证失败经 git 隔离自动回滚） |
+| **引擎级收敛强制** | `IterateLoopPolicy` 位于内核查询循环：轮次上限、收敛自停、下一轮引导不受 prompt 注入影响 |
+| **收敛仪表盘** | React TUI 实时面板：逐轮 findings 趋势、维度分布、累计 USD 成本、收敛徽标 |
+| **findings 分诊** | `iterate_triage`：逐条 `y` 修复 / `n` 跳过 / `a` 永久忽略；`a` 持久化到 `known_intentional`，后续轮次自动过滤 |
+| **成本透明** | token 用量按内置价格表换算为每轮/累计 USD（可按模型覆盖） |
+| **安全边界代码化** | 设置中的 `protected_paths` 与 `forbidden_fix_patterns` 自动装配进权限层（deny 路径规则 + 写载荷正则）；验证命令走精确匹配白名单 |
+| **决策日志** | append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘 |
+| **项目知识** | `ITERATE.md` 项目知识 + 按项目隔离的 9 类结构化个性化数据 |
+
+## 🔧 六个 iterate 工具
+
+- `iterate_config` — 生效配置（默认值 + `iterate.config.yaml` 覆盖）
+- `iterate_validate` — 运行预配置验证命令（仅精确匹配）
+- `iterate_review` — 确定性引擎：plan / aggregate / meta-review
+- `iterate_decision_log` — append-only 决策日志
+- `iterate_context` — SKILL.md / ITERATE.md / 个性化上下文
+- `iterate_triage` — 交互式 y/n/a findings 分诊，`a` 持久化 known_intentional
+
+`/iterate` 斜杠命令（status / review / run / log / config / validate）与
+内置 `iterate` skill 提供同样闭环的不同入口。
+
+## 🧭 架构
+
+```
+src/openharness/
+├── iterate/            # 语义层（TS skill 的 Python 移植）
+│   ├── review.py       # 去重 / known_intentional 过滤 / severity 排序 / 收敛
+│   ├── meta_review.py  # 6 项报告一致性审计
+│   ├── config_loader.py# Master + Overrides 合并
+│   ├── validate.py     # 精确匹配验证执行器
+│   ├── decision_log.py # append-only JSONL
+│   ├── loop_policy.py  # 引擎级收敛强制 + 成本计量
+│   ├── personalization.py # 9 类按项目存储
+│   ├── worktree_flow.py# git 隔离：enter/commit/exit + 回滚
+│   └── prompts.py      # canonical dry-run/normal 循环模板
+├── engine/             # 内核 agent loop（上游 + iterate 控制块）
+├── permissions/        # 权限检查 + iterate 自动装配（protected_paths…）
+├── tools/iterate_tools.py  # 六个 iterate_* 工具
+└── ui/                 # React TUI 后端宿主 + review_progress 协议
+```
+
+## 📦 安装
+
+- **macOS / Linux / WSL**：`bash scripts/install.sh`（克隆 + venv + 可编辑
+  安装，把 `oh` 与 `iterate-harness` 链入 `~/.local/bin`）
+- **Windows (PowerShell)**：`scripts/install.ps1`
+- **本地检出**：`bash scripts/install_dev.sh`
+- 依赖 Python ≥ 3.10；Node.js ≥ 18 启用 React TUI（缺失时自动跳过，
+  纯文本回退 UI 仍可用）
+
+## 🧪 测试
 
 ```bash
-# 预览交互会话本身
-oh --dry-run
-
-# 预览一个普通 prompt
-oh --dry-run -p "Review this bug fix and grep for failing tests"
-
-# 预览 slash command
-oh --dry-run -p "/plugin list"
-
-# 输出结构化 JSON，方便脚本或 channel 使用
-oh --dry-run -p "Explain this repository" --output-format json
+python -m pytest tests/test_iterate -q   # 语义层 + 内核集成
+python -m pytest -q                      # 全量
 ```
 
-Dry-run 的边界是明确的：
-
-- **不会**调用模型
-- **不会**执行 tools
-- **不会**启动 subagent
-- **不会**连接 MCP server
-- **会**解析 settings、auth 状态、system prompt、skills、commands、tools，以及明显错误的 MCP 配置
-
-Readiness 结论说明：
-
-- `ready`：当前配置基本可直接运行
-- `warning`：能解析会话，但仍有重要问题需要先处理，比如 MCP 配置错误或后续模型调用缺认证
-- `blocked`：按当前状态直接运行会失败，比如 slash command 不存在，或者普通 prompt 无法解析 runtime client
-
-Dry-run 输出里的 `next actions` 会直接给出下一步建议，例如：
-
-- 先执行 `oh auth login`
-- 先修或禁用坏掉的 MCP 配置
-- 直接运行 `oh -p "..."` 或进入 `oh`
-
----
-
-## Provider 兼容性概览
-
-OpenHarness 现在把 provider 视为 **workflow + profile**，而不是只暴露底层协议名。
-
-| Workflow | 说明 |
-|----------|------|
-| `Anthropic-Compatible API` | Anthropic 风格接口，适合 Claude/Kimi/GLM/MiniMax 等 |
-| `Claude Subscription` | 复用本地 `~/.claude/.credentials.json` |
-| `OpenAI-Compatible API` | OpenAI 风格接口，适合 OpenAI/OpenRouter/各种兼容网关 |
-| `Codex Subscription` | 复用本地 `~/.codex/auth.json` |
-| `GitHub Copilot` | GitHub Copilot OAuth workflow |
-
-日常推荐用法：
-
-```bash
-oh setup
-oh provider list
-oh provider use <profile>
-```
-
----
-
-## `ohmo` Personal Agent
-
-`ohmo` 是基于 OpenHarness 的 personal-agent app，不是 core 的一个 mode。
-
-### 初始化
-
-```bash
-ohmo init
-```
-
-这会创建：
-
-- `~/.ohmo/soul.md`
-- `~/.ohmo/identity.md`
-- `~/.ohmo/user.md`
-- `~/.ohmo/BOOTSTRAP.md`
-- `~/.ohmo/memory/`
-- `~/.ohmo/gateway.json`
-
-其中：
-
-- `soul.md`：长期人格与行为原则
-- `identity.md`：`ohmo` 自己是谁
-- `user.md`：用户画像、偏好、关系信息
-- `BOOTSTRAP.md`：首轮 landing / onboarding ritual
-- `memory/`：personal memory
-- `gateway.json`：gateway 的 profile 和 channel 配置
-
-### 配置
-
-```bash
-ohmo config
-```
-
-`ohmo config` 会用和 `oh setup` 一致的 workflow 语言来配置 gateway，例如：
-
-- `Anthropic-Compatible API`
-- `Claude Subscription`
-- `OpenAI-Compatible API`
-- `Codex Subscription`
-- `GitHub Copilot`
-
-目前 `ohmo init` / `ohmo config` 已支持引导式配置这些 channel：
-
-- Telegram
-- Slack
-- Discord
-- Feishu
-
-如果 gateway 已经在运行，配置完成后也可以直接选择是否重启。
-
-### 运行
-
-```bash
-# 运行 personal agent
-ohmo
-
-# 前台运行 gateway
-ohmo gateway run
-
-# 查看 gateway 状态
-ohmo gateway status
-
-# 重启 gateway
-ohmo gateway restart
-```
-
----
-
-## OpenHarness 的核心能力
-
-### Agent Loop
-
-- streaming tool-call cycle
-- tool execution / observation / loop
-- retry + exponential backoff
-- token counting 与成本跟踪
-
-### Tools / Skills / Plugins
-
-- 43+ tools
-- Markdown skills 按需加载
-- 插件生态
-- 兼容 `anthropics/skills`
-- 兼容 Claude-style plugins
-
-### Memory / Session
-
-- `CLAUDE.md` 自动发现与注入
-- `MEMORY.md` 持久记忆
-- session resume
-- auto-compact
-
-### Governance
-
-- 多级 permission mode
-- path rules
-- denied commands
-- hooks
-- interactive approval
-
-### Multi-Agent
-
-- subagent spawning
-- team registry
-- task lifecycle
-- background task execution
-
----
-
-## 常见命令
-
-### `oh`
-
-```bash
-oh setup
-oh provider list
-oh provider use codex
-oh auth status
-oh -p "Explain this codebase"
-oh
-```
-
-### `ohmo`
-
-```bash
-ohmo init
-ohmo config
-ohmo
-ohmo gateway run
-ohmo gateway status
-ohmo gateway restart
-```
-
----
-
-## 测试
-
-```bash
-uv run pytest -q
-python scripts/test_harness_features.py
-python scripts/test_real_skills_plugins.py
-```
-
----
-
-## 贡献
-
-欢迎贡献：
-
-- tools
-- skills
-- plugins
-- providers
-- multi-agent coordination
-- tests
-- 文档与中文翻译
-
-开发环境：
-
-```bash
-git clone https://github.com/HKUDS/OpenHarness.git
-cd OpenHarness
-uv sync --extra dev
-uv run pytest -q
-```
-
-更多信息：
-
-- [贡献指南](CONTRIBUTING.md)
-- [更新日志](CHANGELOG.md)
-- [Showcase](docs/SHOWCASE.md)
-
----
-
-## License
-
-MIT，见 [LICENSE](LICENSE)。
+## 📄 许可与致谢
+
+MIT——与上游一致。iterate-harness 是
+[OpenHarness](https://github.com/HKUDS/OpenHarness) 的 fork，维护于
+[jingzhao-l/iterate-harness](https://github.com/jingzhao-l/iterate-harness)；
+agent 内核、TUI 与扩展体系的全部功劳归于上游。iterate 语义层源自
+[iterate-skill](https://github.com/jingzhao-l/iterate-skill) 项目。

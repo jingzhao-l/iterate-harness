@@ -941,13 +941,18 @@ async def _execute_tool_call(
     # directory-scoped roots such as `glob`/`grep`.
     _file_path = _resolve_permission_file_path(context.cwd, tool_input, parsed_input)
     _command = _extract_permission_command(tool_input, parsed_input)
+    _is_read_only = tool.is_read_only(parsed_input)
+    # Mutating write payloads feed the iterate forbidden_fix_patterns
+    # regex boundary; read-only tools never carry a write payload.
+    _content = None if _is_read_only else _extract_permission_content(tool_input, parsed_input)
     log.debug("permission check: %s read_only=%s path=%s cmd=%s",
-              tool_name, tool.is_read_only(parsed_input), _file_path, _command and _command[:80])
+              tool_name, _is_read_only, _file_path, _command and _command[:80])
     decision = context.permission_checker.evaluate(
         tool_name,
-        is_read_only=tool.is_read_only(parsed_input),
+        is_read_only=_is_read_only,
         file_path=_file_path,
         command=_command,
+        content=_content,
     )
     if not decision.allowed:
         if decision.requires_confirmation and context.permission_prompt is not None:
@@ -1074,5 +1079,29 @@ def _extract_permission_command(
     value = getattr(parsed_input, "command", None)
     if isinstance(value, str) and value.strip():
         return value
+
+    return None
+
+
+# Mutating write-payload field names recognized by the permission layer.
+# Extracted for mutating tools only and matched against the iterate
+# forbidden_fix_patterns regex boundary in PermissionChecker.evaluate.
+_WRITE_PAYLOAD_FIELDS = ("content", "new_string", "diff", "patch")
+
+
+def _extract_permission_content(
+    raw_input: dict[str, object],
+    parsed_input: object,
+) -> str | None:
+    """Extract the mutating write payload (file body / edit / diff text)."""
+    for key in _WRITE_PAYLOAD_FIELDS:
+        value = raw_input.get(key)
+        if isinstance(value, str) and value:
+            return value
+
+    for attr in _WRITE_PAYLOAD_FIELDS:
+        value = getattr(parsed_input, attr, None)
+        if isinstance(value, str) and value:
+            return value
 
     return None

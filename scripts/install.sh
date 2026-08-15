@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# OpenHarness one-click installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/HKUDS/OpenHarness/main/scripts/install.sh | bash
-#        bash scripts/install.sh [--from-source] [--with-channels]
+# iterate-harness one-click installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.sh | bash
+#        bash scripts/install.sh [--from-source]
 
 set -euo pipefail
 
@@ -29,19 +29,16 @@ step()    { echo -e "\n${BOLD}${BLUE}==>${RESET}${BOLD} $*${RESET}"; }
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
-FROM_SOURCE=false
-WITH_CHANNELS=false
-
+# iterate-harness installs from its git source (clone + editable install);
+# --from-source is kept as a compatibility alias for the upstream flag.
 for arg in "$@"; do
     case "$arg" in
-        --from-source)  FROM_SOURCE=true ;;
-        --with-channels) WITH_CHANNELS=true ;;
+        --from-source)  : ;;
         --help|-h)
-            echo "Usage: $0 [--from-source] [--with-channels]"
+            echo "Usage: $0 [--from-source]"
             echo ""
-            echo "  --from-source    Clone from GitHub and install in editable mode"
-            echo "  --with-channels  Deprecated compatibility flag."
-            echo "                   Common IM channel dependencies are installed by default."
+            echo "  --from-source    Compatibility alias; source install is the default"
+            echo "                   (iterate-harness is installed from git in editable mode)."
             exit 0
             ;;
         *)
@@ -56,9 +53,9 @@ done
 # ---------------------------------------------------------------------------
 echo ""
 echo -e "${BOLD}${CYAN}  ██████╗ ██╗  ██╗${RESET}"
-echo -e "${BOLD}${CYAN} ██╔═══██╗██║  ██║${RESET}"
-echo -e "${BOLD}${CYAN} ██║   ██║███████║${RESET}   OpenHarness Installer"
-echo -e "${BOLD}${CYAN} ██║   ██║██╔══██║${RESET}   Open Agent Harness"
+echo -e "${BOLD}${CYAN} ██╔═══██╗██║  ██║${RESET}   iterate-harness Installer"
+echo -e "${BOLD}${CYAN} ██║   ██║███████║${RESET}   review → fix → validate → converge"
+echo -e "${BOLD}${CYAN} ██║   ██║██╔══██║${RESET}   fork of OpenHarness (MIT)"
 echo -e "${BOLD}${CYAN} ╚██████╔╝██║  ██║${RESET}"
 echo -e "${BOLD}${CYAN}  ╚═════╝ ╚═╝  ╚═╝${RESET}"
 echo ""
@@ -163,7 +160,8 @@ if command -v node &>/dev/null; then
     fi
 else
     warn "Node.js not found. React TUI will be skipped."
-    echo "  To enable the React terminal UI, install Node.js 18+:"
+    echo "  To enable the React terminal UI (with the iterate convergence"
+    echo "  dashboard), install Node.js 18+:"
     case "$OS_TYPE" in
         macOS)
             echo "    brew install node"
@@ -179,13 +177,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: Install OpenHarness
+# Step 4: Install iterate-harness (git clone + editable install)
 # ---------------------------------------------------------------------------
-step "Installing OpenHarness"
+step "Installing iterate-harness"
 
-REPO_URL="https://github.com/HKUDS/OpenHarness.git"
-INSTALL_DIR="$HOME/.openharness-src"
-VENV_DIR="$HOME/.openharness-venv"
+REPO_URL="https://github.com/jingzhao-l/iterate-harness.git"
+INSTALL_DIR="$HOME/.iterate-harness-src"
+VENV_DIR="$HOME/.iterate-harness-venv"
 BIN_DIR="$HOME/.local/bin"
 
 # ---------------------------------------------------------------------------
@@ -207,54 +205,34 @@ PYTHON_CMD="python"
 PIP_CMD="pip"
 success "Virtual environment ready: ${VENV_DIR}"
 
-if [ "$FROM_SOURCE" = true ]; then
-    info "Mode: --from-source (git clone + pip install -e .)"
+if ! command -v git &>/dev/null; then
+    error "git is required to install iterate-harness from source."
+    echo "  Install git and retry:"
+    case "$OS_TYPE" in
+        macOS)   echo "    brew install git" ;;
+        Linux|WSL) echo "    sudo apt install -y git" ;;
+    esac
+    exit 1
+fi
 
-    if command -v git &>/dev/null; then
-        if [ -d "$INSTALL_DIR/.git" ]; then
-            info "Source directory exists, pulling latest changes..."
-            git -C "$INSTALL_DIR" pull --ff-only
-        else
-            info "Cloning OpenHarness into ${INSTALL_DIR}..."
-            git clone "$REPO_URL" "$INSTALL_DIR"
-        fi
-    else
-        error "git is required for --from-source installation."
-        echo "  Install git and retry:"
-        case "$OS_TYPE" in
-            macOS)   echo "    brew install git" ;;
-            Linux|WSL) echo "    sudo apt install -y git" ;;
-        esac
-        exit 1
-    fi
-
-    info "Installing in editable mode (pip install -e .)..."
-    $PIP_CMD install -e "$INSTALL_DIR" --quiet
+if [ -d "$INSTALL_DIR/.git" ]; then
+    info "Source directory exists, pulling latest changes..."
+    git -C "$INSTALL_DIR" pull --ff-only
 else
-    info "Mode: pip install openharness-ai"
-    $PIP_CMD install openharness-ai --quiet --upgrade
+    info "Cloning iterate-harness into ${INSTALL_DIR}..."
+    git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
-success "OpenHarness package installed"
+info "Installing in editable mode (pip install -e .)..."
+$PIP_CMD install -e "$INSTALL_DIR" --quiet
+
+success "iterate-harness package installed"
 
 # ---------------------------------------------------------------------------
-# Step 5: Channel dependencies
-# ---------------------------------------------------------------------------
-if [ "$WITH_CHANNELS" = true ]; then
-    step "Channel dependencies"
-    info "--with-channels is no longer required; common IM channel dependencies are installed by default."
-fi
-
-# ---------------------------------------------------------------------------
-# Step 6: Install frontend/terminal npm dependencies
+# Step 5: Install frontend/terminal npm dependencies
 # ---------------------------------------------------------------------------
 if [ "$NODE_OK" = true ]; then
-    # Determine the frontend/terminal path
-    if [ "$FROM_SOURCE" = true ]; then
-        FRONTEND_DIR="$INSTALL_DIR/frontend/terminal"
-    else
-        FRONTEND_DIR="$(pwd)/frontend/terminal"
-    fi
+    FRONTEND_DIR="$INSTALL_DIR/frontend/terminal"
 
     if [ -d "$FRONTEND_DIR" ] && [ -f "$FRONTEND_DIR/package.json" ]; then
         step "Installing React TUI dependencies"
@@ -267,9 +245,9 @@ if [ "$NODE_OK" = true ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7: Create OpenHarness config directory
+# Step 6: Create config directory
 # ---------------------------------------------------------------------------
-step "Setting up OpenHarness config directory"
+step "Setting up iterate-harness config directory"
 
 mkdir -p "$HOME/.openharness"
 mkdir -p "$HOME/.openharness/skills"
@@ -278,49 +256,46 @@ mkdir -p "$HOME/.openharness/plugins"
 success "Config directory ready: ~/.openharness/"
 
 # ---------------------------------------------------------------------------
-# Step 8: Register global commands
+# Step 7: Register global commands
 # ---------------------------------------------------------------------------
 step "Registering global commands"
 
 mkdir -p "$BIN_DIR"
 ln -snf "$VENV_DIR/bin/oh" "$BIN_DIR/oh"
-ln -snf "$VENV_DIR/bin/ohmo" "$BIN_DIR/ohmo"
-ln -snf "$VENV_DIR/bin/openharness" "$BIN_DIR/openharness"
-success "Linked oh/ohmo into ${BIN_DIR}"
+ln -snf "$VENV_DIR/bin/iterate-harness" "$BIN_DIR/iterate-harness"
+success "Linked oh / iterate-harness into ${BIN_DIR}"
 
 # ---------------------------------------------------------------------------
-# Step 9: Verify installation
+# Step 8: Verify installation
 # ---------------------------------------------------------------------------
 step "Verifying installation"
 
-if [ -x "$BIN_DIR/oh" ] && [ -x "$BIN_DIR/ohmo" ]; then
+if [ -x "$BIN_DIR/oh" ]; then
     OH_VERSION=$("$BIN_DIR/oh" --version 2>&1 || echo "(version check failed)")
-    OHMO_VERSION=$("$BIN_DIR/ohmo" --help >/dev/null 2>&1 && echo "available" || echo "not available")
     success "Installation successful!"
     echo ""
     echo -e "  ${BOLD}oh${RESET} is ready: ${GREEN}${OH_VERSION}${RESET}"
-    echo -e "  ${BOLD}ohmo${RESET} is ready: ${GREEN}${OHMO_VERSION}${RESET}"
 elif "$PYTHON_CMD" -m openharness --version &>/dev/null 2>&1; then
     OH_VERSION=$("$PYTHON_CMD" -m openharness --version 2>&1)
-    warn "'oh'/'ohmo' command links are not executable yet. Run via: python -m openharness or python -m ohmo"
+    warn "'oh' command link is not executable yet. Run via: python -m openharness"
     echo "  Version: ${OH_VERSION}"
-    echo "  To add them to PATH, ensure ${BIN_DIR} is in PATH:"
+    echo "  To add it to PATH, ensure ${BIN_DIR} is in PATH:"
     echo "    export PATH=\"${BIN_DIR}:\$PATH\""
 else
-    warn "Could not verify 'oh'/'ohmo' commands. The package may need a PATH update."
+    warn "Could not verify 'oh' command. The package may need a PATH update."
     echo "  Try: $PYTHON_CMD -m openharness --version"
     echo "  Or add ${BIN_DIR} to PATH and restart your shell."
 fi
 
 # ---------------------------------------------------------------------------
-# Step 10: Add command directory to shell profile
+# Step 9: Add command directory to shell profile
 # ---------------------------------------------------------------------------
 step "Setting up shell integration"
 
 ACTIVATION_LINE="export PATH=\"$BIN_DIR:\$PATH\""
 FISH_CONFIG="$HOME/.config/fish/config.fish"
 FISH_BLOCK=$(cat <<EOF
-# OpenHarness
+# iterate-harness
 if not contains -- "$BIN_DIR" \$PATH
     set -gx PATH "$BIN_DIR" \$PATH
 end
@@ -340,7 +315,7 @@ append_shell_path() {
         return
     fi
     echo "" >> "$rc_file"
-    echo "# OpenHarness" >> "$rc_file"
+    echo "# iterate-harness" >> "$rc_file"
     echo "$ACTIVATION_LINE" >> "$rc_file"
     success "Added $BIN_DIR to PATH in $(basename "$rc_file")"
     configured_any=true
@@ -370,16 +345,17 @@ fi
 # Done
 # ---------------------------------------------------------------------------
 echo ""
-echo -e "${BOLD}${GREEN}OpenHarness is installed!${RESET}"
+echo -e "${BOLD}${GREEN}iterate-harness is installed!${RESET}"
 echo ""
 echo "  Next steps:"
 echo "    1. Restart shell, or reload your shell config:"
 echo "         bash/zsh: source ~/.bashrc  (or ~/.zshrc)"
 echo "         fish:     source ~/.config/fish/config.fish"
 echo "    2. Set your API key:        export ANTHROPIC_API_KEY=your_key"
-echo "    3. Launch:                  oh"
-echo "    4. Launch ohmo:             ohmo"
-echo "    5. Docs:                    https://github.com/HKUDS/OpenHarness"
+echo "    3. Launch the TUI:          oh"
+echo "    4. First run in a project:  /iterate review   (dry-run review)"
+echo "       or headless:             oh iterate init && oh iterate review"
+echo "    5. Docs:                    https://github.com/jingzhao-l/iterate-harness"
 echo ""
 echo "  Notes:"
 echo "    - Commands are linked into: ${BIN_DIR}"

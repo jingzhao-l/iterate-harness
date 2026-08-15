@@ -35,7 +35,7 @@ from openharness.hooks import HookEvent, HookExecutionContext, HookExecutor, loa
 from openharness.hooks.hot_reload import HookReloader
 from openharness.mcp.client import McpClientManager
 from openharness.mcp.config import load_mcp_server_configs
-from openharness.permissions import PermissionChecker
+from openharness.permissions import build_permission_checker
 from openharness.plugins import load_plugins
 from openharness.prompts import build_runtime_system_prompt
 from openharness.state import AppState, AppStateStore
@@ -327,7 +327,7 @@ async def build_runtime(
     engine = QueryEngine(
         api_client=resolved_api_client,
         tool_registry=tool_registry,
-        permission_checker=PermissionChecker(settings.permission),
+        permission_checker=build_permission_checker(settings),
         cwd=cwd,
         model=settings.model,
         system_prompt=system_prompt_text,

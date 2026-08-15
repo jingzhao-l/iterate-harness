@@ -1,4 +1,4 @@
-"""The five iterate tools registered into the kernel tool registry.
+"""The six iterate tools registered into the kernel tool registry.
 
 Implements the BaseTool contract (``name`` / ``description`` /
 ``input_model`` + async ``execute``) over the pure semantic layer in
@@ -9,6 +9,8 @@ Implements the BaseTool contract (``name`` / ``description`` /
 - ``iterate_review`` — plan / aggregate / meta-review deterministic engine
 - ``iterate_decision_log`` — append-only JSONL decision log
 - ``iterate_context`` — SKILL.md / ITERATE.md / personalization context
+- ``iterate_triage`` — interactive y/n/a findings triage with
+  ``known_intentional`` persistence
 
 Every tool returns a ``ToolResult`` whose ``output`` is JSON; malformed
 input is reported as ``is_error=True`` with actionable messages instead of
@@ -407,10 +409,193 @@ def _clip(text: str) -> str:
     return text[:MAX_CONTEXT_CHARS] + "\n...[truncated]..."
 
 
+# --- iterate_triage -----------------------------------------------------------
+
+#: Interactive triage cap: bounds the per-finding ask loop so a runaway
+#: report cannot lock the session in an endless prompt sequence.
+MAX_TRIAGE_FINDINGS = 50
+
+TRIAGE_ANSWER_MAP: dict[str, str] = {
+    "y": "fix",
+    "yes": "fix",
+    "fix": "fix",
+    "n": "skip",
+    "no": "skip",
+    "skip": "skip",
+    "a": "ignore",
+    "always": "ignore",
+    "ignore": "ignore",
+}
+
+TRIAGE_IGNORE_REASON = "triaged as intentional via iterate_triage"
+
+
+class TriageFindingItem(BaseModel):
+    """One aggregated finding presented for triage."""
+
+    file: str = Field(..., min_length=1)
+    dimension: str = Field(..., min_length=1)
+    severity: Literal["critical", "high", "medium", "low"] = "medium"
+    summary: str = Field(..., min_length=1)
+    line: int | None = Field(default=None, ge=1)
+
+
+class IterateTriageInput(BaseModel):
+    findings: list[TriageFindingItem] = Field(..., min_length=1)
+    default: Literal["fix", "skip", "ignore"] = Field(
+        default="fix",
+        description="Decision applied when the user is unavailable (headless) or skips.",
+    )
+    round: int = Field(default=1, ge=1, description="Decision-log round number.")
+    note: str = Field(default="", description="Reason recorded for 'ignore' entries.")
+
+
+def _parse_triage_answer(raw: str) -> str | None:
+    """Map a raw user answer to fix/skip/ignore; None when unrecognized."""
+    token = raw.strip().lower()
+    if not token:
+        return None
+    if token in TRIAGE_ANSWER_MAP:
+        return TRIAGE_ANSWER_MAP[token]
+    # Accept decorated single letters ("y.", "a)", "n - lint noise").
+    head = token.split(None, 1)[0].rstrip(".,);:")
+    if head in TRIAGE_ANSWER_MAP:
+        return TRIAGE_ANSWER_MAP[head]
+    return None
+
+
+def _triage_question(index: int, total: int, finding: TriageFindingItem) -> str:
+    location = f"{finding.file}:{finding.line}" if finding.line else finding.file
+    return (
+        f"Triage finding {index}/{total} — [y=fix n=skip a=always-ignore] "
+        f"{finding.severity} {finding.dimension} {location}: {finding.summary}"
+    )
+
+
+class IterateTriageTool(BaseTool):
+    name = "iterate_triage"
+    description = (
+        "Interactive findings triage after a review: walk each finding with "
+        "y (fix) / n (skip) / a (always-ignore). 'a' persists the finding to "
+        "known_intentional personalization so future review rounds filter it "
+        "out automatically; every decision is recorded in the decision log. "
+        "Headless sessions apply the 'default' decision to all findings."
+    )
+    input_model = IterateTriageInput
+
+    def is_read_only(self, arguments: BaseModel) -> bool:
+        del arguments
+        return False
+
+    async def execute(self, arguments: BaseModel, context: ToolExecutionContext) -> ToolResult:
+        if not isinstance(arguments, IterateTriageInput):
+            return _json_output({"error": "invalid arguments"}, error=True)
+        if len(arguments.findings) > MAX_TRIAGE_FINDINGS:
+            return _json_output(
+                {
+                    "error": f"too many findings ({len(arguments.findings)}); "
+                    f"triage at most {MAX_TRIAGE_FINDINGS} per call"
+                },
+                error=True,
+            )
+
+        ask_user = context.metadata.get("ask_user_prompt")
+        interactive = callable(ask_user)
+        decisions: list[dict[str, Any]] = []
+        by_decision: dict[str, list[int]] = {"fix": [], "skip": [], "ignore": []}
+
+        for index, finding in enumerate(arguments.findings, start=1):
+            decision = arguments.default
+            if interactive:
+                answer = str(
+                    await ask_user(  # type: ignore[misc]
+                        _triage_question(index, len(arguments.findings), finding)
+                    )
+                )
+                decision = _parse_triage_answer(answer) or arguments.default
+            by_decision[decision].append(index)
+            decisions.append(
+                {
+                    "index": index,
+                    "file": finding.file,
+                    "dimension": finding.dimension,
+                    "severity": finding.severity,
+                    "line": finding.line,
+                    "summary": finding.summary,
+                    "decision": decision,
+                }
+            )
+
+        ignored = [arguments.findings[i - 1] for i in by_decision["ignore"]]
+        persisted = self._persist_ignores(context, ignored, arguments.note)
+
+        entry = decision_log.make_entry(
+            entry_type="decision",
+            round_number=arguments.round,
+            data={
+                "kind": "triage",
+                "interactive": interactive,
+                "default": arguments.default,
+                "counts": {name: len(ids) for name, ids in by_decision.items()},
+                "persistedKnownIntentional": persisted,
+                "decisions": decisions,
+            },
+        )
+        count, log_path = decision_log.append_entry(context.cwd, entry)
+
+        return _json_output(
+            {
+                "triage": {
+                    "interactive": interactive,
+                    "total": len(arguments.findings),
+                    "counts": {name: len(ids) for name, ids in by_decision.items()},
+                    "fixIndexes": by_decision["fix"],
+                    "skipIndexes": by_decision["skip"],
+                    "ignoreIndexes": by_decision["ignore"],
+                    "decisions": decisions,
+                },
+                "persistedKnownIntentional": persisted,
+                "decisionLogEntryCount": count,
+                "logPath": str(log_path),
+            }
+        )
+
+    def _persist_ignores(
+        self,
+        context: ToolExecutionContext,
+        ignored: list[TriageFindingItem],
+        note: str,
+    ) -> int:
+        """Append new known_intentional entries (deduped); return added count."""
+        if not ignored:
+            return 0
+        data = personalization.load(None, context.cwd)
+        existing = {(k.file, k.dimension, k.line) for k in data.known_intentional}
+        added = 0
+        for finding in ignored:
+            key = (finding.file, finding.dimension, finding.line)
+            if key in existing:
+                continue
+            data.known_intentional.append(
+                itypes.KnownIntentional(
+                    file=finding.file,
+                    dimension=finding.dimension,
+                    reason=note.strip() or TRIAGE_IGNORE_REASON,
+                    line=finding.line,
+                )
+            )
+            existing.add(key)
+            added += 1
+        if added:
+            personalization.save(None, context.cwd, data)
+        return added
+
+
 __all__ = [
     "IterateConfigTool",
     "IterateContextTool",
     "IterateDecisionLogTool",
     "IterateReviewTool",
+    "IterateTriageTool",
     "IterateValidateTool",
 ]

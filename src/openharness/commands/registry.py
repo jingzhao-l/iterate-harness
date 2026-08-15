@@ -40,7 +40,7 @@ from openharness.memory import (
     remove_memory_entry,
 )
 from openharness.output_styles import load_output_styles
-from openharness.permissions import PermissionChecker, PermissionMode
+from openharness.permissions import PermissionMode, build_permission_checker
 from openharness.plugins import load_plugins
 from openharness.prompts import build_runtime_system_prompt
 from openharness.plugins.installer import install_plugin_from_path, uninstall_plugin
@@ -1282,7 +1282,7 @@ def create_default_command_registry(
         if target_mode is not None:
             settings.permission.mode = PermissionMode(target_mode)
             save_settings(settings)
-            context.engine.set_permission_checker(PermissionChecker(settings.permission))
+            context.engine.set_permission_checker(build_permission_checker(settings))
             if context.app_state is not None:
                 context.app_state.set(permission_mode=settings.permission.mode.value)
             label = _MODE_LABELS.get(target_mode, target_mode)
@@ -1295,14 +1295,14 @@ def create_default_command_registry(
         if mode in {"on", "enter"}:
             settings.permission.mode = PermissionMode.PLAN
             save_settings(settings)
-            context.engine.set_permission_checker(PermissionChecker(settings.permission))
+            context.engine.set_permission_checker(build_permission_checker(settings))
             if context.app_state is not None:
                 context.app_state.set(permission_mode=settings.permission.mode.value)
             return CommandResult(message="Plan mode enabled.", refresh_runtime=True)
         if mode in {"off", "exit"}:
             settings.permission.mode = PermissionMode.DEFAULT
             save_settings(settings)
-            context.engine.set_permission_checker(PermissionChecker(settings.permission))
+            context.engine.set_permission_checker(build_permission_checker(settings))
             if context.app_state is not None:
                 context.app_state.set(permission_mode=settings.permission.mode.value)
             return CommandResult(message="Plan mode disabled.", refresh_runtime=True)

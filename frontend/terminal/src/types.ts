@@ -64,6 +64,16 @@ export type SwarmNotificationSnapshot = {
 	timestamp: number;
 };
 
+export type ReviewProgressSnapshot = {
+	mode: string;
+	round: number;
+	newFindings: number;
+	totalFindings: number;
+	perDimension: Record<string, number>;
+	converged: boolean;
+	costUsd: number;
+};
+
 export type BackendEvent = {
 	type: string;
 	message?: string | null;
@@ -89,4 +99,14 @@ export type BackendEvent = {
 	plan_mode?: string | null;
 	swarm_teammates?: SwarmTeammateSnapshot[] | null;
 	swarm_notifications?: SwarmNotificationSnapshot[] | null;
+	// review_progress payload (iterate convergence dashboard)
+	review_mode?: string | null;
+	review_round?: number | null;
+	review_new_findings?: number | null;
+	review_total_findings?: number | null;
+	review_per_dimension?: Record<string, number> | null;
+	review_converged?: boolean | null;
+	review_cost_usd?: number | null;
+	review_input_tokens?: number | null;
+	review_output_tokens?: number | null;
 };

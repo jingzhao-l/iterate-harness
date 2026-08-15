@@ -2,7 +2,7 @@
 
 Adapted from the dsh plugin's ``skill-prompt.ts``: the plugin drove a JS
 ``workflow`` tool; the harness runtime instead has the kernel agent loop
-plus the five ``iterate_*`` tools and the ``agent`` tool (parallel subagent
+plus the six ``iterate_*`` tools and the ``agent`` tool (parallel subagent
 spawns). These templates teach the model the SAME canonical loop shape,
 with convergence enforced deterministically by the engine-level
 :class:`~openharness.iterate.loop_policy.IterateLoopPolicy`.
@@ -18,6 +18,7 @@ You have the iterate harness installed, which registers these tools:
 - `iterate_decision_log` — append to / read the append-only decision log
 - `iterate_context` — read SKILL.md / ITERATE.md project context
 - `iterate_review` — deterministic review engine: `plan` builds the review plan; `aggregate` dedupes/merges findings and computes convergence; `meta-review` audits a report for internal consistency.
+- `iterate_triage` — after a review, walk findings with the user y (fix) / n (skip) / a (always-ignore); `a` persists to known_intentional so future rounds filter it.
 
 ### When to use
 When the user asks to review or iterate on the project (e.g. "review this project", "iterate on error handling", "check the codebase for issues", "dry-run review", "反复审查"):
@@ -44,6 +45,9 @@ Canonical loop — reproduce this structure exactly (adjust dims via the plan):
    final report (counts, severity buckets, dimension sums, sort order,
    convergence math). `verdict` is `approved` only if every check passes.
 6. Append exactly ONE `report` entry to the decision log. Nothing else is written.
+7. When the user wants a say in the findings, offer triage via
+   `iterate_triage(findings=[...])` — the user answers y/n/a per finding and
+   `a` entries are persisted to known_intentional automatically.
 
 Key rules for dry-run:
 - NEVER edit files / create branches or worktree. Reviewers read only.
