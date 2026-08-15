@@ -159,6 +159,44 @@ class IterateValidateTool(BaseTool):
 # --- iterate_review ---------------------------------------------------------
 
 
+def _clean_dimension_usage(raw: dict[str, int] | None) -> dict[str, int]:
+    """Defensively normalize a per-dimension token-total report."""
+    if not raw:
+        return {}
+    return {
+        str(dim): max(0, int(tokens))
+        for dim, tokens in raw.items()
+        if isinstance(tokens, int) and not isinstance(tokens, bool)
+    }
+
+
+def _clean_dimension_usage_io(raw: dict[str, dict[str, int]] | None) -> dict[str, dict[str, int]]:
+    """Defensively normalize a per-dimension input/output split report.
+
+    Only entries with at least one valid non-negative token count survive;
+    malformed shapes are dropped (never raise — reporting must not break
+    aggregation).
+    """
+    if not raw:
+        return {}
+    cleaned: dict[str, dict[str, int]] = {}
+    for dim, split in raw.items():
+        if not isinstance(split, dict):
+            continue
+        input_tokens = split.get("input")
+        output_tokens = split.get("output")
+        valid_input = input_tokens if isinstance(input_tokens, int) and not isinstance(input_tokens, bool) else None
+        valid_output = output_tokens if isinstance(output_tokens, int) and not isinstance(output_tokens, bool) else None
+        if valid_input is None and valid_output is None:
+            continue
+        clamped_input = max(0, valid_input or 0)
+        clamped_output = max(0, valid_output or 0)
+        if clamped_input == 0 and clamped_output == 0:
+            continue
+        cleaned[str(dim)] = {"input": clamped_input, "output": clamped_output}
+    return cleaned
+
+
 class IterateReviewInput(BaseModel):
     operation: Literal["plan", "aggregate", "meta-review"]
     mode: Literal["dry-run", "normal"] = "dry-run"
@@ -178,6 +216,14 @@ class IterateReviewInput(BaseModel):
         description=(
             "Optional per-dimension token usage (e.g. from reviewer agents' "
             "reported totals) audited against dimension_resources token budgets"
+        ),
+    )
+    dimension_usage_io: dict[str, dict[str, int]] | None = Field(
+        default=None,
+        description=(
+            "Optional per-dimension input/output token split, e.g. "
+            '{"security": {"input": 1000, "output": 500}} — enables exact '
+            "per-dimension USD billing instead of the blended-price estimate"
         ),
     )
 
@@ -237,7 +283,14 @@ class IterateReviewTool(BaseTool):
                 rounds=report.rounds,
                 known_intentional=known,
             )
-        budget_audit = self._audit_budgets(args, context)
+        usage_totals = _clean_dimension_usage(args.dimension_usage)
+        usage_io = _clean_dimension_usage_io(args.dimension_usage_io)
+        # Split reports also count toward budget audits (input + output).
+        for dimension, split in usage_io.items():
+            split_total = split["input"] + split["output"]
+            if split_total > usage_totals.get(dimension, 0):
+                usage_totals[dimension] = split_total
+        budget_audit = self._audit_budgets(usage_totals, context)
         # Publish loop-policy state (single source of truth for convergence).
         state: dict[str, Any] = {
             "mode": report.mode,
@@ -248,16 +301,14 @@ class IterateReviewTool(BaseTool):
             "by_dimension": dict(report.summary.by_dimension),
         }
         payload: dict[str, Any] = {"report": review.report_to_dict(report)}
-        if args.dimension_usage:
-            usage = {
-                str(dim): max(0, int(tokens))
-                for dim, tokens in args.dimension_usage.items()
-                if isinstance(tokens, int) and not isinstance(tokens, bool)
-            }
-            if usage:
-                # Engine-level per-dimension usage passthrough (v1.2-c): the
-                # loop policy bills these reported totals into its CostMeter.
-                state["dimension_usage"] = usage
+        if usage_totals:
+            # Engine-level per-dimension usage passthrough (v1.2-c): the
+            # loop policy bills these reported totals into its CostMeter.
+            state["dimension_usage"] = usage_totals
+        if usage_io:
+            # Exact in/out split passthrough (v1.26): billed at precise
+            # prices instead of the blended average where available.
+            state["dimension_usage_io"] = usage_io
         if budget_audit is not None:
             state["exhausted_dimensions"] = budget_audit.exceeded_dimensions
             state["all_dimensions_exhausted"] = budget_audit.all_budgeted_exhausted
@@ -266,7 +317,7 @@ class IterateReviewTool(BaseTool):
         return _json_output(payload)
 
     @staticmethod
-    def _audit_budgets(args: IterateReviewInput, context: ToolExecutionContext):
+    def _audit_budgets(usage_totals: dict[str, int], context: ToolExecutionContext):
         """Audit reported per-dimension usage against configured budgets.
 
         Returns ``None`` when no budgets are configured or no usage was
@@ -278,14 +329,9 @@ class IterateReviewTool(BaseTool):
             .config.dimension_resources.items()
             if res.token_budget is not None
         }
-        if not budgets or not args.dimension_usage:
+        if not budgets or not usage_totals:
             return None
-        usage = {
-            str(dim): max(0, int(tokens))
-            for dim, tokens in args.dimension_usage.items()
-            if isinstance(tokens, int) and not isinstance(tokens, bool)
-        }
-        return review.audit_dimension_budgets(budgets, usage)
+        return review.audit_dimension_budgets(budgets, usage_totals)
 
     def _meta_review(self, args: IterateReviewInput, context: ToolExecutionContext) -> ToolResult:
         if not args.report:

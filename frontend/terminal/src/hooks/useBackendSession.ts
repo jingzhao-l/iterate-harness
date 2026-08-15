@@ -474,6 +474,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 					perDimension: event.review_per_dimension ?? {},
 					converged: Boolean(event.review_converged),
 					costUsd: Number(event.review_cost_usd ?? 0),
+					dimensionCostUsd: event.review_dimension_cost_usd ?? {},
 				});
 				setReviewRoundTrend((prev) => [...prev, newFindings].slice(-12));
 			});

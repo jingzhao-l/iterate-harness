@@ -295,6 +295,7 @@ class ReactBackendHost:
                         review_per_dimension=dict(event.per_dimension),
                         review_converged=event.converged,
                         review_cost_usd=event.cost_usd,
+                        review_dimension_cost_usd=dict(event.dimension_cost_usd),
                         review_input_tokens=event.input_tokens,
                         review_output_tokens=event.output_tokens,
                         message=(

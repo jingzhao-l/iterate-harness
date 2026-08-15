@@ -1,6 +1,4 @@
 <h1 align="center">
-  <img src="assets/logo.png" alt="iterate-harness" width="64" style="vertical-align: middle;">
-  <br>
   <code>iterate-harness</code>
 </h1>
 
@@ -28,7 +26,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-1.6.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.7.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -92,7 +90,7 @@ OpenAI 兼容供应商，见 `ih --help`）。
 | **确定性评审引擎** | `iterate_review` plan / aggregate / meta-review：跨轮去重、`known_intentional` 过滤、severity 排序、收敛统计、6 项报告一致性审计——全部纯计算，零 LLM 判断 |
 | **两种模式** | `dry-run`（纯评审，绝不改文件）与 `normal`（评审 → 原子修复 → 验证 → 循环，验证失败经 git 隔离自动回滚） |
 | **引擎级收敛强制** | `IterateLoopPolicy` 位于内核查询循环：轮次上限、收敛自停、下一轮引导不受 prompt 注入影响 |
-| **收敛仪表盘** | React TUI 实时面板：逐轮 findings 趋势、维度分布、累计 USD 成本、收敛徽标 |
+| **收敛仪表盘** | React TUI 实时面板：逐轮 findings 趋势、带分维度 USD 估算的维度分布、主循环累计成本、收敛徽标 |
 | **findings 分诊** | `iterate_triage`：逐条 `y` 修复 / `n` 跳过 / `a` 永久忽略；`a` 持久化到 `known_intentional`，后续轮次自动过滤 |
 | **成本透明** | token 用量按内置价格表换算为每轮/累计 USD（可按模型覆盖） |
 | **安全边界代码化** | 设置中的 `protected_paths` 与 `forbidden_fix_patterns` 自动装配进权限层（deny 路径规则 + 写载荷正则）；验证命令走精确匹配白名单 |
@@ -100,14 +98,14 @@ OpenAI 兼容供应商，见 `ih --help`）。
 | **Esc 中途干预** | 闭环运行中按 Esc：在下一轮边界暂停并弹出方向键菜单（跳过当前 finding / 收窄维度 / 直接停 / 继续）；再按一次 Esc 强制打断当前 turn |
 | **finding 指纹趋势库** | 每次收尾用 `文件\|行号\|维度` 指纹把 finding 记入 `.iterate/trend-library.json`；`ih iterate log --trend` / `/iterate trend` 跨运行统计新增 / 已修复 / 回归 / 顽固（连续 3+ 轮）finding |
 | **断点续跑** | TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding |
-| **CI / PR 模式** | `ih iterate report --github --fail-on high` 将最终报告转为 GitHub Actions 批注，并按严重度门禁决定退出码；`--pr` 经 gh CLI 把报告以 Markdown 评论发布（后续运行幂等更新同一条评论），所有失败形态优雅降级、绝不破坏退出码策略 |
+| **CI / PR 模式** | `ih iterate report --github --fail-on high` 将最终报告转为 GitHub Actions 批注，并按严重度门禁决定退出码；`--pr` 经 gh CLI 把报告以 Markdown 评论发布（marker 查找全量翻页，巨型 PR 同样幂等更新同一条评论），所有失败形态优雅降级、绝不破坏退出码策略 |
 | **changed-only 快审** | `--changed [--ref <ref>]`（CLI 与 `/iterate review --changed`）把整个闭环钉在 git 增量上：kickoff、评审计划与每个维度 reviewer prompt 都携带明确的改动文件清单 |
 | **批量排行** | `ih iterate batch repoA repoB …` 顺序评审多个仓库，按严重度加权排出最差榜；单个仓库失败不会中断整批 |
 | **定时评审** | `ih iterate schedule add "0 9 * * 1-5"` 注册 cron 任务，每日（UTC）自动跑 changed-only 快审（`--clean-ok`）；新增 vs 顽固 finding 经趋势库呈现 |
 | **HTML 单文件报告** | `ih iterate report --html` 把整次运行渲染成一个可离线打开的 `.html`：SVG 收敛曲线、severity/维度分布条、含失败场景的 findings 表、按修复着色的 diff——可直接作为 CI 产物分享 |
 | **评审回放** | `ih iterate log --replay` 按时间序回放整次运行（`[+90s] r1 review_result newFindings=3`），像看录像一样还原闭环展开过程 |
 | **per-dimension 资源** | `iterate.config.yaml` 的 `dimension_resources` 支持按维度设置 `model` / `concurrency`（1–8）/ `token_budget`——security 用强模型、style-tests 用快模型；评审计划会携带到每次 reviewer 派发 |
-| **token 预算强制** | `token_budget` 在引擎层封顶整轮运行（超限硬停并转入收尾报告）；`iterate_review(operation="aggregate", dimension_usage=…)` 审计各维度用量，把 reviewer 上报的累计 token 回传引擎成本表（并按模型混合价折算每维度 USD 估算），下一轮自动跳过已超限维度 |
+| **token 预算强制** | `token_budget` 在引擎层封顶整轮运行（超限硬停并转入收尾报告）；`iterate_review(operation="aggregate", dimension_usage=…, dimension_usage_io=…)` 审计各维度用量，把 reviewer 上报的累计 token 回传引擎成本表——上报 input/output 拆分的维度按精确单价计费、仅上报总量的按混合价估算——下一轮自动跳过已超限维度 |
 | **阈值门禁** | `thresholds.max_critical` / `max_high` / `max_medium` / `max_low`（全局或按维度）封顶最终报告中的发现数量——违规即把结论翻转为 `needs_revision`，并让 `ih iterate report` 退出码失败（`threshold gate: FAIL`） |
 | **定时评审时区** | `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` 按本地时区解释 cron（存储为 UTC 标准化时间），"每天 9 点"就是你所在地的 9 点 |
 | **检测式 init** | `ih iterate init` 探测项目标记文件（package.json / pyproject / go.mod / Cargo.toml / …），基于真实证据推断测试命令，推荐评审维度（前端依赖解锁 `frontend-backend` / `ui-ux`），预览 yaml 并确认后才写入；TUI 内 `/iterate init` 同效 |

@@ -87,6 +87,10 @@ class CostMeter:
     # plain addition would double-count). Reviewer subagents bill outside the
     # main API stream, so these are reported figures, not metered ones.
     _dimension_tokens: dict[str, int] = field(default_factory=dict)
+    # Optional per-dimension input/output split (also monotonic). When a
+    # dimension has a split, USD is billed at the exact input/output prices
+    # instead of the blended average; the split wins over the bare total.
+    _dimension_io: dict[str, tuple[int, int]] = field(default_factory=dict)
 
     def accumulate(self, usage: UsageSnapshot, model: str) -> None:
         """Add one usage snapshot billed against ``model``."""
@@ -104,26 +108,51 @@ class CostMeter:
         clamped = max(0, int(total_tokens))
         self._dimension_tokens[dimension] = max(self._dimension_tokens.get(dimension, 0), clamped)
 
+    def record_dimension_usage(
+        self,
+        dimension: str,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        """Record a dimension's cumulative input/output split (monotonic).
+
+        The split is more precise than a bare total: ``dimension_cost_usd``
+        bills it at the exact input/output prices. Also refreshes the bare
+        total so ``dimension_tokens`` stays consistent for both sources.
+        """
+        in_clamped = max(0, int(input_tokens))
+        out_clamped = max(0, int(output_tokens))
+        prev_in, prev_out = self._dimension_io.get(dimension, (0, 0))
+        self._dimension_io[dimension] = (max(prev_in, in_clamped), max(prev_out, out_clamped))
+        self.record_dimension_total(dimension, in_clamped + out_clamped)
+
     def dimension_tokens(self) -> dict[str, int]:
         """Return a copy of the per-dimension cumulative token totals."""
         return dict(self._dimension_tokens)
 
     def dimension_cost_usd(self, model: str) -> dict[str, float]:
-        """Estimate per-dimension USD from the reported token totals.
+        """Estimate per-dimension USD from the reported usage figures.
 
-        Reviewer subagents report a single running token total per dimension
-        (no input/output split), so the estimate bills the whole total at
-        the average of ``model``'s input and output prices. The result is
-        informational and deliberately NOT folded into
+        Dimensions with an input/output split are billed at the exact
+        prices; bare totals fall back to the blended (average) price. The
+        result is informational and deliberately NOT folded into
         :attr:`total_cost_usd` (which stays on the metered main-loop
         accounting).
         """
         in_price, out_price = price_for(model, self.price_overrides)
         blended_price = (in_price + out_price) / 2
-        return {
-            dimension: round(tokens * blended_price / TOKENS_PER_MILLION, 6)
-            for dimension, tokens in self._dimension_tokens.items()
-        }
+        costs: dict[str, float] = {}
+        for dimension, tokens in self._dimension_tokens.items():
+            split = self._dimension_io.get(dimension)
+            if split is not None:
+                in_tokens, out_tokens = split
+                costs[dimension] = round(
+                    (in_tokens * in_price + out_tokens * out_price) / TOKENS_PER_MILLION,
+                    6,
+                )
+            else:
+                costs[dimension] = round(tokens * blended_price / TOKENS_PER_MILLION, 6)
+        return costs
 
     @property
     def total_cost_usd(self) -> float:

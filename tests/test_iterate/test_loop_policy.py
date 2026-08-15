@@ -5,7 +5,7 @@ from __future__ import annotations
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.engine.stream_events import ReviewProgressEvent
 from iterate_harness.iterate.cost import CostMeter, price_for
-from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY, IterateLoopPolicy
+from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY, IterateLoopPolicy, read_state
 
 
 def state(**overrides: object) -> dict[str, object]:
@@ -241,3 +241,85 @@ class TestDimensionCostUsd:
         without_usd = meter.format_summary()
         assert "tokens (reviewer-reported)" in without_usd
         assert "$" not in without_usd.split("dimension security")[1]
+
+    def test_split_report_bills_exact_prices(self):
+        """v1.26: in/out split beats the blended average."""
+        meter = CostMeter()
+        meter.record_dimension_usage("security", input_tokens=1_000_000, output_tokens=1_000_000)
+        # claude-sonnet-4 exact: 1M*$3 + 1M*$15 = $18 (blend would be $16)
+        assert meter.dimension_cost_usd("claude-sonnet-4-6") == {"security": 18.0}
+
+    def test_split_report_is_monotonic(self):
+        meter = CostMeter()
+        meter.record_dimension_usage("security", input_tokens=800_000, output_tokens=200_000)
+        meter.record_dimension_usage("security", input_tokens=500_000, output_tokens=900_000)
+        costs = meter.dimension_cost_usd("claude-sonnet-4-6")
+        # per-stream max: in=800k, out=900k → 0.8*3 + 0.9*15 = 2.4 + 13.5 = 15.9
+        assert costs == {"security": 15.9}
+        # bare total keeps the max per-report SUM (1.0M then 1.4M).
+        assert meter.dimension_tokens() == {"security": 1_400_000}
+
+    def test_split_wins_over_bare_total_for_same_dimension(self):
+        meter = CostMeter()
+        meter.record_dimension_total("security", 2_000_000)
+        meter.record_dimension_usage("security", input_tokens=400_000, output_tokens=100_000)
+        costs = meter.dimension_cost_usd("claude-sonnet-4-6")
+        # exact split: 0.4*3 + 0.1*15 = 1.2 + 1.5 = 2.7 (not blended 2M*$9)
+        assert costs == {"security": 2.7}
+
+    def test_mixed_split_and_total_dimensions(self):
+        meter = CostMeter()
+        meter.record_dimension_usage("security", input_tokens=1_000_000, output_tokens=0)
+        meter.record_dimension_total("style", 1_000_000)
+        costs = meter.dimension_cost_usd("claude-sonnet-4-6")
+        assert costs == {"security": 3.0, "style": 9.0}
+
+    def test_read_state_parses_dimension_usage_io(self):
+        state = {
+            "rounds_seen": 1,
+            "total_findings": 2,
+            "findings_by_round": [2],
+            "converged": False,
+            "by_dimension": {"security": 2},
+            "dimension_usage": {"security": 900_000, "style": 10},
+            "dimension_usage_io": {
+                "security": {"input": 800_000, "output": 100_000},
+                "style": {"input": "bogus", "output": None},
+            },
+        }
+        snapshot = read_state({ITERATE_STATE_KEY: state})
+        assert snapshot is not None
+        assert snapshot.dimension_usage_io == {"security": {"input": 800_000, "output": 100_000}}
+
+    def test_read_state_drops_malformed_io_entries(self):
+        state = {
+            "rounds_seen": 1,
+            "dimension_usage_io": {"security": "not-a-dict", "style": {"input": 0, "output": 0}},
+        }
+        snapshot = read_state({ITERATE_STATE_KEY: state})
+        assert snapshot is not None
+        assert snapshot.dimension_usage_io == {}
+
+    def test_progress_event_carries_dimension_cost_usd(self):
+        """v1.26: ReviewProgressEvent exposes the per-dimension USD map."""
+        from iterate_harness.engine.stream_events import ReviewProgressEvent
+
+        policy = IterateLoopPolicy(price_overrides={"m1": (2.0, 4.0)})
+        policy.cost_meter.record_dimension_usage("security", input_tokens=500_000, output_tokens=250_000)
+        snapshot = read_state(
+            {
+                ITERATE_STATE_KEY: {
+                    "rounds_seen": 1,
+                    "total_findings": 1,
+                    "findings_by_round": [1],
+                    "converged": False,
+                    "by_dimension": {"security": 1},
+                    "dimension_usage": {"security": 750_000},
+                }
+            }
+        )
+        assert snapshot is not None
+        event = policy._build_progress(snapshot, UsageSnapshot(), "m1")
+        assert isinstance(event, ReviewProgressEvent)
+        # exact split: 0.5M*$2 + 0.25M*$4 = 1.0 + 1.0 = 2.0
+        assert event.dimension_cost_usd == {"security": 2.0}

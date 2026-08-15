@@ -119,6 +119,7 @@ class BackendEvent(BaseModel):
     review_per_dimension: dict[str, int] | None = None
     review_converged: bool | None = None
     review_cost_usd: float | None = None
+    review_dimension_cost_usd: dict[str, float] | None = None
     review_input_tokens: int | None = None
     review_output_tokens: int | None = None
 

@@ -272,6 +272,78 @@ class TestIterateReviewTool:
         state = context.metadata[ITERATE_STATE_KEY]
         assert state["dimension_usage"] == {"security": 0, "correctness": 120}
 
+    async def test_aggregate_relays_dimension_usage_io(self, tmp_path):
+        """v1.26: in/out split is published alongside the bare totals."""
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        context = make_context(tmp_path)
+        rounds = [{"round": 1, "findings": [FINDING]}]
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(
+                operation="aggregate",
+                rounds=rounds,
+                dimension_usage={"style": 30},
+                dimension_usage_io={"security": {"input": 1000, "output": 500}},
+            ),
+            context,
+        )
+        assert result.is_error is False
+        state = context.metadata[ITERATE_STATE_KEY]
+        assert state["dimension_usage"] == {"security": 1500, "style": 30}
+        assert state["dimension_usage_io"] == {"security": {"input": 1000, "output": 500}}
+
+    async def test_aggregate_sanitizes_dimension_usage_io(self, tmp_path):
+        """v1.26: negative split counts clamp to zero; all-zero splits drop."""
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        context = make_context(tmp_path)
+        rounds = [{"round": 1, "findings": [FINDING]}]
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(
+                operation="aggregate",
+                rounds=rounds,
+                dimension_usage_io={
+                    "security": {"input": -10, "output": 5},
+                    "style": {"input": 0, "output": 0},
+                },
+            ),
+            context,
+        )
+        assert result.is_error is False
+        state = context.metadata[ITERATE_STATE_KEY]
+        assert state["dimension_usage_io"] == {"security": {"input": 0, "output": 5}}
+        assert state["dimension_usage"] == {"security": 5}
+
+    async def test_aggregate_counts_io_toward_budget_audit(self, tmp_path):
+        """v1.26: split reports feed budget audits even without bare totals."""
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        write_config(
+            tmp_path,
+            "dimensions:\n  - security\n"
+            "dimension_resources:\n"
+            "  security:\n    token_budget: 1000\n",
+        )
+        context = make_context(tmp_path)
+        rounds = [{"round": 1, "findings": [FINDING]}]
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(
+                operation="aggregate",
+                rounds=rounds,
+                dimension_usage_io={"security": {"input": 700, "output": 400}},
+            ),
+            context,
+        )
+        payload = json.loads(result.output)
+        assert payload["budgetAudit"]["exceededDimensions"] == ["security"]
+        assert context.metadata[ITERATE_STATE_KEY]["exhausted_dimensions"] == ["security"]
+
     async def test_meta_review_emits_threshold_gate_when_configured(self, tmp_path):
         """v1.1: meta-review folds project thresholds into the final verdict."""
         from iterate_harness.tools.iterate_tools import IterateReviewInput

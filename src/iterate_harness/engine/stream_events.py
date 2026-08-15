@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from iterate_harness.api.usage import UsageSnapshot
@@ -97,6 +97,9 @@ class ReviewProgressEvent:
     output_tokens: int
     cost_usd: float
     mode: str = "dry-run"
+    # Per-dimension estimated USD (reviewer-reported accounting; empty when
+    # no dimension usage was reported). NOT part of ``cost_usd``.
+    dimension_cost_usd: dict[str, float] = field(default_factory=dict)
 
 
 StreamEvent = (

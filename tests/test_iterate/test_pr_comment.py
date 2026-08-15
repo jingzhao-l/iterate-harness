@@ -54,7 +54,7 @@ POSTED_COMMENT = json.dumps(
 
 
 def _happy_routes(*, existing: bool = True) -> list[tuple[tuple[str, ...], int, str]]:
-    listing = ("api", "repos/jingzhao-l/iterate-harness/issues/123/comments?per_page=100")
+    listing = ("api", "repos/jingzhao-l/iterate-harness/issues/123/comments?per_page=100&page=1")
     routes = [
         (("pr", "view"), 0, "123"),
         (("repo", "view"), 0, "jingzhao-l/iterate-harness"),
@@ -169,7 +169,7 @@ class TestPostPrComment:
             [
                 (("pr", "view"), 0, "7"),
                 (("repo", "view"), 0, "o/r"),
-                (("api", "repos/o/r/issues/7/comments?per_page=100"), 1, "Server Error"),
+                (("api", "repos/o/r/issues/7/comments?per_page=100&page=1"), 1, "Server Error"),
             ]
         )
         result = pr_comment.post_pr_comment(pr_comment.PR_COMMENT_MARKER, cwd=".", runner=gh)
@@ -181,7 +181,7 @@ class TestPostPrComment:
             [
                 (("pr", "view"), 0, "7"),
                 (("repo", "view"), 0, "o/r"),
-                (("api", "repos/o/r/issues/7/comments?per_page=100"), 0, "<<not-json>>"),
+                (("api", "repos/o/r/issues/7/comments?per_page=100&page=1"), 0, "<<not-json>>"),
             ]
         )
         result = pr_comment.post_pr_comment(pr_comment.PR_COMMENT_MARKER, cwd=".", runner=gh)
@@ -210,7 +210,7 @@ class TestPostPrComment:
         routes = [
             (("pr", "view"), 0, "7"),
             (("repo", "view"), 0, "o/r"),
-            (("api", "repos/o/r/issues/7/comments?per_page=100"), 0, "[]"),
+            (("api", "repos/o/r/issues/7/comments?per_page=100&page=1"), 0, "[]"),
             (("api", "repos/o/r/issues/7/comments", "--input", "-"), 1, "403 Forbidden"),
         ]
         result = pr_comment.post_pr_comment(pr_comment.PR_COMMENT_MARKER, cwd=".", runner=FakeGh(routes))
@@ -221,12 +221,89 @@ class TestPostPrComment:
         routes = [
             (("pr", "view"), 0, "7"),
             (("repo", "view"), 0, "o/r"),
-            (("api", "repos/o/r/issues/7/comments?per_page=100"), 0, POSTED_COMMENT),
+            (("api", "repos/o/r/issues/7/comments?per_page=100&page=1"), 0, POSTED_COMMENT),
             (("api", "-X", "PATCH"), 1, "422 Unprocessable"),
         ]
         result = pr_comment.post_pr_comment(pr_comment.PR_COMMENT_MARKER, cwd=".", runner=FakeGh(routes))
         assert result.status == "skipped"
         assert "update" in result.detail
+
+
+class TestFindMarkerCommentPagination:
+    """Giant-PR pagination: the marker beyond the first 100 comments is found."""
+
+    @staticmethod
+    def _full_page(start_id: int, marker_ids: tuple[int, ...] = (), count: int = 100) -> str:
+        comments = [
+            {"id": start_id + i, "body": f"regular comment {start_id + i}"} for i in range(count)
+        ]
+        for marker_id in marker_ids:
+            entry = next(c for c in comments if c["id"] == marker_id)
+            entry["body"] = pr_comment.PR_COMMENT_MARKER + "\nold"
+        return json.dumps(comments)
+
+    def _routes(self, pages: list[str]) -> list[tuple[tuple[str, ...], int, str]]:
+        routes = [
+            (("pr", "view"), 0, "7"),
+            (("repo", "view"), 0, "o/r"),
+        ]
+        for index, payload in enumerate(pages, start=1):
+            routes.append((("api", f"repos/o/r/issues/7/comments?per_page=100&page={index}"), 0, payload))
+        return routes
+
+    def test_marker_on_later_page_is_found(self):
+        # Page 1: full, no marker. Page 2 (short, stops the scan): marker.
+        pages = [self._full_page(1000), self._full_page(1100, marker_ids=(1115,), count=99)]
+        gh = FakeGh(self._routes(pages))
+        result = pr_comment.post_pr_comment(pr_comment.PR_COMMENT_MARKER, cwd=".", runner=gh)
+        assert result.status == "skipped"  # no PATCH route configured
+        listing_calls = [c for c in gh.calls if "comments?per_page" in " ".join(c[0])]
+        assert len(listing_calls) == 2
+
+    def test_marker_on_later_page_triggers_patch_on_that_id(self):
+        pages = [self._full_page(1000), self._full_page(1100, marker_ids=(1115,), count=99)]
+        routes = self._routes(pages)
+        routes.append((("api", "-X", "PATCH", "repos/o/r/issues/comments/1115"), 0, "{}"))
+        result = pr_comment.post_pr_comment(pr_comment.PR_COMMENT_MARKER, cwd=".", runner=FakeGh(routes))
+        assert result.status == "updated"
+
+    def test_latest_marker_across_pages_wins(self):
+        # Marker on page 1 (id 1055) AND page 2 (id 1115): the newer page wins.
+        pages = [
+            self._full_page(1000, marker_ids=(1055,)),
+            self._full_page(1100, marker_ids=(1115,), count=99),
+        ]
+        routes = self._routes(pages)
+        routes.append((("api", "-X", "PATCH"), 0, "{}"))
+        gh = FakeGh(routes)
+        result = pr_comment.post_pr_comment(pr_comment.PR_COMMENT_MARKER, cwd=".", runner=gh)
+        assert result.status == "updated"
+        patch_calls = [c for c in gh.calls if "PATCH" in c[0]]
+        assert "issues/comments/1115" in "/".join(patch_calls[0][0])
+
+    def test_page_cap_stops_scanning_and_falls_back_to_create(self):
+        # Every page is full (100 comments) with no marker anywhere: the
+        # defensive cap stops the scan and the comment is (re)created.
+        pages = [self._full_page(1000 + 100 * i) for i in range(pr_comment.MAX_COMMENT_PAGES)]
+        routes = self._routes(pages)
+        routes.append((("api", "repos/o/r/issues/7/comments", "--input", "-"), 0, "{}"))
+        gh = FakeGh(routes)
+        result = pr_comment.post_pr_comment(pr_comment.PR_COMMENT_MARKER, cwd=".", runner=gh)
+        assert result.status == "posted"
+        listing_calls = [c for c in gh.calls if "comments?per_page" in " ".join(c[0])]
+        assert len(listing_calls) == pr_comment.MAX_COMMENT_PAGES
+
+    def test_short_page_stops_pagination_early(self):
+        # Page 2 returns a short page (3 comments, no marker) → scan stops
+        # even though the cap allows more pages.
+        pages = [self._full_page(1000), json.dumps([{"id": 1, "body": "tail"}])]
+        routes = self._routes(pages)
+        routes.append((("api", "repos/o/r/issues/7/comments", "--input", "-"), 0, "{}"))
+        gh = FakeGh(routes)
+        result = pr_comment.post_pr_comment(pr_comment.PR_COMMENT_MARKER, cwd=".", runner=gh)
+        assert result.status == "posted"
+        listing_calls = [c for c in gh.calls if "comments?per_page" in " ".join(c[0])]
+        assert len(listing_calls) == 2
 
 
 class TestReportCliPrMode:

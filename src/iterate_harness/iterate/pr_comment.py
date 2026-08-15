@@ -36,6 +36,13 @@ PR_COMMENT_MARKER = "<!-- iterate-report -->"
 #: Findings cap in the rendered Markdown table (keeps huge reports readable).
 MAX_FINDINGS_ROWS = 50
 
+#: Comments per listing page (GitHub API maximum).
+COMMENTS_PER_PAGE = 100
+
+#: Defensive cap on comment-list pagination: 10 pages x 100 = 1000 comments.
+#: Beyond this the lookup stops and falls back to creating a new comment.
+MAX_COMMENT_PAGES = 10
+
 #: Hard timeout for every gh invocation (seconds) — CI must never hang.
 GH_TIMEOUT_SECONDS = 60
 
@@ -226,20 +233,38 @@ def _find_marker_comment(
     repo: str,
     number: int,
 ) -> int | Literal["error"]:
-    """Return the id of OUR latest comment on the PR, None or "error"."""
-    proc = _safe_run(
-        runner,
-        ["api", f"repos/{repo}/issues/{number}/comments?per_page=100"],
-        cwd,
-    )
-    if proc is None or proc.returncode != 0:
-        return "error"
-    try:
-        comments = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return "error"
-    if not isinstance(comments, list):
-        return "error"
+    """Return the id of OUR latest comment on the PR, None or "error".
+
+    Pages through the comment list (``per_page=100``) until a short page is
+    returned or the defensive page cap is hit — marker comments beyond the
+    first 100 comments of a giant PR are therefore still found. Pages are
+    chronological, so the marker found on the HIGHEST page wins.
+    """
+    latest: int | None = None
+    for page in range(1, MAX_COMMENT_PAGES + 1):
+        proc = _safe_run(
+            runner,
+            ["api", f"repos/{repo}/issues/{number}/comments?per_page={COMMENTS_PER_PAGE}&page={page}"],
+            cwd,
+        )
+        if proc is None or proc.returncode != 0:
+            return "error"
+        try:
+            comments = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return "error"
+        if not isinstance(comments, list):
+            return "error"
+        found = _marker_id_in_page(comments)
+        if found is not None:
+            latest = found
+        if len(comments) < COMMENTS_PER_PAGE:
+            break
+    return latest
+
+
+def _marker_id_in_page(comments: list[Any]) -> int | None:
+    """Return the id of the newest marker comment in one listing page."""
     for comment in reversed(comments):
         if not isinstance(comment, dict):
             continue

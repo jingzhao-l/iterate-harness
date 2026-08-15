@@ -301,6 +301,7 @@ async def run_print_mode(
                         "input_tokens": event.input_tokens,
                         "output_tokens": event.output_tokens,
                         "cost_usd": event.cost_usd,
+                        "dimension_cost_usd": event.dimension_cost_usd,
                         "message": summary,
                     }
                     print(json.dumps(obj), flush=True)

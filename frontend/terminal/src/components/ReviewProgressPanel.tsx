@@ -28,6 +28,7 @@ function ReviewProgressPanelInner({
 	const dimensions = Object.entries(progress.perDimension)
 		.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 		.slice(0, 6);
+	const hasDimensionCost = Object.keys(progress.dimensionCostUsd).length > 0;
 
 	return (
 		<Box
@@ -64,13 +65,19 @@ function ReviewProgressPanelInner({
 			) : null}
 			{dimensions.length > 0 ? (
 				<Box>
-					{dimensions.map(([dimension, count], index) => (
-						<Box key={dimension}>
-							{index > 0 ? <Text dimColor> · </Text> : null}
-							<Text dimColor>{dimension} </Text>
-							<Text color={count > 0 ? 'yellow' : 'green'}>{count}</Text>
-						</Box>
-					))}
+					{dimensions.map(([dimension, count], index) => {
+						const costUsd = progress.dimensionCostUsd[dimension];
+						return (
+							<Box key={dimension}>
+								{index > 0 ? <Text dimColor> · </Text> : null}
+								<Text dimColor>{dimension} </Text>
+								<Text color={count > 0 ? 'yellow' : 'green'}>{count}</Text>
+								{hasDimensionCost && costUsd != null ? (
+									<Text dimColor> ~{formatCost(costUsd)}</Text>
+								) : null}
+							</Box>
+						);
+					})}
 				</Box>
 			) : null}
 		</Box>

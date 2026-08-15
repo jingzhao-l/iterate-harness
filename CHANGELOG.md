@@ -6,6 +6,21 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-15
+
+Closes the three v1.21 leftovers: giant-PR comment pagination, exact per-dimension USD billing, and per-dimension cost in the TUI convergence panel. Also removes the inherited OpenHarness logo from the READMEs (trademark hygiene for the fork).
+
+### Added
+
+- **Per-dimension USD in the convergence panel**: `ReviewProgressEvent` carries a `dimension_cost_usd` map end-to-end (loop policy → protocol → backend host → React panel). The panel now renders `security 3 ~$0.0210` style per-dimension estimates next to the counts whenever reviewer usage was reported; the header keeps the metered main-loop total.
+- **Exact in/out split billing** (`dimension_usage_io`): the `iterate_review` aggregate operation accepts an optional per-dimension input/output split (e.g. `{"security": {"input": 1000, "output": 500}}`). Split dimensions bill at the model's exact input/output prices; bare-total dimensions keep the blended-average estimate. Split reports also feed dimension token-budget audits even without bare totals. All shapes are sanitized defensively — malformed entries drop, never raise.
+- `CostMeter.record_dimension_usage(dimension, input_tokens, output_tokens)`: monotonic per-stream max accounting (same anti-double-count discipline as the bare totals).
+
+### Changed
+
+- **PR comment lookup paginates** (`pr_comment._find_marker_comment`): the marker scan now pages through the PR comment list (`per_page=100`, up to a 10-page defensive cap) instead of reading a single page — the idempotent update path keeps working on giant PRs with 100+ comments. Pages are chronological; the highest page's marker wins.
+- README (en + zh-CN): removed the inherited OpenHarness logo image (`assets/logo.png` deleted — the fork no longer ships upstream branding); version badges updated to 1.7.0.
+
 ## [1.6.0] - 2026-08-15
 
 Personalization parity with the skill: the full 9-category wizard, kernel-enforced protected paths, and fingerprint auto-capture after TUI onboarding.

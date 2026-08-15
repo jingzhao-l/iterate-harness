@@ -72,6 +72,7 @@ export type ReviewProgressSnapshot = {
 	perDimension: Record<string, number>;
 	converged: boolean;
 	costUsd: number;
+	dimensionCostUsd: Record<string, number>;
 };
 
 export type LastLoopFindingPreview = {
@@ -133,6 +134,7 @@ export type BackendEvent = {
 	review_per_dimension?: Record<string, number> | null;
 	review_converged?: boolean | null;
 	review_cost_usd?: number | null;
+	review_dimension_cost_usd?: Record<string, number> | null;
 	review_input_tokens?: number | null;
 	review_output_tokens?: number | null;
 };

@@ -63,6 +63,9 @@ class AggregateSnapshot:
     # Subagent usage bills outside the main API stream, so these are reported
     # figures the policy relays into the CostMeter (monotonic running totals).
     dimension_usage: dict[str, int] = field(default_factory=dict)
+    # Optional per-dimension input/output split (v1.26): billed at exact
+    # prices instead of the blended average.
+    dimension_usage_io: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def read_state(tool_metadata: dict[str, object] | None) -> AggregateSnapshot | None:
@@ -95,6 +98,8 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
         if isinstance(usage_raw, dict)
         else {}
     )
+    usage_io_raw = state.get("dimension_usage_io")
+    usage_io = _clean_usage_io(usage_io_raw)
     return AggregateSnapshot(
         rounds_seen=int(state.get("rounds_seen", 0) or 0),
         total_findings=int(state.get("total_findings", 0) or 0),
@@ -105,7 +110,28 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
         exhausted_dimensions=exhausted,
         all_dimensions_exhausted=bool(state.get("all_dimensions_exhausted", False)),
         dimension_usage=usage,
+        dimension_usage_io=usage_io,
     )
+
+
+def _clean_usage_io(raw: object) -> dict[str, dict[str, int]]:
+    """Defensively parse the per-dimension input/output split from state."""
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: dict[str, dict[str, int]] = {}
+    for dim, split in raw.items():
+        if not isinstance(split, dict):
+            continue
+        in_raw = split.get("input")
+        out_raw = split.get("output")
+        if not (isinstance(in_raw, int) and not isinstance(in_raw, bool)):
+            in_raw = 0
+        if not (isinstance(out_raw, int) and not isinstance(out_raw, bool)):
+            out_raw = 0
+        if in_raw <= 0 and out_raw <= 0:
+            continue
+        cleaned[str(dim)] = {"input": max(0, in_raw), "output": max(0, out_raw)}
+    return cleaned
 
 
 @dataclass
@@ -163,7 +189,9 @@ class IterateLoopPolicy:
         if budget_stop is not None:
             snapshot = read_state(tool_metadata) or AggregateSnapshot(mode=self.mode)
             self._record_dimension_usage(snapshot)
-            return self._stop_decision(snapshot, budget_stop, self._build_progress(snapshot, usage))
+            return self._stop_decision(
+                snapshot, budget_stop, self._build_progress(snapshot, usage, model)
+            )
         snapshot = read_state(tool_metadata)
         if snapshot is None or snapshot.rounds_seen <= self._rounds_seen:
             # No NEW aggregate this turn → nothing iterate-specific to do.
@@ -171,15 +199,20 @@ class IterateLoopPolicy:
         self._rounds_seen = snapshot.rounds_seen
         self._emitted_progress += 1
         self._record_dimension_usage(snapshot)
-        progress = self._build_progress(snapshot, usage)
+        progress = self._build_progress(snapshot, usage, model)
         return self._decide(snapshot, progress)
 
     def _record_dimension_usage(self, snapshot: AggregateSnapshot) -> None:
-        """Relay reviewer-reported per-dimension token totals into the meter.
+        """Relay reviewer-reported per-dimension token usage into the meter.
 
         The aggregate tool reports each dimension's RUNNING total, so the
-        meter keeps the monotonic max (never double-counts).
+        meter keeps the monotonic max (never double-counts). Dimensions with
+        an input/output split are relayed via the precise path.
         """
+        for dimension, split in snapshot.dimension_usage_io.items():
+            self.cost_meter.record_dimension_usage(
+                dimension, split.get("input", 0), split.get("output", 0)
+            )
         for dimension, tokens in snapshot.dimension_usage.items():
             self.cost_meter.record_dimension_total(dimension, tokens)
 
@@ -195,7 +228,7 @@ class IterateLoopPolicy:
 
     # -- internals --------------------------------------------------------
 
-    def _build_progress(self, snapshot: AggregateSnapshot, usage: UsageSnapshot) -> object:
+    def _build_progress(self, snapshot: AggregateSnapshot, usage: UsageSnapshot, model: str) -> object:
         # Imported lazily to avoid a circular import with the engine package.
         from ..engine.stream_events import ReviewProgressEvent
 
@@ -210,6 +243,7 @@ class IterateLoopPolicy:
             output_tokens=usage.output_tokens,
             cost_usd=self.cost_meter.total_cost_usd,
             mode=snapshot.mode,
+            dimension_cost_usd=self.cost_meter.dimension_cost_usd(model),
         )
 
     def _decide(self, snapshot: AggregateSnapshot, progress: object) -> LoopDecision:
