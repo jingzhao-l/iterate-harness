@@ -57,7 +57,7 @@ class TestAppendAndRead:
     def test_each_line_is_valid_jsonl(self, tmp_path):
         append_entry(tmp_path, entry(data={"k": "v"}))
         raw = (tmp_path / LOG_DIR / LOG_FILE).read_text(encoding="utf-8")
-        lines = [l for l in raw.split("\n") if l.strip()]
+        lines = [line for line in raw.split("\n") if line.strip()]
         assert len(lines) == 1
         parsed = json.loads(lines[0])
         assert parsed["data"] == {"k": "v"}

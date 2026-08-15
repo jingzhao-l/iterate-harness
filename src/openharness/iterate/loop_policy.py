@@ -96,6 +96,11 @@ class IterateLoopPolicy:
     mode: str = "dry-run"
     max_review_rounds: int = 3
     stop_on_convergence: bool = True
+    # Per-fix diff approval gate (Settings.iterate.require_fix_approval):
+    # when True, the engine's tool executor routes mutating file tool calls
+    # through the interactive permission prompt with a diff preview while a
+    # normal-mode iterate loop is active.
+    require_fix_approval: bool = False
     price_overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     cost_meter: CostMeter = field(default=None)  # type: ignore[assignment]

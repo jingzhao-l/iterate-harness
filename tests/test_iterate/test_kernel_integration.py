@@ -227,7 +227,7 @@ class TestPermissionIntegration:
                 path_rules=[PathRuleConfig(pattern="*/generated/*", allow=False)],
             )
         )
-        write = checker.evaluate("file_write", is_read_only=False, file_path="/x/generated/a.py")
+        write = checker.evaluate("write_file", is_read_only=False, file_path="/x/generated/a.py")
         assert not write.allowed
         read = checker.evaluate("file_read", is_read_only=True, file_path="/x/generated/a.py")
         assert not read.allowed
@@ -242,7 +242,7 @@ class TestIteratePermissionWiring:
         settings = Settings()  # default iterate.protected_paths (.env, *.key, ...)
         checker = build_permission_checker(settings)
         for path in ("/proj/.env", "/.env", "/proj/sub/server.key", "/proj/credentials.json"):
-            write = checker.evaluate("file_write", is_read_only=False, file_path=path)
+            write = checker.evaluate("write_file", is_read_only=False, file_path=path)
             assert not write.allowed and not write.requires_confirmation, path
             assert "deny rule" in write.reason, path
             read = checker.evaluate("file_read", is_read_only=True, file_path=path)
@@ -253,7 +253,7 @@ class TestIteratePermissionWiring:
 
         settings = Settings.model_validate({"iterate": {"protected_paths": ["secrets/*"]}})
         checker = build_permission_checker(settings)
-        decision = checker.evaluate("file_write", is_read_only=False, file_path="/proj/secrets/token.txt")
+        decision = checker.evaluate("write_file", is_read_only=False, file_path="/proj/secrets/token.txt")
         assert not decision.allowed
         # Directory root itself (grep/glob style) is blocked too.
         decision = checker.evaluate("grep", is_read_only=True, file_path="/proj/secrets")
@@ -265,7 +265,7 @@ class TestIteratePermissionWiring:
         settings = Settings.model_validate({"iterate": {"enabled": False}})
         checker = build_permission_checker(settings)
         # No iterate deny wiring: default mode falls back to confirmation flow.
-        decision = checker.evaluate("file_write", is_read_only=False, file_path="/proj/.env")
+        decision = checker.evaluate("write_file", is_read_only=False, file_path="/proj/.env")
         assert not decision.allowed
         assert decision.requires_confirmation
         assert "deny rule" not in decision.reason
@@ -291,13 +291,13 @@ class TestIteratePermissionWiring:
         )
         checker = build_permission_checker(settings)
         blocked = checker.evaluate(
-            "file_write", is_read_only=False, file_path="/proj/app.py",
+            "write_file", is_read_only=False, file_path="/proj/app.py",
             content='key = "AKIAIOSFODNN7EXAMPLE"',
         )
         assert not blocked.allowed and not blocked.requires_confirmation
         assert "forbidden fix pattern" in blocked.reason
         clean = checker.evaluate(
-            "file_write", is_read_only=False, file_path="/proj/app.py",
+            "write_file", is_read_only=False, file_path="/proj/app.py",
             content='key = "helloworld"',
         )
         assert clean.requires_confirmation  # default-mode flow, not hard-denied
@@ -308,12 +308,12 @@ class TestIteratePermissionWiring:
         settings = Settings.model_validate(
             {
                 "iterate": {"forbidden_fix_patterns": [r"sk-[a-z]+"]},
-                "permission": {"allowed_tools": ["file_write"]},
+                "permission": {"allowed_tools": ["write_file"]},
             }
         )
         checker = build_permission_checker(settings)
         decision = checker.evaluate(
-            "file_write", is_read_only=False, content="token = sk-abc123"
+            "write_file", is_read_only=False, content="token = sk-abc123"
         )
         assert not decision.allowed
         assert "forbidden fix pattern" in decision.reason
@@ -326,7 +326,7 @@ class TestIteratePermissionWiring:
         )
         checker = build_permission_checker(settings)
         decision = checker.evaluate(
-            "file_edit", is_read_only=False, content="-----BEGIN PRIVATE KEY-----"
+            "edit_file", is_read_only=False, content="-----BEGIN PRIVATE KEY-----"
         )
         assert not decision.allowed
         assert "BEGIN PRIVATE KEY" in decision.reason
@@ -386,6 +386,200 @@ class TestSettingsAndCompact:
         assert "security=4" in attachment.body
         assert create_iterate_review_attachment_if_needed(None) is None
         assert create_iterate_review_attachment_if_needed({}) is None
+
+
+class TestFixApproval:
+    """Per-fix diff approval (Settings.iterate.require_fix_approval)."""
+
+    def _context(self, tmp_path, *, policy, mode="normal", checker=None, prompt=None):
+        from openharness.engine.query import QueryContext
+        from openharness.tools.base import ToolRegistry
+        from openharness.tools.file_edit_tool import FileEditTool
+        from openharness.tools.file_write_tool import FileWriteTool
+
+        registry = ToolRegistry()
+        registry.register(FileEditTool())
+        registry.register(FileWriteTool())
+        metadata = {"iterate_state": {"mode": mode}} if mode else None
+        return QueryContext(
+            api_client=None,  # type: ignore[arg-type]
+            tool_registry=registry,
+            permission_checker=checker
+            or PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
+            cwd=tmp_path,
+            model="test-model",
+            system_prompt="",
+            max_tokens=64,
+            permission_prompt=prompt,
+            tool_metadata=metadata,
+            iterate_policy=policy,
+        )
+
+    @pytest.mark.asyncio
+    async def test_normal_mode_file_edit_prompts_with_diff_preview(self, tmp_path):
+        from openharness.engine.query import _execute_tool_call
+
+        target = tmp_path / "app.py"
+        target.write_text("alpha\nbeta\n", encoding="utf-8")
+        prompts: list[tuple[str, str]] = []
+
+        async def deny(tool_name: str, reason: str) -> bool:
+            prompts.append((tool_name, reason))
+            return False
+
+        context = self._context(
+            tmp_path,
+            policy=IterateLoopPolicy(require_fix_approval=True),
+            prompt=deny,
+        )
+        result = await _execute_tool_call(
+            context,
+            "edit_file",
+            "t1",
+            {"path": str(target), "old_str": "beta", "new_str": "gamma"},
+        )
+        assert result.is_error
+        assert prompts and prompts[0][0] == "edit_file"
+        reason = prompts[0][1]
+        assert "Iterate fix approval" in reason and "app.py" in reason
+        assert "-beta" in reason and "+gamma" in reason
+        assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"  # denied: unchanged
+
+    @pytest.mark.asyncio
+    async def test_approved_edit_executes(self, tmp_path):
+        from openharness.engine.query import _execute_tool_call
+
+        target = tmp_path / "app.py"
+        target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+        async def approve(tool_name: str, reason: str) -> bool:
+            return True
+
+        context = self._context(
+            tmp_path,
+            policy=IterateLoopPolicy(require_fix_approval=True),
+            prompt=approve,
+        )
+        result = await _execute_tool_call(
+            context,
+            "edit_file",
+            "t1",
+            {"path": str(target), "old_str": "beta", "new_str": "gamma"},
+        )
+        assert not result.is_error
+        assert target.read_text(encoding="utf-8") == "alpha\ngamma\n"
+
+    @pytest.mark.asyncio
+    async def test_gate_off_policy_or_dry_run_does_not_prompt(self, tmp_path):
+        from openharness.engine.query import _execute_tool_call
+
+        target = tmp_path / "app.py"
+        target.write_text("alpha\n", encoding="utf-8")
+
+        async def fail_prompt(tool_name: str, reason: str) -> bool:
+            raise AssertionError("permission prompt must not be called")
+
+        for policy, mode in (
+            (IterateLoopPolicy(require_fix_approval=False), "normal"),
+            (IterateLoopPolicy(require_fix_approval=True), "dry-run"),
+            (None, "normal"),
+        ):
+            context = self._context(tmp_path, policy=policy, mode=mode, prompt=fail_prompt)
+            result = await _execute_tool_call(
+                context,
+                "write_file",
+                "t1",
+                {"path": str(target), "content": "alpha\n"},
+            )
+            assert not result.is_error, (policy, mode)
+
+    @pytest.mark.asyncio
+    async def test_hard_deny_not_overridden_into_confirmation(self, tmp_path):
+        from openharness.engine.query import _execute_tool_call
+        from openharness.permissions.checker import build_permission_checker
+
+        settings = Settings.model_validate(
+            {"iterate": {"protected_paths": ["secrets/*"], "require_fix_approval": True}}
+        )
+        checker = build_permission_checker(settings)
+        secrets_dir = tmp_path / "secrets"
+        secrets_dir.mkdir()
+        target = secrets_dir / "token.txt"
+
+        async def fail_prompt(tool_name: str, reason: str) -> bool:
+            raise AssertionError("hard deny must not become a confirmation")
+
+        context = self._context(
+            tmp_path,
+            policy=IterateLoopPolicy(require_fix_approval=True),
+            checker=checker,
+            prompt=fail_prompt,
+        )
+        result = await _execute_tool_call(
+            context,
+            "write_file",
+            "t1",
+            {"path": str(target), "content": "secret"},
+        )
+        assert result.is_error
+        assert "deny rule" in result.content
+        assert not target.exists()
+
+    @pytest.mark.asyncio
+    async def test_forbidden_pattern_boundary_covers_file_edit_new_str(self, tmp_path):
+        from openharness.engine.query import _execute_tool_call
+        from openharness.permissions.checker import build_permission_checker
+
+        settings = Settings.model_validate(
+            {"iterate": {"forbidden_fix_patterns": [r"AKIA[A-Z0-9]{16}"]}}
+        )
+        checker = build_permission_checker(settings)
+        target = tmp_path / "creds.py"
+        target.write_text("key = ''\n", encoding="utf-8")
+
+        async def fail_prompt(tool_name: str, reason: str) -> bool:
+            raise AssertionError("forbidden content must hard-deny without prompting")
+
+        context = self._context(
+            tmp_path,
+            policy=IterateLoopPolicy(require_fix_approval=True),
+            checker=checker,
+            prompt=fail_prompt,
+        )
+        result = await _execute_tool_call(
+            context,
+            "edit_file",
+            "t1",
+            {"path": str(target), "old_str": "''", "new_str": "AKIAIOSFODNN7EXAMPLE"},
+        )
+        assert result.is_error
+        assert "forbidden fix pattern" in result.content
+        assert target.read_text(encoding="utf-8") == "key = ''\n"
+
+    def test_fix_approval_reason_diff_variants(self, tmp_path):
+        from openharness.engine.query import _fix_approval_reason
+
+        # file_write to a new file → "+ lines" preview + total marker.
+        reason = _fix_approval_reason(
+            "write_file", str(tmp_path / "new.py"), {"content": "a\nb\n"}, object()
+        )
+        assert "new file, 2 lines total" in reason and "+a" in reason
+
+        # file_write over an existing file → unified diff against current.
+        existing = tmp_path / "existing.py"
+        existing.write_text("one\ntwo\n", encoding="utf-8")
+        reason = _fix_approval_reason(
+            "write_file", str(existing), {"content": "one\nTWO\n"}, object()
+        )
+        assert "-two" in reason and "+TWO" in reason and "(proposed)" in reason
+
+        # Oversized diff → clipped with an ellipsis marker.
+        big_old = "\n".join(f"line{i}" for i in range(60))
+        big_new = "\n".join(f"line{i}!" for i in range(60))
+        reason = _fix_approval_reason(
+            "edit_file", None, {"old_str": big_old, "new_str": big_new}, object()
+        )
+        assert "more diff lines" in reason
 
 
 class TestRegistration:

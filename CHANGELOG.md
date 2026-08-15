@@ -6,6 +6,16 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-15
+
+Interactive safety for autonomous fixes + CI consumption of the final report.
+
+### Added
+
+- Per-fix diff approval (`Settings.iterate.require_fix_approval`): while a normal-mode loop is active, mutating file tools (`write_file` / `edit_file` / `notebook_edit`, incl. `file_write`/`file_edit` aliases) are routed through the interactive permission prompt with an inline diff preview (clipped to 40 lines / 200 chars per line) — even in full-auto mode. Hard denials (protected paths, forbidden fix patterns) are never downgraded into a confirmation, and dry-run reviews never trigger the gate.
+- `openharness.iterate.ci_report`: renders the final `report` entry from the decision log as GitHub Actions workflow commands (per-finding annotations with `file=`/`line=` properties and full workflow-command escaping), plain text, and a severity exit-code gate (`none|low|medium|high|critical`, default `high`). Missing or malformed reports degrade to an empty report instead of failing the pipeline.
+- `oh iterate report` CLI subcommand (`--github`, `--fail-on`) and `/iterate report` slash subcommand for REPL parity.
+
 ## [0.2.0] - 2026-08-15
 
 First iterate-harness release: a focused fork of OpenHarness v0.1.9 dedicated

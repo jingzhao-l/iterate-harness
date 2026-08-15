@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import logging
 import re
 import time
@@ -39,7 +40,8 @@ from openharness.engine.stream_events import (
     ToolExecutionStarted,
 )
 from openharness.hooks import HookEvent, HookExecutor
-from openharness.permissions.checker import PermissionChecker
+from openharness.iterate.loop_policy import ITERATE_STATE_KEY
+from openharness.permissions.checker import PermissionChecker, PermissionDecision
 from openharness.services.tool_outputs import tool_output_inline_chars, tool_output_preview_chars
 from openharness.tools.base import ToolExecutionContext
 from openharness.tools.base import ToolRegistry
@@ -954,6 +956,20 @@ async def _execute_tool_call(
         command=_command,
         content=_content,
     )
+    # Iterate per-fix diff approval (Settings.iterate.require_fix_approval):
+    # while a normal-mode loop is active, route mutating file tools through
+    # the interactive prompt with a diff preview — even in full-auto mode.
+    # Hard denials (protected paths, forbidden patterns) are never overridden
+    # into a confirmation.
+    if (
+        _needs_iterate_fix_approval(context, tool_name, _is_read_only)
+        and (decision.allowed or decision.requires_confirmation)
+    ):
+        decision = PermissionDecision(
+            allowed=False,
+            requires_confirmation=True,
+            reason=_fix_approval_reason(tool_name, _file_path, tool_input, parsed_input),
+        )
     if not decision.allowed:
         if decision.requires_confirmation and context.permission_prompt is not None:
             log.debug("permission prompt for %s: %s", tool_name, decision.reason)
@@ -1086,7 +1102,9 @@ def _extract_permission_command(
 # Mutating write-payload field names recognized by the permission layer.
 # Extracted for mutating tools only and matched against the iterate
 # forbidden_fix_patterns regex boundary in PermissionChecker.evaluate.
-_WRITE_PAYLOAD_FIELDS = ("content", "new_string", "diff", "patch")
+# Covers both naming conventions used by built-in tools (new_string for
+# MCP-style edits, new_str for the built-in file_edit tool).
+_WRITE_PAYLOAD_FIELDS = ("content", "new_string", "new_str", "diff", "patch")
 
 
 def _extract_permission_content(
@@ -1105,3 +1123,115 @@ def _extract_permission_content(
             return value
 
     return None
+
+
+# Mutating file tools gated by iterate.require_fix_approval. Names follow
+# the built-in tool registry (write_file / edit_file / notebook_edit); the
+# file_write/file_edit aliases cover MCP-style callers.
+FILE_MUTATING_TOOLS = frozenset(
+    {"write_file", "edit_file", "notebook_edit", "file_write", "file_edit"}
+)
+# Diff preview clipping bounds for the per-fix approval prompt.
+MAX_APPROVAL_DIFF_LINES = 40
+MAX_APPROVAL_LINE_CHARS = 200
+
+
+def _needs_iterate_fix_approval(
+    context: QueryContext,
+    tool_name: str,
+    is_read_only: bool,
+) -> bool:
+    """Whether this tool call needs an iterate per-fix diff approval.
+
+    True only when ALL hold: the engine carries an IterateLoopPolicy with
+    ``require_fix_approval`` enabled, the tool is a mutating file tool, and a
+    normal-mode iterate loop is active (``iterate_state.mode == "normal"`` —
+    dry-run reviews never trigger the gate because reviewers never write).
+    """
+    policy = context.iterate_policy
+    if policy is None or not getattr(policy, "require_fix_approval", False):
+        return False
+    if is_read_only or tool_name not in FILE_MUTATING_TOOLS:
+        return False
+    state = (context.tool_metadata or {}).get(ITERATE_STATE_KEY)
+    return isinstance(state, dict) and state.get("mode") == "normal"
+
+
+def _fix_approval_reason(
+    tool_name: str,
+    file_path: str | None,
+    raw_input: dict[str, object],
+    parsed_input: object,
+) -> str:
+    """Build the per-fix approval reason with a clipped unified diff preview.
+
+    - ``file_edit``: unified diff of old_string → new_string.
+    - ``file_write``: unified diff against the current file content when the
+      target exists, else a "+ new file" preview of the payload head.
+    - Anything else (e.g. notebook_edit): a clipped payload preview.
+    """
+    header = f"Iterate fix approval ({tool_name})"
+    if file_path:
+        header += f" for {file_path}"
+
+    old_text = _first_str_field(raw_input, parsed_input, "old_string", "old_str")
+    new_text = _first_str_field(raw_input, parsed_input, "new_string", "new_str")
+    content = _first_str_field(raw_input, parsed_input, "content")
+
+    if old_text is not None and new_text is not None:
+        diff_lines = difflib.unified_diff(
+            old_text.splitlines(),
+            new_text.splitlines(),
+            fromfile="(current)",
+            tofile="(proposed)",
+            lineterm="",
+        )
+        return _clip_diff(header, diff_lines)
+
+    if content is not None and file_path:
+        try:
+            existing = Path(file_path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            existing = None
+        if existing is None:
+            head = content.splitlines()[:MAX_APPROVAL_DIFF_LINES]
+            preview = [f"+{line}" for line in head]
+            preview.append(f"(new file, {len(content.splitlines())} lines total)")
+            return _clip_diff(header, preview)
+        diff_lines = difflib.unified_diff(
+            existing.splitlines(),
+            content.splitlines(),
+            fromfile="(current)",
+            tofile="(proposed)",
+            lineterm="",
+        )
+        return _clip_diff(header, diff_lines)
+
+    payload = old_text or new_text or content or ""
+    return _clip_diff(header, payload.splitlines()[:MAX_APPROVAL_DIFF_LINES])
+
+
+def _first_str_field(
+    raw_input: dict[str, object],
+    parsed_input: object,
+    *names: str,
+) -> str | None:
+    for name in names:
+        value = raw_input.get(name)
+        if isinstance(value, str):
+            return value
+    for name in names:
+        value = getattr(parsed_input, name, None)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _clip_diff(header: str, lines: Any) -> str:
+    """Clip a diff preview to sane prompt bounds with an ellipsis marker."""
+    materialized = list(lines)
+    clipped = [line[:MAX_APPROVAL_LINE_CHARS] for line in materialized][:MAX_APPROVAL_DIFF_LINES]
+    body = "\n".join(clipped)
+    if len(materialized) > MAX_APPROVAL_DIFF_LINES:
+        body += f"\n... ({len(materialized) - MAX_APPROVAL_DIFF_LINES} more diff lines)"
+    return f"{header}\n{body}"

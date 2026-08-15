@@ -31,10 +31,14 @@ def _default_iterate_policy(cwd: Path) -> object | None:
         if not kernel.enabled:
             return None
         rounds = effective_review_rounds(kernel, project_config(cwd))
-        return IterateLoopPolicy(max_review_rounds=rounds, price_overrides={
-            model: tuple(price)
-            for model, price in (kernel.price_overrides or {}).items()
-        })
+        return IterateLoopPolicy(
+            max_review_rounds=rounds,
+            require_fix_approval=kernel.require_fix_approval,
+            price_overrides={
+                model: tuple(price)
+                for model, price in (kernel.price_overrides or {}).items()
+            },
+        )
     except Exception:  # noqa: BLE001 - policy wiring must never break the engine
         return None
 

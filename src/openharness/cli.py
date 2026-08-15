@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -768,7 +768,7 @@ auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
 cron_app = typer.Typer(name="cron", help="Manage cron scheduler and jobs")
 autopilot_app = typer.Typer(name="autopilot", help="Manage repo autopilot")
-iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log)")
+iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/report)")
 
 app.add_typer(mcp_app)
 app.add_typer(plugin_app)
@@ -1014,6 +1014,43 @@ def iterate_log(
         data = json.dumps(entry.data, ensure_ascii=False) if entry.data else ""
         print(f"[{entry.timestamp}] r{entry.round} {entry.type} {data}".rstrip())
     print(f"({len(entries)} entries total)")
+
+
+@iterate_app.command("report")
+def iterate_report(
+    github: bool = typer.Option(
+        False, "--github", help="Emit GitHub Actions workflow commands (PR annotations)"
+    ),
+    fail_on: str = typer.Option(
+        "high",
+        "--fail-on",
+        help="Severity gate for the exit code: none|low|medium|high|critical",
+    ),
+) -> None:
+    """Render the final iterate report from the decision log (CI mode).
+
+    Exit code is 1 when any finding is at or above --fail-on severity;
+    a missing or malformed report degrades to an empty report (exit 0).
+    """
+    from openharness.iterate import ci_report
+    from openharness.iterate import decision_log as iter_log
+
+    threshold = fail_on.strip().lower()
+    if threshold not in ci_report.SEVERITY_ORDER:
+        allowed = "|".join(ci_report.SEVERITY_ORDER)
+        raise typer.BadParameter(f"must be one of: {allowed} (got '{fail_on}')")
+
+    entries = iter_log.read_entries(str(Path.cwd()))
+    report_entry = ci_report.latest_report_entry(entries)
+    if report_entry is None:
+        print(
+            "No report entry in the decision log yet "
+            "(run `oh iterate review` or `oh iterate run` first).",
+            file=sys.stderr,
+        )
+    summary = ci_report.ReportSummary.from_entry(report_entry)
+    print(ci_report.render_github(summary) if github else ci_report.render_text(summary))
+    raise typer.Exit(ci_report.severity_gate(summary, threshold))
 
 
 # ---- plugin subcommands ----

@@ -30,7 +30,7 @@ convergence policy are layered on top.
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-0.2.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.3.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -56,6 +56,7 @@ oh iterate review      # headless dry-run (stream-json output available)
 oh iterate run         # headless autonomous fix loop
 oh iterate resume      # resume the last session
 oh iterate log         # tail the decision log
+oh iterate report      # render the final report (CI mode, see below)
 ```
 
 Set your API key first: `export ANTHROPIC_API_KEY=your_key` (OpenAI-compatible
@@ -72,6 +73,8 @@ providers are also supported — see `oh --help`).
 | **Findings triage** | `iterate_triage`: walk findings with `y` fix / `n` skip / `a` always-ignore; `a` persists to `known_intentional` so future rounds filter it automatically |
 | **Cost transparency** | Token usage → per-round and cumulative USD from a built-in price table (overridable per model) |
 | **Security boundaries as code** | `protected_paths` and `forbidden_fix_patterns` from settings are auto-assembled into the permission layer (deny path rules + write-payload regex); validation commands run through an EXACT-match allowlist |
+| **Per-fix diff approval** | `require_fix_approval` routes every file write during a normal-mode loop through an interactive prompt with an inline diff preview — even in full-auto mode; hard denials are never downgraded |
+| **CI / PR mode** | `oh iterate report --github --fail-on high` turns the final report into GitHub Actions annotations with a severity-based exit-code gate for PRs |
 | **Decision log** | Append-only `.iterate/decision-log.jsonl`: every round, fix, validation and triage decision is recorded |
 | **Project knowledge** | `ITERATE.md` project knowledge + per-project structured personalization (9 categories) |
 

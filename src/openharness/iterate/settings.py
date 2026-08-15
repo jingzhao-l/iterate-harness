@@ -26,6 +26,11 @@ class IterateSettings(BaseModel):
     enabled: bool = True
     # Deterministic review-loop caps (project config may lower them).
     max_review_rounds: int = DEFAULT_MAX_REVIEW_ROUNDS
+    # Per-fix diff approval: during a normal-mode iterate loop, every mutating
+    # file tool call (file_write / file_edit / notebook_edit) requires an
+    # interactive confirmation whose reason embeds a clipped unified diff of
+    # the payload. Headless runs (no interactive prompt) auto-approve.
+    require_fix_approval: bool = False
     # Hard security boundaries enforced by hooks/permissions, not prompts.
     protected_paths: list[str] = Field(
         default_factory=lambda: [".env", "*.key", "*.pem", "credentials*"]

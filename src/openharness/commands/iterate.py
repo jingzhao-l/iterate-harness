@@ -5,6 +5,7 @@ Subcommands:
 - ``/iterate review [--dry-run]`` — kick off the canonical dry-run loop
 - ``/iterate run`` — kick off the canonical normal-mode autonomous loop
 - ``/iterate log [n]`` — tail the decision log (default 20 entries)
+- ``/iterate report`` — render the final report entry from the decision log
 - ``/iterate config`` — show the effective config
 - ``/iterate validate <command>`` — run one preconfigured validation command
 
@@ -20,7 +21,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from openharness.iterate import config_loader, decision_log, prompts
+from openharness.iterate import ci_report, config_loader, decision_log, prompts
 from openharness.iterate import validate as validate_mod
 from openharness.iterate.settings import IterateSettings, effective_review_rounds, project_config
 
@@ -113,6 +114,16 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             limit = DEFAULT_LOG_TAIL
         return _result(message=_format_log_tail(cwd, max(1, limit)))
 
+    if sub == "report":
+        report_entry = ci_report.latest_report_entry(decision_log.read_entries(cwd))
+        if report_entry is None:
+            return _result(
+                message="No report entry in the decision log yet (run /iterate review or /iterate run first)."
+            )
+        return _result(
+            message=ci_report.render_text(ci_report.ReportSummary.from_entry(report_entry))
+        )
+
     if sub == "validate":
         if not rest:
             allowed = config_loader.flatten_commands(
@@ -133,11 +144,12 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
 
     return _result(
         message=(
-            "Usage: /iterate [status|config|review|run|log|validate]\n"
+            "Usage: /iterate [status|config|review|run|log|report|validate]\n"
             "- status|config: effective config summary\n"
             "- review: dry-run pure review (read-only, convergence-enforced)\n"
             "- run: autonomous review-fix-validate loop\n"
             "- log [n]: tail the decision log\n"
+            "- report: render the final report from the decision log\n"
             "- validate <command>: run a preconfigured validation command"
         )
     )
