@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-15
+
+Data accumulation + UX polish: finding trend library, componentized Esc menu, breakpoint resume.
+
+### Added
+
+- Finding fingerprint trend library (`openharness.iterate.trend_store`): every finished run fingerprints its findings (`file|line|dimension` SHA-1, line optional for file-level findings) into `.iterate/trend-library.json` (atomic write, corrupt data resets to empty, 2000-record LRU prune). Cross-run classification: **new** (first sighting), **fixed** (open before, absent now), **regressed** (fixed before, back now), **stubborn** (open for 3+ runs). Surfaced via `oh iterate log --trend`, `/iterate trend` and `/iterate log trend`; recorded automatically when the report entry lands in the decision log.
+- Breakpoint resume: `openharness.iterate.last_state` summarizes the last finished run from the decision log (mode, verdict, rounds, severity buckets, top-3 finding preview, last Esc intervention). The React TUI backend emits a `last_loop_state` event at startup and the new `IterateResumePanel` renders it above the status bar (auto-hidden once a live `review_progress` dashboard appears). `/iterate resume` re-kicks the loop with a resume prompt that embeds the previous verdict/findings and instructs re-verification of still-reproducing findings; `iterate_state` now persists in session snapshots so mid-loop state survives restarts.
+- Directional-key Esc intervention menu: new `AskUserSelect` channel end-to-end (`QueryContext.ask_user_select` → `ui.runtime` → backend host `_ask_select`). The TUI renders `select_prompt` modals with the existing SelectModal component (↑↓ navigate, Enter select, number-key quick select, Esc submits the safe first option); the pause menu is now a 4-option componentized menu instead of free-text `s`/`n`/`x` input. Non-TUI frontends keep the free-text question fallback; every decision is still logged as an intervention entry.
+
+### Changed
+
+- README (en + zh-CN): feature table gains the trend library / breakpoint resume rows, the Esc intervention row now describes the directional-key menu, and the CLI block shows `oh iterate log --trend`.
+
 ## [0.4.0] - 2026-08-15
 
 Esc mid-loop intervention + dependency vulnerability cleanup.

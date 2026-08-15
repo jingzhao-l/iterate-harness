@@ -101,6 +101,7 @@ class ReactBackendHost:
             restore_tool_metadata=self._config.restore_tool_metadata,
             permission_prompt=self._ask_permission,
             ask_user_prompt=self._ask_question,
+            ask_user_select=self._ask_select,
             enforce_max_turns=self._config.enforce_max_turns,
             permission_mode=self._config.permission_mode,
             session_backend=self._config.session_backend,
@@ -118,6 +119,7 @@ class ReactBackendHost:
             )
         )
         await self._emit(self._status_snapshot())
+        await self._emit_last_loop_state()
 
         reader = asyncio.create_task(self._read_requests())
         try:
@@ -829,6 +831,48 @@ class ReactBackendHost:
             return await future
         finally:
             self._question_requests.pop(request_id, None)
+
+    async def _ask_select(self, title: str, options: list[dict]) -> str:
+        """Directional-key select prompt (iterate pause menu).
+
+        Reuses the question_response answer channel: the frontend renders
+        ``kind === "select_prompt"`` modals with the SelectModal component
+        and replies with the selected ``value``. Esc submits ``cancel_value``
+        (the safe first option) instead of leaving the request dangling.
+        """
+        request_id = uuid4().hex
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._question_requests[request_id] = future
+        cancel_value = str(options[0].get("value")) if options else ""
+        await self._emit(
+            BackendEvent(
+                type="modal_request",
+                modal={
+                    "kind": "select_prompt",
+                    "request_id": request_id,
+                    "question": title,
+                    "options": options,
+                    "cancel_value": cancel_value,
+                },
+            )
+        )
+        try:
+            return await future
+        finally:
+            self._question_requests.pop(request_id, None)
+
+    async def _emit_last_loop_state(self) -> None:
+        """Send the resume screen payload when iterate history exists."""
+        assert self._bundle is not None
+        try:
+            from openharness.iterate.last_state import summarize_last_run
+
+            summary = summarize_last_run(self._bundle.cwd)
+        except Exception:
+            log.warning("iterate last-run summary failed", exc_info=True)
+            return
+        if summary is not None:
+            await self._emit(BackendEvent(type="last_loop_state", state=summary))
 
     async def _emit(self, event: BackendEvent) -> None:
         log.debug("emit event: type=%s tool=%s", event.type, getattr(event, "tool_name", None))

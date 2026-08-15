@@ -28,7 +28,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-0.4.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.5.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -54,6 +54,7 @@ oh iterate review      # 无头 dry-run（支持 stream-json 输出）
 oh iterate run         # 无头自治修复闭环
 oh iterate resume      # 恢复上次会话
 oh iterate log         # 查看决策日志尾部
+oh iterate log --trend # 查看跨运行 finding 趋势（新增/已修复/回归/顽固）
 oh iterate report      # 渲染最终报告（CI 模式，见下）
 ```
 
@@ -72,7 +73,9 @@ OpenAI 兼容供应商，见 `oh --help`）。
 | **成本透明** | token 用量按内置价格表换算为每轮/累计 USD（可按模型覆盖） |
 | **安全边界代码化** | 设置中的 `protected_paths` 与 `forbidden_fix_patterns` 自动装配进权限层（deny 路径规则 + 写载荷正则）；验证命令走精确匹配白名单 |
 | **逐修复 diff 审批** | `require_fix_approval` 让 normal 模式闭环中的每次文件写入都走带 diff 预览的交互确认——即便处于全自动模式；硬拒绝（保护路径/禁止模式）绝不降级为可确认 |
-| **Esc 中途干预** | 闭环运行中按 Esc：在下一轮边界暂停，弹「跳过当前 finding / 收窄维度 / 直接停 / 继续」菜单；再按一次 Esc 强制打断当前 turn |
+| **Esc 中途干预** | 闭环运行中按 Esc：在下一轮边界暂停并弹出方向键菜单（跳过当前 finding / 收窄维度 / 直接停 / 继续）；再按一次 Esc 强制打断当前 turn |
+| **finding 指纹趋势库** | 每次收尾用 `文件\|行号\|维度` 指纹把 finding 记入 `.iterate/trend-library.json`；`oh iterate log --trend` / `/iterate trend` 跨运行统计新增 / 已修复 / 回归 / 顽固（连续 3+ 轮）finding |
+| **断点续跑** | TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding |
 | **CI / PR 模式** | `oh iterate report --github --fail-on high` 将最终报告转为 GitHub Actions 批注，并按严重度门禁决定退出码 |
 | **决策日志** | append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘 |
 | **项目知识** | `ITERATE.md` 项目知识 + 按项目隔离的 9 类结构化个性化数据 |

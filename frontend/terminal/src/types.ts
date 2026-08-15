@@ -74,6 +74,32 @@ export type ReviewProgressSnapshot = {
 	costUsd: number;
 };
 
+export type LastLoopFindingPreview = {
+	severity: string;
+	file: string;
+	dimension: string;
+	summary: string;
+};
+
+export type LastLoopIntervention = {
+	timestamp: string;
+	round: number;
+	action: string;
+	detail: string;
+};
+
+export type LastLoopState = {
+	timestamp: string;
+	mode: string;
+	verdict: string;
+	rounds: number;
+	totalFindings: number;
+	severity: {critical: number; high: number; medium: number; low: number};
+	preview: LastLoopFindingPreview[];
+	lastIntervention: LastLoopIntervention | null;
+	entryCount: number;
+};
+
 export type BackendEvent = {
 	type: string;
 	message?: string | null;

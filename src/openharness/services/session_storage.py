@@ -26,6 +26,9 @@ _PERSISTED_TOOL_METADATA_KEYS = (
     "task_focus_state",
     "compact_checkpoints",
     "compact_last",
+    # Iterate loop state (round history / convergence counters) so
+    # `oh iterate resume` restores a mid-loop session truthfully.
+    "iterate_state",
 )
 
 

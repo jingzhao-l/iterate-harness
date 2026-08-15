@@ -3,6 +3,7 @@ import {Box, Text, useApp, useInput} from 'ink';
 
 import {CommandPicker} from './components/CommandPicker.js';
 import {ConversationView} from './components/ConversationView.js';
+import {IterateResumePanel} from './components/IterateResumePanel.js';
 import {ModalHost} from './components/ModalHost.js';
 import {PromptInput} from './components/PromptInput.js';
 import {ReviewProgressPanel} from './components/ReviewProgressPanel.js';
@@ -80,6 +81,32 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const deferredSwarmNotifications = useDeferredValue(session.swarmNotifications);
 	const deferredReviewProgress = useDeferredValue(session.reviewProgress);
 	const deferredReviewRoundTrend = useDeferredValue(session.reviewRoundTrend);
+	const deferredLastLoopState = useDeferredValue(session.lastLoopState);
+
+	// Backend select_prompt modal (iterate pause menu) — reuse the shared
+	// selectIndex state; reset whenever a new prompt arrives.
+	const backendSelectPrompt =
+		session.modal?.kind === 'select_prompt'
+			? {
+					requestId: String(session.modal.request_id ?? ''),
+					title: String(session.modal.question ?? 'Select'),
+					options: (Array.isArray(session.modal.options) ? session.modal.options : []).map((o) => {
+						const opt = (o ?? {}) as Record<string, unknown>;
+						return {
+							value: String(opt.value ?? ''),
+							label: String(opt.label ?? ''),
+							description: opt.description ? String(opt.description) : undefined,
+						};
+					}),
+					cancelValue: String(session.modal.cancel_value ?? ''),
+				}
+			: null;
+
+	useEffect(() => {
+		if (backendSelectPrompt) {
+			setSelectIndex(0);
+		}
+	}, [backendSelectPrompt?.requestId]);
 
 	useEffect(() => {
 		const nextTheme = session.status.theme;
@@ -278,6 +305,46 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			return; // Let TextInput in ModalHost handle input
 		}
 
+		// --- Backend select prompt (iterate pause menu; appears while busy) ---
+		if (backendSelectPrompt && backendSelectPrompt.options.length > 0) {
+			const answerSelect = (value: string): void => {
+				session.sendRequest({
+					type: 'question_response',
+					request_id: backendSelectPrompt.requestId,
+					answer: value,
+				});
+				session.setModal(null);
+			};
+			if (key.upArrow) {
+				setSelectIndex((i) => Math.max(0, i - 1));
+				return;
+			}
+			if (key.downArrow) {
+				setSelectIndex((i) => Math.min(backendSelectPrompt.options.length - 1, i + 1));
+				return;
+			}
+			if (key.return) {
+				const selected = backendSelectPrompt.options[selectIndex];
+				if (selected) {
+					answerSelect(selected.value);
+				}
+				return;
+			}
+			if (key.escape) {
+				answerSelect(backendSelectPrompt.cancelValue || backendSelectPrompt.options[0]!.value);
+				return;
+			}
+			const num = parseInt(chunk, 10);
+			if (num >= 1 && num <= backendSelectPrompt.options.length) {
+				const selected = backendSelectPrompt.options[num - 1];
+				if (selected) {
+					answerSelect(selected.value);
+				}
+				return;
+			}
+			return;
+		}
+
 		if (session.busy && isEscape) {
 			session.sendRequest({type: 'interrupt'});
 			session.setBusyLabel('Stopping current operation...');
@@ -437,13 +504,22 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			) : null}
 
 			{/* Frontend select modal (permissions picker, etc.) */}
-			{selectModal ? (
-				<SelectModal
-					title={selectModal.title}
-					options={selectModal.options}
-					selectedIndex={selectIndex}
-				/>
-			) : null}
+		{selectModal ? (
+			<SelectModal
+				title={selectModal.title}
+				options={selectModal.options}
+				selectedIndex={selectIndex}
+			/>
+		) : null}
+
+		{/* Backend select prompt (iterate pause menu) */}
+		{backendSelectPrompt && backendSelectPrompt.options.length > 0 ? (
+			<SelectModal
+				title={backendSelectPrompt.title}
+				options={backendSelectPrompt.options}
+				selectedIndex={selectIndex}
+			/>
+		) : null}
 
 			{/* Command picker */}
 			{showPicker ? (
@@ -453,6 +529,11 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			{/* Todo panel */}
 		{session.ready && deferredTodoMarkdown ? (
 			<TodoPanel markdown={deferredTodoMarkdown} />
+		) : null}
+
+		{/* Iterate last-run resume hint (hidden once a live loop dashboard appears) */}
+		{session.ready && deferredLastLoopState && !deferredReviewProgress ? (
+			<IterateResumePanel state={deferredLastLoopState} />
 		) : null}
 
 		{/* Iterate review convergence dashboard */}

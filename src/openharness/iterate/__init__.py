@@ -13,6 +13,7 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
 - :mod:`.cost` — USD money layer over token usage
 - :mod:`.personalization` — 9-category per-project personalization
 - :mod:`.prompts` — canonical workflow prompt templates
+- :mod:`.trend_store` — finding fingerprint trend library (new/fixed/stubborn)
 - :mod:`.worktree_flow` — fix-round git isolation orchestration
 
 This ``__init__`` uses PEP 562 lazy attribute resolution: the kernel's
@@ -79,6 +80,14 @@ _EXPORTS: dict[str, str] = {
     "IterateSettings": ".settings",
     "effective_review_rounds": ".settings",
     "project_config": ".settings",
+    # trend_store
+    "TrendDelta": ".trend_store",
+    "TrendRecord": ".trend_store",
+    "finding_fingerprint": ".trend_store",
+    "load_library": ".trend_store",
+    "record_run": ".trend_store",
+    "render_trend_summary": ".trend_store",
+    "summarize": ".trend_store",
     # types
     "IterateConfig": ".types",
     "KnownIntentional": ".types",
@@ -108,6 +117,8 @@ __all__ = [
     "ReviewFinding",
     "ReviewReport",
     "ReviewRound",
+    "TrendDelta",
+    "TrendRecord",
     "ValidationResult",
     "aggregate_rounds",
     "append_entry",
@@ -121,12 +132,14 @@ __all__ = [
     "dry_run_kickoff",
     "effective_review_rounds",
     "filter_known_intentional",
+    "finding_fingerprint",
     "finding_key",
     "findings_schema",
     "flatten_commands",
     "is_command_allowed",
     "load_config",
     "load_effective_config",
+    "load_library",
     "log_path",
     "make_entry",
     "merge_config",
@@ -138,12 +151,15 @@ __all__ = [
     "price_for",
     "project_config",
     "read_entries",
+    "record_run",
+    "render_trend_summary",
     "report_from_dict",
     "report_to_dict",
     "reviewer_task_prompt",
     "run_command",
     "run_validation",
     "sort_findings",
+    "summarize",
     "validate_config",
 ]
 

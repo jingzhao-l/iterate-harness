@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -999,9 +999,21 @@ def iterate_resume(
 def iterate_log(
     tail: int = typer.Option(20, "--tail", min=1, help="Show last N entries"),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of text"),
+    trend: bool = typer.Option(
+        False, "--trend", help="Show the cross-run finding trend summary instead of entries"
+    ),
 ) -> None:
     """View the append-only iterate decision log."""
     from openharness.iterate import decision_log as iter_log
+    from openharness.iterate import trend_store
+
+    if trend:
+        summary = trend_store.summarize(str(Path.cwd()))
+        if as_json:
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+        else:
+            print(trend_store.render_trend_summary(summary))
+        return
 
     entries = iter_log.read_entries(str(Path.cwd()))
     if as_json:

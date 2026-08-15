@@ -6,6 +6,7 @@ import type {
 	BackendEvent,
 	BridgeSessionSnapshot,
 	FrontendConfig,
+	LastLoopState,
 	McpServerSnapshot,
 	ReviewProgressSnapshot,
 	SelectOptionPayload,
@@ -21,6 +22,47 @@ const ASSISTANT_DELTA_FLUSH_CHARS = 384;
 const TRANSCRIPT_EVENT_FLUSH_MS = 50;
 
 const stableStringify = (value: unknown): string => JSON.stringify(value);
+
+const parseLastLoopState = (raw: Record<string, unknown> | null | undefined): LastLoopState | null => {
+	if (!raw) {
+		return null;
+	}
+	const severityRaw = (raw.severity ?? {}) as Record<string, unknown>;
+	const previewRaw = Array.isArray(raw.preview) ? raw.preview : [];
+	const interventionRaw = raw.lastIntervention as Record<string, unknown> | null | undefined;
+	return {
+		timestamp: String(raw.timestamp ?? ''),
+		mode: String(raw.mode ?? 'dry-run'),
+		verdict: String(raw.verdict ?? 'unknown'),
+		rounds: Number(raw.rounds ?? 0),
+		totalFindings: Number(raw.totalFindings ?? 0),
+		severity: {
+			critical: Number(severityRaw.critical ?? 0),
+			high: Number(severityRaw.high ?? 0),
+			medium: Number(severityRaw.medium ?? 0),
+			low: Number(severityRaw.low ?? 0),
+		},
+		preview: previewRaw.map((item) => {
+			const f = (item ?? {}) as Record<string, unknown>;
+			return {
+				severity: String(f.severity ?? '?'),
+				file: String(f.file ?? '?'),
+				dimension: String(f.dimension ?? '?'),
+				summary: String(f.summary ?? ''),
+			};
+		}),
+		lastIntervention:
+			interventionRaw && typeof interventionRaw === 'object'
+				? {
+						timestamp: String(interventionRaw.timestamp ?? ''),
+						round: Number(interventionRaw.round ?? 0),
+						action: String(interventionRaw.action ?? ''),
+						detail: String(interventionRaw.detail ?? ''),
+					}
+				: null,
+		entryCount: Number(raw.entryCount ?? 0),
+	};
+};
 
 export function useBackendSession(config: FrontendConfig, onExit: (code?: number | null) => void) {
 	const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
@@ -40,6 +82,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 	const [swarmNotifications, setSwarmNotifications] = useState<SwarmNotificationSnapshot[]>([]);
 	const [reviewProgress, setReviewProgress] = useState<ReviewProgressSnapshot | null>(null);
 	const [reviewRoundTrend, setReviewRoundTrend] = useState<number[]>([]);
+	const [lastLoopState, setLastLoopState] = useState<LastLoopState | null>(null);
 	const statusRef = useRef<Record<string, unknown>>({});
 	const childRef = useRef<ChildProcessWithoutNullStreams | null>(null);
 	const sentInitialPrompt = useRef(false);
@@ -436,6 +479,15 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			});
 			return;
 		}
+		if (event.type === 'last_loop_state') {
+			const parsed = parseLastLoopState(event.state);
+			if (parsed) {
+				startTransition(() => {
+					setLastLoopState(parsed);
+				});
+			}
+			return;
+		}
 		if (event.type === 'plan_mode_change') {
 			if (event.plan_mode != null) {
 				startTransition(() => {
@@ -472,12 +524,13 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			swarmNotifications,
 			reviewProgress,
 			reviewRoundTrend,
+			lastLoopState,
 			setModal,
 			setSelectRequest,
 			setBusy,
 			setBusyLabel,
 			sendRequest,
 		}),
-		[assistantBuffer, bridgeSessions, busy, busyLabel, commands, mcpServers, modal, ready, reviewProgress, reviewRoundTrend, selectRequest, status, swarmNotifications, swarmTeammates, tasks, todoMarkdown, transcript]
+		[assistantBuffer, bridgeSessions, busy, busyLabel, commands, lastLoopState, mcpServers, modal, ready, reviewProgress, reviewRoundTrend, selectRequest, status, swarmNotifications, swarmTeammates, tasks, todoMarkdown, transcript]
 	);
 }

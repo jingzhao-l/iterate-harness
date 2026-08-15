@@ -4,6 +4,7 @@ Subcommands:
 - ``/iterate`` or ``/iterate status`` — effective config + decision-log summary
 - ``/iterate review [--dry-run]`` — kick off the canonical dry-run loop
 - ``/iterate run`` — kick off the canonical normal-mode autonomous loop
+- ``/iterate resume`` — continue the last finished run from its decision log
 - ``/iterate log [n]`` — tail the decision log (default 20 entries)
 - ``/iterate report`` — render the final report entry from the decision log
 - ``/iterate config`` — show the effective config
@@ -21,7 +22,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from openharness.iterate import ci_report, config_loader, decision_log, prompts
+from openharness.iterate import ci_report, config_loader, decision_log, prompts, trend_store
 from openharness.iterate import validate as validate_mod
 from openharness.iterate.settings import IterateSettings, effective_review_rounds, project_config
 
@@ -107,12 +108,36 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             submit_prompt=kickoff,
         )
 
+    if sub == "resume":
+        from openharness.iterate.last_state import summarize_last_run
+
+        summary = summarize_last_run(cwd)
+        if summary is None:
+            return _result(
+                message="No finished iterate run to resume (.iterate/decision-log.jsonl has no report entry)."
+            )
+        effective = config_loader.load_effective_config(cwd)
+        rounds = _resolve_rounds(cwd)
+        kickoff = prompts.resume_kickoff(effective.config.goal, rounds, summary)
+        return _result(
+            message=(
+                f"Resuming last iterate run ({summary['mode']}, stopped at round "
+                f"{summary['rounds']}, {summary['totalFindings']} finding(s))…"
+            ),
+            submit_prompt=kickoff,
+        )
+
     if sub == "log":
+        if rest and rest[0] == "trend":
+            return _result(message=trend_store.render_trend_summary(trend_store.summarize(cwd)))
         try:
             limit = int(rest[0]) if rest else DEFAULT_LOG_TAIL
         except ValueError:
             limit = DEFAULT_LOG_TAIL
         return _result(message=_format_log_tail(cwd, max(1, limit)))
+
+    if sub == "trend":
+        return _result(message=trend_store.render_trend_summary(trend_store.summarize(cwd)))
 
     if sub == "report":
         report_entry = ci_report.latest_report_entry(decision_log.read_entries(cwd))
@@ -144,11 +169,13 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
 
     return _result(
         message=(
-            "Usage: /iterate [status|config|review|run|log|report|validate]\n"
+            "Usage: /iterate [status|config|review|run|resume|log|trend|report|validate]\n"
             "- status|config: effective config summary\n"
             "- review: dry-run pure review (read-only, convergence-enforced)\n"
             "- run: autonomous review-fix-validate loop\n"
-            "- log [n]: tail the decision log\n"
+            "- resume: continue the last finished run from its decision log\n"
+            "- log [n]: tail the decision log (or `log trend`)\n"
+            "- trend: cross-run finding trend (new/fixed/stubborn)\n"
             "- report: render the final report from the decision log\n"
             "- validate <command>: run a preconfigured validation command"
         )

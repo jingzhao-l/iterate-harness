@@ -55,6 +55,11 @@ log = logging.getLogger(__name__)
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
 AskUserPrompt = Callable[[str], Awaitable[str]]
+#: Interactive select channel: ``(title, options) -> selected value`` where
+#: options is a list of ``{value, label, description?}`` dicts. Backends
+#: without a directional-key UI leave this unset and the engine falls back
+#: to the free-text question prompt.
+AskUserSelect = Callable[[str, list[dict]], Awaitable[str]]
 
 MAX_TRACKED_READ_FILES = 6
 MAX_TRACKED_SKILLS = 8
@@ -152,6 +157,7 @@ class QueryContext:
     auto_compact_threshold_tokens: int | None = None
     permission_prompt: PermissionPrompt | None = None
     ask_user_prompt: AskUserPrompt | None = None
+    ask_user_select: AskUserSelect | None = None
     max_turns: int | None = 200
     hook_executor: HookExecutor | None = None
     tool_metadata: dict[str, object] | None = None
@@ -1268,18 +1274,85 @@ async def _handle_iterate_pause(
     intervention instruction, ``resume`` keeps the original injection.
     Headless sessions (no interactive channel) default to a safe stop.
     Every decision is recorded in the iterate decision log (audit trail).
+
+    Backends with a directional-key UI (React TUI) get the componentized
+    menu via ``ask_user_select``; everything else falls back to the
+    free-text question prompt.
     """
     from openharness.iterate import prompts
 
     round_number = int(getattr(progress, "round", 0) or 0)
     new_findings = int(getattr(progress, "new_findings", 0) or 0)
+    select_cb = context.ask_user_select
     prompt_cb = context.ask_user_prompt
-    if prompt_cb is None:
+    if select_cb is None and prompt_cb is None:
         await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "headless default")
         return PAUSE_ACTION_STOP, None
+    if select_cb is not None:
+        return await _handle_iterate_pause_select(
+            context, round_number, new_findings, select_cb, prompt_cb
+        )
+    return await _handle_iterate_pause_text(context, round_number, new_findings, prompt_cb)
+
+
+async def _handle_iterate_pause_select(
+    context: "QueryContext",
+    round_number: int,
+    new_findings: int,
+    select_cb: "AskUserSelect",
+    prompt_cb: AskUserPrompt | None,
+) -> tuple[str, str | None]:
+    """Pause menu over the directional-key select channel."""
+    from openharness.iterate import prompts
+
+    try:
+        answer = (
+            await select_cb(
+                prompts.pause_menu_title(round_number, new_findings),
+                prompts.pause_menu_options(),
+            )
+            or ""
+        ).strip()
+    except Exception:
+        log.exception("iterate pause select failed; stopping the loop")
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "select error")
+        return PAUSE_ACTION_STOP, None
+
+    if answer == PAUSE_ACTION_STOP:
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, answer)
+        return PAUSE_ACTION_STOP, None
+    if answer == PAUSE_ACTION_SKIP:
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_SKIP, answer)
+        return PAUSE_ACTION_SKIP, prompts.skip_current_finding_instruction()
+    if answer == PAUSE_ACTION_NARROW:
+        dimensions = ""
+        if prompt_cb is not None:
+            try:
+                dimensions = (await prompt_cb(prompts.narrow_dimensions_question()) or "").strip()
+            except Exception:
+                log.warning("iterate narrow-dimensions prompt failed", exc_info=True)
+        if not dimensions:
+            await _log_pause_decision(context, round_number, PAUSE_ACTION_RESUME, "narrow without dimensions")
+            return PAUSE_ACTION_RESUME, None
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_NARROW, dimensions)
+        return PAUSE_ACTION_NARROW, prompts.narrow_dimensions_instruction(dimensions)
+    await _log_pause_decision(context, round_number, PAUSE_ACTION_RESUME, answer)
+    return PAUSE_ACTION_RESUME, None
+
+
+async def _handle_iterate_pause_text(
+    context: "QueryContext",
+    round_number: int,
+    new_findings: int,
+    prompt_cb: AskUserPrompt | None,
+) -> tuple[str, str | None]:
+    """Pause menu over the free-text question channel (fallback UIs)."""
+    from openharness.iterate import prompts
+
+    assert prompt_cb is not None  # guarded by the caller
     try:
         answer = (await prompt_cb(prompts.pause_menu_question(round_number, new_findings)) or "").strip()
-    except Exception:  # noqa: BLE001 - a broken prompt channel must stop the loop safely
+    except Exception:
         log.exception("iterate pause prompt failed; stopping the loop")
         await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "prompt error")
         return PAUSE_ACTION_STOP, None
@@ -1314,5 +1387,5 @@ async def _log_pause_decision(
                 data={"kind": "intervention", "action": action, "detail": detail},
             ),
         )
-    except Exception:  # noqa: BLE001 - logging must never break the loop control
+    except Exception:
         log.warning("iterate pause decision could not be logged", exc_info=True)

@@ -123,6 +123,43 @@ def normal_kickoff(goal: str, max_rounds: int) -> str:
     )
 
 
+def resume_kickoff(goal: str, max_rounds: int, last_summary: dict) -> str:
+    """First-turn prompt that resumes the last iterate run (breakpoint resume).
+
+    ``last_summary`` is the payload from
+    :func:`openharness.iterate.last_state.summarize_last_run`.
+    """
+    verdict = str(last_summary.get("verdict") or "unknown")
+    last_rounds = int(last_summary.get("rounds") or 0)
+    total = int(last_summary.get("totalFindings") or 0)
+    preview_lines: list[str] = []
+    for finding in last_summary.get("preview") or []:
+        if not isinstance(finding, dict):
+            continue
+        preview_lines.append(
+            "- [{severity}] {file} ({dimension}): {summary}".format(
+                severity=str(finding.get("severity") or "?"),
+                file=str(finding.get("file") or "?"),
+                dimension=str(finding.get("dimension") or "?"),
+                summary=str(finding.get("summary") or ""),
+            )
+        )
+    preview = "\n".join(preview_lines) or "- (no finding previews recorded)"
+    return (
+        f"Resume the last iterate run on this project. Goal: {goal}. "
+        f"The previous run stopped after round {last_rounds} with verdict "
+        f"\"{verdict}\" and {total} total finding(s). Re-read the decision "
+        "log (.iterate/decision-log.jsonl) via iterate_log first, re-verify "
+        "which of the previously reported findings still reproduce on the "
+        "current state, then continue the canonical loop (dry-run rules if "
+        "the last run was dry-run, normal fix rules otherwise) within a "
+        f"fresh cap of {max_rounds} rounds. Previously reported findings:\n"
+        f"{preview}\n"
+        "Do NOT re-report findings that no longer reproduce; log the resume "
+        "as a decision entry before the first new round."
+    )
+
+
 def next_round_instruction(round_number: int, new_findings: int) -> str:
     """Engine-injected message steering the next review round."""
     return (
@@ -158,6 +195,50 @@ def pause_menu_question(round_number: int, new_findings: int) -> str:
         "  n <dimensions> = narrow the review to the given dimensions, then continue\n"
         "  x = stop the loop now\n"
         "  (empty / anything else = resume the normal loop)"
+    )
+
+
+def pause_menu_title(round_number: int, new_findings: int) -> str:
+    """Title for the componentized (directional-key) pause menu."""
+    return f"Iterate loop paused — round {round_number}, {new_findings} new finding(s)"
+
+
+def pause_menu_options() -> list[dict[str, str]]:
+    """Options for the componentized pause menu (values parsed by the engine).
+
+    ``resume`` first so Esc-cancel (which submits the cancel value) keeps
+    the loop running unchanged — the safe default.
+    """
+    return [
+        {
+            "value": "resume",
+            "label": "Resume loop",
+            "description": "continue the normal loop unchanged",
+        },
+        {
+            "value": "skip",
+            "label": "Skip top finding",
+            "description": "drop the current top finding and continue",
+        },
+        {
+            "value": "narrow",
+            "label": "Narrow dimensions…",
+            "description": "restrict the review to specific dimensions",
+        },
+        {
+            "value": "stop",
+            "label": "Stop loop",
+            "description": "halt now and produce the final report",
+        },
+    ]
+
+
+def narrow_dimensions_question() -> str:
+    """Follow-up question after the pause-menu ``narrow`` selection."""
+    return (
+        "Narrow the review to which dimensions? Reply with a comma-separated "
+        "list (e.g. security, correctness). Empty cancels narrowing and "
+        "resumes the normal loop."
     )
 
 

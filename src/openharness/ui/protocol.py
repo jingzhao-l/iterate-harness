@@ -84,6 +84,7 @@ class BackendEvent(BaseModel):
         "plan_mode_change",
         "swarm_status",
         "review_progress",
+        "last_loop_state",
         "error",
         "shutdown",
     ]

@@ -45,6 +45,7 @@ from openharness.keybindings import load_keybindings
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
 AskUserPrompt = Callable[[str], Awaitable[str]]
+AskUserSelect = Callable[[str, list[dict]], Awaitable[str]]
 SystemPrinter = Callable[[str], Awaitable[None]]
 StreamRenderer = Callable[[StreamEvent], Awaitable[None]]
 ClearHandler = Callable[[], Awaitable[None]]
@@ -216,6 +217,7 @@ async def build_runtime(
     api_client: SupportsStreamingMessages | None = None,
     permission_prompt: PermissionPrompt | None = None,
     ask_user_prompt: AskUserPrompt | None = None,
+    ask_user_select: AskUserSelect | None = None,
     restore_messages: list[dict] | None = None,
     restore_tool_metadata: dict[str, object] | None = None,
     enforce_max_turns: bool = True,
@@ -340,6 +342,7 @@ async def build_runtime(
         max_turns=engine_max_turns,
         permission_prompt=permission_prompt,
         ask_user_prompt=ask_user_prompt,
+        ask_user_select=ask_user_select,
         hook_executor=hook_executor,
         tool_metadata={
             "mcp_manager": mcp_manager,

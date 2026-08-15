@@ -25,7 +25,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ..iterate import config_loader, decision_log, meta_review, personalization, review
+from ..iterate import config_loader, decision_log, meta_review, personalization, review, trend_store
 from ..iterate import types as itypes
 from ..iterate import validate as validate_mod
 from ..iterate.loop_policy import ITERATE_STATE_KEY
@@ -332,20 +332,39 @@ class IterateDecisionLogTool(BaseTool):
             entry_type=args.type, round_number=args.round, data=args.data
         )
         count, path = decision_log.append_entry(context.cwd, entry)
-        return _json_output(
-            {
-                "operation": "append",
-                "success": True,
-                "entryCount": count,
-                "logPath": str(path),
-                "entry": {
-                    "timestamp": entry.timestamp,
-                    "round": entry.round,
-                    "type": entry.type,
-                    "data": entry.data,
-                },
-            }
-        )
+        payload: dict[str, Any] = {
+            "operation": "append",
+            "success": True,
+            "entryCount": count,
+            "logPath": str(path),
+            "entry": {
+                "timestamp": entry.timestamp,
+                "round": entry.round,
+                "type": entry.type,
+                "data": entry.data,
+            },
+        }
+        if args.type == "report":
+            # The canonical loops append exactly one report entry per run:
+            # that is the deterministic hook for the fingerprint trend library.
+            payload["trend"] = self._record_trend(context, args.data)
+        return _json_output(payload)
+
+    @staticmethod
+    def _record_trend(context: ToolExecutionContext, data: dict[str, Any] | None) -> dict[str, Any]:
+        """Record the finished run into the trend library (best effort)."""
+        raw = data.get("findings") if isinstance(data, dict) else None
+        findings = [f for f in raw if isinstance(f, dict)] if isinstance(raw, list) else []
+        try:
+            delta = trend_store.record_run(context.cwd, findings)
+        except Exception:  # noqa: BLE001 - trend tracking must never break the loop
+            return {"error": "trend library update failed"}
+        return {
+            "new": len(delta.new_findings),
+            "fixed": len(delta.fixed_findings),
+            "regressed": len(delta.regressed_findings),
+            "stubborn": len(delta.stubborn_findings),
+        }
 
 
 # --- iterate_context --------------------------------------------------------
