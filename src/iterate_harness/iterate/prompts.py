@@ -123,6 +123,90 @@ def changed_scope_clause(changed_files: list[str] | None) -> str:
     )
 
 
+def load_onboarding_template() -> str:
+    """Read the bundled ITERATE.md skeleton (never fails; inline fallback)."""
+    from pathlib import Path
+
+    template_path = Path(__file__).parent / "data" / "ITERATE.template.md"
+    try:
+        return template_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def onboarding_kickoff(
+    *,
+    project_root: str,
+    goal: str,
+    dimensions: list[str],
+    evidence_lines: list[str],
+    channel: str,
+    completed_at: str,
+    preserve_user_section: str | None = None,
+) -> str:
+    """First-turn prompt that boots the model-driven project onboarding scan.
+
+    The model explores the repository with its normal read tools, fills the
+    AI-maintained region of the ITERATE.md skeleton from real evidence, and
+    writes the complete file. Harness code (not the model) then validates the
+    region markers, captures manifest fingerprints, and writes
+    ``iterate.config.yaml`` — untrusted model output never touches trusted
+    config structure.
+    """
+    from .onboarding import (
+        AI_END_MARKER,
+        AI_START_MARKER,
+        FINGERPRINT_VERSION,
+        SENSITIVE_SKIP_PATTERNS,
+    )
+
+    evidence = "\n".join(f"- {line}" for line in evidence_lines) or "- (none)"
+    skeleton = load_onboarding_template()
+    sensitive = ", ".join(SENSITIVE_SKIP_PATTERNS)
+    preserve_clause = ""
+    if preserve_user_section is not None:
+        preserve_clause = (
+            "\n\nRE-ONBOARD MODE: an existing user-owned region must be "
+            "preserved VERBATIM. Replace the skeleton's user-owned region "
+            f"(from `{AI_START_MARKER.split(':')[0]}:USER-OWNED:START -->` to "
+            "its END marker) with EXACTLY the text between the fences below, "
+            "markers included, unchanged:\n\n```\n"
+            + preserve_user_section
+            + "\n```"
+        )
+    return (
+        "Run the iterate project onboarding scan now and create ITERATE.md — "
+        "the project knowledge base used by every later iterate review.\n\n"
+        "## Step 1 — Scan (read-only)\n"
+        "- Read the project manifests (package.json, pyproject.toml, go.mod, "
+        "Cargo.toml, …) to identify languages, frameworks and package managers.\n"
+        "- List the directory tree 2-3 levels deep (skip node_modules, .git, "
+        "build artifacts) to map the module structure.\n"
+        "- Check for specs/, tests/, and CI configuration.\n"
+        "- Read README.md / CONTRIBUTING.md if present for the project description.\n"
+        f"- NEVER read sensitive files: {sensitive}.\n"
+        "- Detection evidence gathered by the harness (verify, don't blindly trust):\n"
+        f"{evidence}\n\n"
+        "## Step 2 — Write ITERATE.md\n"
+        f"Write the complete file to `{project_root}/ITERATE.md` using the "
+        "skeleton below. Fill EVERY `{{PLACEHOLDER}}` from your scan results "
+        f"(metadata table: completed_at={completed_at}, channel={channel}, "
+        f"fingerprint_version={FINGERPRINT_VERSION}, project_root={project_root}). "
+        "The two region marker comment lines "
+        f"`{AI_START_MARKER}` … `{AI_END_MARKER}` (and the USER-OWNED pair) "
+        "must appear EXACTLY as in the skeleton — later refresh flows locate "
+        "regions by these byte-exact markers. Keep each section concise and "
+        "factual; unknown areas say so instead of inventing details. "
+        f"Review goal for context: {goal}. Dimensions enabled: "
+        f"{', '.join(dimensions)}."
+        + preserve_clause
+        + "\n\n## Skeleton\n\n```md\n"
+        + skeleton
+        + "\n```\n\nAfter writing the file, reply with a one-paragraph summary "
+        "of what you found. Do not modify any other file."
+    )
+
+
 def dry_run_kickoff(
     goal: str, max_rounds: int, changed_files: list[str] | None = None
 ) -> str:

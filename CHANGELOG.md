@@ -6,6 +6,24 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-15
+
+Full onboarding parity with the skill: model-driven `ITERATE.md` generation, manifest fingerprints, drift detection, and knowledge-base injection into every loop.
+
+### Added
+
+- **`ih iterate onboard`** (`iterate_harness.iterate.onboard_cmd`): the complete first-run flow the skill has — auth gate (`ih auth login` guidance, never a bare stack trace) → detection evidence (`init_wizard.detect_project`) → interactive dimension/goal/rounds Q&A (`--yes` skips) → **model-driven project scan**. The model explores the repo with its read tools (manifests, 2-3 level tree, specs/tests/CI, README — the kickoff embeds the skill's sensitive-file deny list `.env`/keys/credentials) and writes `ITERATE.md` using the bundled skeleton (`iterate/data/ITERATE.template.md`) with byte-exact region markers. Harness code then validates marker presence/order, captures SHA-256 manifest fingerprints (15 tracked manifests, skill parity), and serializes `iterate.config.yaml` via `yaml.safe_dump` — untrusted model prose never reaches trusted config structure. `--no-ai` renders a detection-only knowledge base (channel `cli`) without any model call; the AI path records channel `ai`. Both artifacts are byte-compatible with the skill's onboarding output (same markers, same `onboarding.fingerprints` schema) so either ecosystem can read what the other produced.
+- **`ih iterate refresh`**: re-captures fingerprints, prints a drift summary (changed/added/removed manifests), updates the config `onboarding` section + the `ITERATE.md` metadata row with rollback on write failure. Never calls the model, never touches the user-owned region.
+- **`ih iterate reonboard`**: backs up both artifacts (`*.bak-<timestamp>`), re-runs the full model onboarding with the existing user-owned region embedded verbatim in the kickoff, and restores the backups automatically when the re-scan fails validation.
+- **`ih iterate status`** (new CLI subcommand): effective config summary + onboarding state (channel, completed_at, fingerprint count) + drift check result. The TUI `/iterate status` shows the same block.
+- **Knowledge-base injection**: `build_runtime_system_prompt` now inlines the project's `ITERATE.md` (found by walking up from cwd, capped at 4000 chars with a pointer to the `iterate_context` tool for the full file) — every review/run kickoff starts with the project knowledge in context, closing the v1.22 gap.
+- **Drift warnings**: `ih iterate review` / `run` / `resume` print a non-blocking warning when tracked manifests drifted since onboarding; the TUI `/iterate review|run` start messages carry the same notice.
+- TUI `/iterate onboard`: submits the onboarding kickoff inside the current session (no nested runtime); the completion message points at `ih iterate refresh` to record fingerprints.
+
+### Changed
+
+- README (en + zh-CN): onboarding commands in the CLI cheat-sheet, an onboarding explainer paragraph (trust boundary + skill interop), and a "Model-driven onboarding" feature row.
+
 ## [1.4.0] - 2026-08-15
 
 Identity migration: the fork now runs under its own name end to end — `openharness` (package/CLI/paths) → `iterate-harness` / `ih`.

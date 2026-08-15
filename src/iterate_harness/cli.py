@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import typer
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -844,8 +844,10 @@ def _run_headless(kickoff: str) -> None:
     """Run one canonical iterate prompt through the kernel print pipeline."""
     import asyncio
 
+    from iterate_harness.iterate.onboard_cmd import warn_if_drifted
     from iterate_harness.ui.app import run_print_mode
 
+    warn_if_drifted(Path.cwd())
     asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
 
 
@@ -871,6 +873,65 @@ def _resolve_changed_files(
         raise typer.Exit(0 if clean_ok else 1)
     print(f"Changed-only quick review: {len(files)} file(s) vs {ref}")
     return files
+
+
+@iterate_app.command("onboard")
+def iterate_onboard(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Accept suggestions without prompting"),
+    goal: str = typer.Option("", "--goal", help="Review goal (default: detection-based suggestion)"),
+    no_ai: bool = typer.Option(
+        False,
+        "--no-ai",
+        help="Skip the model scan; render a detection-only knowledge base (channel=cli)",
+    ),
+) -> None:
+    """Full onboarding: model-driven project scan -> ITERATE.md + config + fingerprints."""
+    from iterate_harness.iterate.onboard_cmd import run_onboard
+
+    raise typer.Exit(run_onboard(yes=yes, goal=goal, no_ai=no_ai))
+
+
+@iterate_app.command("refresh")
+def iterate_refresh() -> None:
+    """Re-capture manifest fingerprints, report drift, refresh metadata (no model)."""
+    from iterate_harness.iterate.onboard_cmd import run_refresh
+
+    raise typer.Exit(run_refresh())
+
+
+@iterate_app.command("reonboard")
+def iterate_reonboard(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Accept suggestions without prompting"),
+    goal: str = typer.Option("", "--goal", help="Review goal (default: detection-based suggestion)"),
+    no_ai: bool = typer.Option(False, "--no-ai", help="Detection-only re-scan (no model call)"),
+) -> None:
+    """Backup artifacts, re-run the full onboarding, preserve the user region verbatim."""
+    from iterate_harness.iterate.onboard_cmd import run_reonboard
+
+    raise typer.Exit(run_reonboard(yes=yes, goal=goal, no_ai=no_ai))
+
+
+@iterate_app.command("status")
+def iterate_status() -> None:
+    """Show the effective iterate config, onboarding state, and drift status."""
+    from iterate_harness.iterate.config_loader import load_effective_config
+    from iterate_harness.iterate.onboard_cmd import render_status_onboarding_lines
+
+    effective = load_effective_config(str(Path.cwd()))
+    config = effective.config
+    print(f"Config source: {effective.source}")
+    print(f"Goal: {config.goal}")
+    print(f"Max rounds: {config.max_rounds}")
+    print(f"Dimensions: {', '.join(config.dimensions)}")
+    commands = config.validation.commands if config.validation else {}
+    if commands:
+        print("Validation commands:")
+        for module, cmds in commands.items():
+            print(f"  - {module}: {'; '.join(cmds)}")
+    else:
+        print("Validation commands: (none configured)")
+    for line in render_status_onboarding_lines(Path.cwd()):
+        print(line)
 
 
 @iterate_app.command("init")

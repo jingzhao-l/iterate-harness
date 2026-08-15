@@ -2,6 +2,8 @@
 
 Subcommands:
 - ``/iterate`` or ``/iterate status`` — effective config + decision-log summary
+- ``/iterate onboard [goal]`` — model-driven project scan that writes ITERATE.md
+  (afterwards run ``ih iterate refresh`` in a terminal to record fingerprints)
 - ``/iterate review [--changed] [--ref <ref>]`` — kick off the canonical dry-run loop
 - ``/iterate run [--changed] [--ref <ref>]`` — kick off the canonical normal-mode autonomous loop
 - ``/iterate resume`` — continue the last finished run from its decision log
@@ -113,6 +115,16 @@ def _collect_changed_or_none(cwd: str, ref: str) -> list[str] | None:
     return git_scope.collect_changed_files(cwd, ref) or None
 
 
+def _drift_note(cwd: str) -> str:
+    """Non-blocking onboarding drift notice appended to loop start messages."""
+    from iterate_harness.iterate.onboarding import check_onboarding_drift
+
+    drift = check_onboarding_drift(cwd)
+    if drift is None or not drift.has_drift:
+        return ""
+    return f"\n⚠ Onboarding drift: {drift.summary()} — run `ih iterate refresh` / `reonboard`."
+
+
 async def iterate_command_handler(args: str, context: CommandContext) -> CommandResult:
     """Handle ``/iterate [subcommand]``."""
     tokens = args.split()
@@ -122,7 +134,44 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
 
     if sub in ("status", "config"):
         log_count = len(decision_log.read_entries(cwd))
-        return _result(message=f"{_format_config(cwd)}\ndecision log: {log_count} entries")
+        from iterate_harness.iterate.onboard_cmd import render_status_onboarding_lines
+
+        onboarding_lines = "\n".join(render_status_onboarding_lines(cwd))
+        return _result(
+            message=f"{_format_config(cwd)}\ndecision log: {log_count} entries\n{onboarding_lines}"
+        )
+
+    if sub == "onboard":
+        from iterate_harness.iterate import init_wizard
+        from iterate_harness.iterate import onboarding as onboarding_mod
+
+        if (Path(cwd) / onboarding_mod.ITERATE_MD_FILENAME).exists():
+            return _result(
+                message=(
+                    "ITERATE.md already exists — run `ih iterate reonboard` in a terminal "
+                    "to re-scan while preserving your user-owned region."
+                )
+            )
+        profile = init_wizard.detect_project(cwd)
+        goal = " ".join(rest).strip() or (
+            f"Iterative review for this {profile.languages[0] if profile.languages else 'software'} project"
+        )
+        kickoff = prompts.onboarding_kickoff(
+            project_root=cwd,
+            goal=goal,
+            dimensions=profile.suggested_dimensions,
+            evidence_lines=profile.evidence,
+            channel="ai",
+            completed_at=onboarding_mod.utc_now_iso(),
+        )
+        return _result(
+            message=(
+                "Starting model-driven onboarding scan — the model will explore the "
+                "project and write ITERATE.md. Afterwards run `ih iterate refresh` in a "
+                "terminal to record manifest fingerprints into iterate.config.yaml."
+            ),
+            submit_prompt=kickoff,
+        )
 
     if sub == "review":
         effective = config_loader.load_effective_config(cwd)
@@ -146,7 +195,8 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             f"changed-only, {len(changed_files)} file(s)" if changed_files else "full codebase"
         )
         return _result(
-            message=f"Starting dry-run review ({scope_note}, {rounds} round cap)…",
+            message=f"Starting dry-run review ({scope_note}, {rounds} round cap)…"
+            + _drift_note(cwd),
             submit_prompt=kickoff,
         )
 
@@ -172,7 +222,8 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             f"changed-only, {len(changed_files)} file(s)" if changed_files else "full codebase"
         )
         return _result(
-            message=f"Starting autonomous iterate loop ({scope_note}, {rounds} round cap)…",
+            message=f"Starting autonomous iterate loop ({scope_note}, {rounds} round cap)…"
+            + _drift_note(cwd),
             submit_prompt=kickoff,
         )
 

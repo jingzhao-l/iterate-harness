@@ -28,7 +28,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-1.4.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.5.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -49,7 +49,12 @@ ih
 也可以走 CLI：
 
 ```bash
-ih iterate init          # 检测项目，生成 iterate.config.yaml
+ih iterate onboard       # 模型驱动项目扫描 -> ITERATE.md 知识库 + 配置 + manifest 指纹
+ih iterate onboard --no-ai # 纯检测降级路径（不调模型，channel=cli）
+ih iterate status        # 配置 + onboarding 状态 + 漂移检查
+ih iterate refresh       # 重新采集指纹、报告漂移、刷新元信息（不调模型）
+ih iterate reonboard     # 备份后完整重扫，用户手写区逐字保留
+ih iterate init          # 检测项目，生成 iterate.config.yaml（仅配置）
 ih iterate review        # 无头 dry-run（支持 stream-json 输出）
 ih iterate review --changed # 快审：只审相对 --ref（默认 HEAD）改动的文件
 ih iterate run           # 无头自治修复闭环
@@ -64,6 +69,15 @@ ih iterate batch a/ b/   # 顺序评审多个仓库，按严重度加权排出�
 ih iterate schedule add "0 9 * * 1-5" # 每日 changed-only 快审（cron，UTC）
 ih iterate hook install  # 托管 pre-commit 钩子：1 轮 changed-only 提交门禁
 ```
+
+Onboarding 说明：`ih iterate onboard` 先做模型凭证门禁（`ih auth login`），
+然后让模型用自己的只读工具扫描项目（manifest、2-3 层目录树、specs/tests/CI、
+README——绝不碰 `.env`/密钥），按字节精确的「AI 维护区 / 用户维护区」标记写出
+`ITERATE.md`；harness 代码负责校验标记、采集 manifest SHA-256 指纹并写
+`iterate.config.yaml`——不可信的模型输出永远进不了受信配置结构。两个产物与
+skill 侧 onboarding 字节兼容（同标记、同 `onboarding.fingerprints` schema），
+两个生态互相可读。之后每次循环 kickoff 都会把 `ITERATE.md` 知识库注入系统提示，
+manifest 漂移（升依赖、换技术栈）会在评审前给出非阻塞警告。
 
 先设置 API Key：`export ANTHROPIC_API_KEY=your_key`（也支持
 OpenAI 兼容供应商，见 `ih --help`）。
@@ -94,6 +108,7 @@ OpenAI 兼容供应商，见 `ih --help`）。
 | **阈值门禁** | `thresholds.max_critical` / `max_high` / `max_medium` / `max_low`（全局或按维度）封顶最终报告中的发现数量——违规即把结论翻转为 `needs_revision`，并让 `ih iterate report` 退出码失败（`threshold gate: FAIL`） |
 | **定时评审时区** | `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` 按本地时区解释 cron（存储为 UTC 标准化时间），"每天 9 点"就是你所在地的 9 点 |
 | **检测式 init** | `ih iterate init` 探测项目标记文件（package.json / pyproject / go.mod / Cargo.toml / …），基于真实证据推断测试命令，推荐评审维度（前端依赖解锁 `frontend-backend` / `ui-ux`），预览 yaml 并确认后才写入；TUI 内 `/iterate init` 同效 |
+| **模型驱动 onboarding** | `ih iterate onboard` 串联凭证门禁 → 检测证据 → 模型扫描 → `ITERATE.md` 知识库（AI/用户分区标记）+ manifest 指纹；`refresh` 重采指纹、`reonboard` 保留手写区重扫；每次 kickoff 注入知识库并检测漂移——产物与 skill 生态字节兼容 |
 | **pre-commit 钩子** | `ih iterate hook install` 写入带标记的托管 `.git/hooks/pre-commit`：提交前跑 1 轮 changed-only 评审并按 `--fail-on` 严重度门禁；拒绝覆盖第三方钩子，可用 `ITERATE_SKIP_HOOK=1` / `--no-verify` 跳过 |
 | **决策日志** | append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘 |
 | **项目知识** | `ITERATE.md` 项目知识 + 按项目隔离的 9 类结构化个性化数据 |
