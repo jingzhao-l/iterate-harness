@@ -149,6 +149,8 @@ src/iterate_harness/
 
 ## 📦 安装
 
+- **npm（最简）**：`npm install -g iterate-harness` —— 轻量包装器，首次运行时把
+  发布 tarball pip 安装进托管 venv（`~/.iterate-harness-npm`），版本与 npm 包同步
 - **macOS / Linux / WSL**：`bash scripts/install.sh`（克隆 + venv + 可编辑
   安装，把 `ih` 与 `iterate-harness` 链入 `~/.local/bin`）
 - **Windows (PowerShell)**：`scripts/install.ps1`

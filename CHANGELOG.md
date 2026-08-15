@@ -18,6 +18,10 @@ Personalization parity with the skill: the full 9-category wizard, kernel-enforc
 - **Fingerprint auto-capture after TUI onboarding** (`ensure_onboarding_fingerprints`): when `ITERATE.md` exists but the config has no `onboarding.fingerprints` (the TUI `/iterate onboard` path — the slash-command flow cannot run the CLI's synchronous post-scan bookkeeping), the next review/run/drift-check completes the config's `onboarding` section with harness-serialized fingerprints. The model never touches trusted config; users no longer need a manual `ih iterate refresh` after TUI onboarding.
 - Defensive config parsing: `load_personalization_from_config` accepts either a full config dict or the personalization section itself, and string lists keep only non-empty `str` entries (hostile YAML degrades to empty instead of coercing).
 
+### Distribution
+
+- **npm distribution wrapper** (`iterate-harness` on npm, maintained at `npm/iterate-harness/` in the iterate-skill monorepo): `npm install -g iterate-harness` exposes `ih` everywhere npm works. The wrapper is a zero-dependency Node shim — first run resolves Python ≥ 3.10 (env override `ITERATE_HARNESS_PYTHON`), creates a managed venv (`~/.iterate-harness-npm`), pip-installs the release tarball **pinned to the npm package version** (lockstep: npm 1.6.0 → harness v1.6.0, npm upgrades self-heal on next run), then delegates to the real `ih` with argv/stdio/signals/exit-code passthrough. Requires network access to pypi.org + github.com for the one-time install; `ITERATE_HARNESS_SKIP_INSTALL=1` runs an existing install directly. 10 unit tests (`node --test`) cover the pure helpers.
+
 ### Changed
 
 - README (en + zh-CN): `personalize` in the CLI cheat-sheet, a "Personalization wizard" feature row, the onboarding row now mentions TUI fingerprint auto-capture; version badges updated to 1.6.0.

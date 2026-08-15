@@ -155,6 +155,9 @@ src/iterate_harness/
 
 ## 📦 Install
 
+- **npm (easiest)**: `npm install -g iterate-harness` — a thin wrapper that
+  pip-installs the release tarball into a managed venv (`~/.iterate-harness-npm`)
+  on first run and keeps the version in lockstep with the npm package
 - **macOS / Linux / WSL**: `bash scripts/install.sh` (clone + venv + editable
   install, links `ih` and `iterate-harness` into `~/.local/bin`)
 - **Windows (PowerShell)**: `scripts/install.ps1`
