@@ -32,6 +32,7 @@ from openharness.engine.stream_events import (
     AssistantTurnComplete,
     CompactProgressEvent,
     ErrorEvent,
+    ReviewProgressEvent,
     StatusEvent,
     StreamEvent,
     ToolExecutionCompleted,
@@ -152,6 +153,10 @@ class QueryContext:
     max_turns: int | None = 200
     hook_executor: HookExecutor | None = None
     tool_metadata: dict[str, object] | None = None
+    # Iterate loop policy (design §11.4.1 kernel fix #1): when set, the
+    # engine consults it after every turn's tool results to enforce
+    # deterministic review convergence. ``None`` keeps upstream behavior.
+    iterate_policy: object | None = None
 
 
 def _append_capped_unique(bucket: list[Any], value: Any, *, limit: int) -> None:
@@ -867,6 +872,26 @@ async def run_query(
 
         messages.append(ConversationMessage(role="user", content=tool_results))
 
+        # --- iterate loop-policy control (deterministic convergence) ----
+        if context.iterate_policy is not None:
+            decision = context.iterate_policy.on_turn_end(
+                context.tool_metadata, usage, context.model
+            )
+            if isinstance(decision.progress, ReviewProgressEvent):
+                yield decision.progress, None
+            if decision.inject_message is not None:
+                messages.append(
+                    ConversationMessage(
+                        role="user",
+                        content=[TextBlock(text=decision.inject_message)],
+                    )
+                )
+            if decision.stop_reason is not None:
+                yield StatusEvent(
+                    message=f"iterate loop stopped: {decision.stop_reason}"
+                ), None
+                return
+
     if context.max_turns is not None:
         raise MaxTurnsExceeded(context.max_turns)
     raise RuntimeError("Query loop exited without a max_turns limit or final response")
@@ -955,18 +980,27 @@ async def _execute_tool_call(
 
     log.debug("executing %s ...", tool_name)
     t0 = time.monotonic()
+    exec_metadata = {
+        "tool_registry": context.tool_registry,
+        "ask_user_prompt": context.ask_user_prompt,
+        **(context.tool_metadata or {}),
+    }
     result = await tool.execute(
         parsed_input,
         ToolExecutionContext(
             cwd=context.cwd,
-            metadata={
-                "tool_registry": context.tool_registry,
-                "ask_user_prompt": context.ask_user_prompt,
-                **(context.tool_metadata or {}),
-            },
+            metadata=exec_metadata,
             hook_executor=context.hook_executor,
         ),
     )
+    # Carry tool metadata writes back into the durable per-session state so
+    # cross-turn consumers (e.g. the iterate loop policy reading
+    # "iterate_state") observe them.
+    if context.tool_metadata is not None:
+        for key, value in exec_metadata.items():
+            if key in ("tool_registry", "ask_user_prompt"):
+                continue
+            context.tool_metadata[key] = value
     elapsed = time.monotonic() - t0
     log.debug("executed %s in %.2fs err=%s output_len=%d",
               tool_name, elapsed, result.is_error, len(result.output or ""))

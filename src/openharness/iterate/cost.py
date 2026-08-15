@@ -1,0 +1,121 @@
+"""Money layer on top of the kernel's token-only usage tracking.
+
+The upstream ``CostTracker`` accumulates tokens but never converts them to
+money (design §11.3.2 finding #6). :class:`CostMeter` fills that gap: it
+consumes the same :class:`~openharness.api.usage.UsageSnapshot` stream and
+maintains per-model token totals plus a running USD cost using a built-in
+price table (USD per million tokens, ``(input, output)``).
+
+Prices are compile-time constants for well-known model families; unknown
+models fall back to a conservative default and can be overridden via
+``IterateSettings.price_overrides``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from ..api.usage import UsageSnapshot
+
+#: USD per 1M tokens: {model pattern: (input_price, output_price)}.
+#: Ordered; the FIRST matching pattern wins (most specific first).
+DEFAULT_PRICE_TABLE: tuple[tuple[str, tuple[float, float]], ...] = (
+    ("claude-opus-4", (15.0, 75.0)),
+    ("claude-sonnet-4", (3.0, 15.0)),
+    ("claude-haiku-4", (0.8, 4.0)),
+    ("claude-3-5-haiku", (0.8, 4.0)),
+    ("claude-3-5-sonnet", (3.0, 15.0)),
+    ("claude-3-opus", (15.0, 75.0)),
+    ("gpt-5", (5.0, 15.0)),
+    ("gpt-4.1", (2.5, 10.0)),
+    ("gpt-4o", (2.5, 10.0)),
+    ("gpt-4", (10.0, 30.0)),
+    ("deepseek-chat", (0.27, 1.1)),
+    ("deepseek-reasoner", (0.55, 2.19)),
+    ("glm-4", (0.6, 2.2)),
+    ("kimi-k2", (0.6, 2.5)),
+    ("moonshot", (0.9, 3.0)),
+    ("minimax", (0.5, 1.8)),
+    ("qwen", (0.5, 1.5)),
+    ("llama", (0.3, 0.9)),
+)
+
+#: Fallback price when no pattern matches (conservative mid-tier).
+FALLBACK_PRICE: tuple[float, float] = (3.0, 15.0)
+
+TOKENS_PER_MILLION = 1_000_000
+
+
+def price_for(
+    model: str,
+    overrides: dict[str, tuple[float, float]] | None = None,
+) -> tuple[float, float]:
+    """Return the ``(input, output)`` USD price per 1M tokens for a model.
+
+    Exact overrides win, then the first matching built-in pattern, then the
+    conservative fallback.
+    """
+    if overrides:
+        exact = overrides.get(model)
+        if exact is not None:
+            return (float(exact[0]), float(exact[1]))
+    lowered = (model or "").lower()
+    for pattern, price in DEFAULT_PRICE_TABLE:
+        if pattern in lowered:
+            return price
+    return FALLBACK_PRICE
+
+
+@dataclass
+class ModelUsage:
+    """Token and cost totals for one model."""
+
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+@dataclass
+class CostMeter:
+    """Accumulate usage snapshots into per-model token totals and USD cost."""
+
+    price_overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
+    _by_model: dict[str, ModelUsage] = field(default_factory=dict)
+
+    def accumulate(self, usage: UsageSnapshot, model: str) -> None:
+        """Add one usage snapshot billed against ``model``."""
+        entry = self._by_model.setdefault(model, ModelUsage(model=model))
+        entry.input_tokens += usage.input_tokens
+        entry.output_tokens += usage.output_tokens
+        in_price, out_price = price_for(model, self.price_overrides)
+        entry.cost_usd += (
+            usage.input_tokens * in_price / TOKENS_PER_MILLION
+            + usage.output_tokens * out_price / TOKENS_PER_MILLION
+        )
+
+    @property
+    def total_cost_usd(self) -> float:
+        """Sum of every model's accumulated cost."""
+        return round(sum(entry.cost_usd for entry in self._by_model.values()), 6)
+
+    @property
+    def total_tokens(self) -> int:
+        """Sum of input + output tokens across all models."""
+        return sum(
+            entry.input_tokens + entry.output_tokens for entry in self._by_model.values()
+        )
+
+    def by_model(self) -> dict[str, ModelUsage]:
+        """Return a copy of per-model totals keyed by model name."""
+        return dict(self._by_model)
+
+    def format_summary(self) -> str:
+        """Human-readable one-line cost summary (for TUI / slash commands)."""
+        parts = [
+            f"{entry.model}: {entry.input_tokens:,} in / {entry.output_tokens:,} out "
+            f"(${entry.cost_usd:.4f})"
+            for entry in self._by_model.values()
+        ]
+        header = f"Total: {self.total_tokens:,} tokens, ${self.total_cost_usd:.4f}"
+        return header + ("\n" + "\n".join(parts) if parts else "")

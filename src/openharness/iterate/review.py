@@ -397,3 +397,140 @@ def build_review_plan(
         max_review_rounds=max_review_rounds,
         known_intentional=known_intentional or [],
     )
+
+
+def plan_to_dict(plan: ReviewPlan) -> dict[str, object]:
+    """Serialize a ReviewPlan to the tool-layer JSON shape (camelCase keys
+    mirror the TS plugin's wire contract)."""
+    return {
+        "mode": plan.mode,
+        "goal": plan.goal,
+        "scope": plan.scope,
+        "dimensions": [
+            {
+                "id": d.id,
+                "reviewerPrompt": d.reviewer_prompt,
+                "findingsSchema": d.findings_schema,
+            }
+            for d in plan.dimensions
+        ],
+        "maxReviewRounds": plan.max_review_rounds,
+        "knownIntentional": [
+            {"file": k.file, "line": k.line, "dimension": k.dimension, "reason": k.reason}
+            for k in plan.known_intentional
+        ],
+    }
+
+
+def round_to_dict(round_: ReviewRound) -> dict[str, object]:
+    """Serialize one review round."""
+    return {
+        "round": round_.round,
+        "findings": [finding_to_dict(f) for f in round_.findings],
+    }
+
+
+def report_to_dict(report: ReviewReport) -> dict[str, object]:
+    """Serialize a ReviewReport to the tool-layer JSON shape."""
+    return {
+        "mode": report.mode,
+        "goal": report.goal,
+        "dimensions": report.dimensions,
+        "maxReviewRounds": report.max_review_rounds,
+        "rounds": [round_to_dict(r) for r in report.rounds],
+        "findings": [finding_to_dict(f) for f in report.findings],
+        "convergence": {
+            "totalRounds": report.convergence.total_rounds,
+            "findingsByRound": report.convergence.findings_by_round,
+            "converged": report.convergence.converged,
+            "stoppedReason": report.convergence.stopped_reason,
+        },
+        "summary": {
+            "totalFindings": report.summary.total_findings,
+            "critical": report.summary.critical,
+            "high": report.summary.high,
+            "medium": report.summary.medium,
+            "low": report.summary.low,
+            "byDimension": dict(report.summary.by_dimension),
+        },
+    }
+
+
+def _parse_finding(raw: object, errors: list[str], index: int) -> ReviewFinding | None:
+    if not isinstance(raw, dict):
+        errors.append(f"findings[{index}] is not an object")
+        return None
+    required = ("dimension", "file", "severity", "summary", "failure_scenario", "suggested_fix", "is_atomic")
+    missing = [key for key in required if key not in raw]
+    if missing:
+        errors.append(f"findings[{index}] missing required fields: {', '.join(missing)}")
+        return None
+    severity = raw["severity"]
+    if severity not in SEVERITY_RANK:
+        errors.append(f"findings[{index}] severity must be one of {sorted(SEVERITY_RANK)}")
+        return None
+    line = raw.get("line")
+    if line is not None and not isinstance(line, int):
+        errors.append(f"findings[{index}] line must be an integer or null")
+        return None
+    return ReviewFinding(
+        dimension=str(raw["dimension"]),
+        file=str(raw["file"]),
+        severity=severity,  # type: ignore[arg-type]
+        summary=str(raw["summary"]),
+        failure_scenario=str(raw["failure_scenario"]),
+        suggested_fix=str(raw["suggested_fix"]),
+        is_atomic=bool(raw["is_atomic"]),
+        line=line,
+    )
+
+
+def report_from_dict(data: object) -> ReviewReport:
+    """Parse a tool-layer report JSON back into a ReviewReport.
+
+    Raises ``ValueError`` with every problem listed when the shape is
+    invalid — callers surface the message to the model as a tool error.
+    """
+    if not isinstance(data, dict):
+        # ValueError (not TypeError) is the documented tool-layer contract —
+        # callers surface it verbatim to the model as a tool error.
+        raise ValueError("report must be a JSON object")  # noqa: TRY004
+    errors: list[str] = []
+
+    mode = data.get("mode", "dry-run")
+    if mode not in ("dry-run", "normal"):
+        errors.append("mode must be 'dry-run' or 'normal'")
+    dimensions_raw = data.get("dimensions", [])
+    dimensions = [str(d) for d in dimensions_raw] if isinstance(dimensions_raw, list) else []
+    if not isinstance(dimensions_raw, list):
+        errors.append("dimensions must be an array")
+
+    rounds: list[ReviewRound] = []
+    rounds_raw = data.get("rounds", [])
+    if isinstance(rounds_raw, list):
+        for r_index, r_raw in enumerate(rounds_raw):
+            if not isinstance(r_raw, dict):
+                errors.append(f"rounds[{r_index}] is not an object")
+                continue
+            findings: list[ReviewFinding] = []
+            findings_raw = r_raw.get("findings", [])
+            if isinstance(findings_raw, list):
+                for f_index, f_raw in enumerate(findings_raw):
+                    parsed = _parse_finding(f_raw, errors, f_index)
+                    if parsed is not None:
+                        findings.append(parsed)
+            else:
+                errors.append(f"rounds[{r_index}].findings must be an array")
+            round_number = r_raw.get("round", r_index + 1)
+            rounds.append(ReviewRound(round=int(round_number), findings=findings))
+
+    if errors:
+        raise ValueError("invalid report: " + "; ".join(errors))
+
+    return build_review_report(
+        mode=mode,  # type: ignore[arg-type]
+        goal=str(data.get("goal", "")),
+        dimensions=dimensions,
+        max_review_rounds=int(data.get("maxReviewRounds", len(rounds) or 1)),
+        rounds=rounds,
+    )

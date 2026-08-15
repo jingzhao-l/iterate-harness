@@ -27,6 +27,7 @@ from openharness.config.paths import (
 from openharness.bridge import get_bridge_manager
 from openharness.bridge.types import WorkSecret
 from openharness.bridge.work_secret import build_sdk_url, decode_work_secret, encode_work_secret
+from openharness.commands.iterate import iterate_command_handler
 from openharness.api.provider import auth_status, detect_provider
 from openharness.config.settings import Settings, display_model_setting, load_settings, save_settings
 from openharness.engine.messages import ConversationMessage, sanitize_conversation_messages
@@ -2127,6 +2128,13 @@ def create_default_command_registry(
     registry.register(SlashCommand("rewind", "Remove the latest conversation turn(s)", _rewind_handler))
     registry.register(SlashCommand("files", "List files in the current workspace", _files_handler))
     registry.register(SlashCommand("init", "Initialize project OpenHarness files", _init_handler))
+    registry.register(
+        SlashCommand(
+            "iterate",
+            "Iterate review loop: status|config|review|run|log|validate",
+            iterate_command_handler,
+        )
+    )
     registry.register(
         SlashCommand(
             "bridge",

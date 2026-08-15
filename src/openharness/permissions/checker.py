@@ -105,7 +105,10 @@ class PermissionChecker:
         if tool_name in self._settings.allowed_tools:
             return PermissionDecision(allowed=True, reason=f"{tool_name} is explicitly allowed")
 
-        # Check path-level rules
+        # Check path-level rules (upstream contract: deny rules block BOTH
+        # reads and writes — iterate protected_paths piggyback on this,
+        # which also shields secrets from model reads, a strict superset of
+        # the "block writes, allow reads" design minimum).
         if file_path and self._path_rules:
             for candidate_path in _policy_match_paths(file_path):
                 for rule in self._path_rules:
@@ -115,6 +118,15 @@ class PermissionChecker:
                                 allowed=False,
                                 reason=f"Path {file_path} matches deny rule: {rule.pattern}",
                             )
+
+        # Exact-match command allowlist (iterate validation commands etc.):
+        # a listed command is trusted as-is; prefixes never match.
+        allowed_commands = getattr(self._settings, "allowed_commands", [])
+        if command and allowed_commands and command.strip() in allowed_commands:
+            return PermissionDecision(
+                allowed=True,
+                reason="Command is exactly allowlisted",
+            )
 
         # Check command deny patterns (e.g. deny "rm -rf /")
         if command:

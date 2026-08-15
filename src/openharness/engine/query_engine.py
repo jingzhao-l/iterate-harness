@@ -16,6 +16,29 @@ from openharness.permissions.checker import PermissionChecker
 from openharness.tools.base import ToolRegistry
 
 
+def _default_iterate_policy(cwd: Path) -> object | None:
+    """Build the default iterate loop policy from kernel + project settings.
+
+    Returns ``None`` (upstream behavior preserved) when iterate is disabled
+    in settings or settings cannot be read (e.g. sandboxed environments).
+    """
+    try:
+        from openharness.config.settings import load_settings
+        from openharness.iterate.loop_policy import IterateLoopPolicy
+        from openharness.iterate.settings import effective_review_rounds, project_config
+
+        kernel = load_settings().iterate
+        if not kernel.enabled:
+            return None
+        rounds = effective_review_rounds(kernel, project_config(cwd))
+        return IterateLoopPolicy(max_review_rounds=rounds, price_overrides={
+            model: tuple(price)
+            for model, price in (kernel.price_overrides or {}).items()
+        })
+    except Exception:  # noqa: BLE001 - policy wiring must never break the engine
+        return None
+
+
 class QueryEngine:
     """Owns conversation history and the tool-aware model loop."""
 
@@ -36,6 +59,7 @@ class QueryEngine:
         ask_user_prompt: AskUserPrompt | None = None,
         hook_executor: HookExecutor | None = None,
         tool_metadata: dict[str, object] | None = None,
+        iterate_policy: object | None = None,
     ) -> None:
         self._api_client = api_client
         self._tool_registry = tool_registry
@@ -53,6 +77,9 @@ class QueryEngine:
         self._tool_metadata = tool_metadata or {}
         self._messages: list[ConversationMessage] = []
         self._cost_tracker = CostTracker()
+        # Iterate enforcement: auto-enable from kernel settings unless the
+        # caller supplies an explicit policy. Passing ``False`` disables.
+        self._iterate_policy = iterate_policy if iterate_policy is not None else _default_iterate_policy(self._cwd)
 
     @property
     def messages(self) -> list[ConversationMessage]:
@@ -177,6 +204,7 @@ class QueryEngine:
             ask_user_prompt=self._ask_user_prompt,
             hook_executor=self._hook_executor,
             tool_metadata=self._tool_metadata,
+            iterate_policy=self._iterate_policy if self._iterate_policy else None,
         )
         query_messages = list(self._messages)
         coordinator_context = self._build_coordinator_context_message()
@@ -206,6 +234,7 @@ class QueryEngine:
             ask_user_prompt=self._ask_user_prompt,
             hook_executor=self._hook_executor,
             tool_metadata=self._tool_metadata,
+            iterate_policy=self._iterate_policy if self._iterate_policy else None,
         )
         async for event, usage in run_query(context, self._messages):
             if usage is not None:

@@ -768,6 +768,7 @@ auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
 cron_app = typer.Typer(name="cron", help="Manage cron scheduler and jobs")
 autopilot_app = typer.Typer(name="autopilot", help="Manage repo autopilot")
+iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log)")
 
 app.add_typer(mcp_app)
 app.add_typer(plugin_app)
@@ -775,6 +776,7 @@ app.add_typer(auth_app)
 app.add_typer(provider_app)
 app.add_typer(cron_app)
 app.add_typer(autopilot_app)
+app.add_typer(iterate_app)
 
 
 # ---- mcp subcommands ----
@@ -832,6 +834,186 @@ def mcp_remove(
     del settings.mcp_servers[name]
     save_settings(settings)
     print(f"Removed MCP server: {name}")
+
+
+# ---- iterate subcommands ----
+
+_ITERATE_DIMENSIONS = [
+    "correctness",
+    "security",
+    "performance",
+    "architecture",
+    "style-tests",
+    "tech-debt",
+    "spec-compliance",
+    "frontend-backend",
+    "ui-ux",
+]
+
+
+def _detect_project(cwd: Path) -> tuple[list[str], dict[str, list[str]]]:
+    """Detect dimensions + validation commands from project manifests."""
+    dimensions = ["correctness", "security", "style-tests"]
+    commands: dict[str, list[str]] = {}
+    if (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists():
+        dimensions.append("tech-debt")
+        test_cmd = "pytest tests/ -x -q" if (cwd / "tests").exists() else "pytest -x -q"
+        commands["python"] = [test_cmd, "ruff check src/"]
+    if (cwd / "package.json").exists():
+        dimensions.extend(["frontend-backend", "ui-ux"])
+        commands["typescript"] = ["npm run compile"] if _has_script(cwd, "compile") else ["npx tsc --noEmit"]
+    if (cwd / "go.mod").exists():
+        commands["go"] = ["go test ./..."]
+    if (cwd / "Cargo.toml").exists():
+        commands["rust"] = ["cargo test"]
+    return dimensions, commands
+
+
+def _has_script(cwd: Path, name: str) -> bool:
+    try:
+        pkg = json.loads((cwd / "package.json").read_text(encoding="utf-8"))
+        return name in (pkg.get("scripts") or {})
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+def _render_config_yaml(goal: str, dimensions: list[str], commands: dict[str, list[str]]) -> str:
+    lines = [f'goal: "{goal}"', "max_rounds: 7", "language: en", "dimensions:"]
+    lines.extend(f"  - {d}" for d in dimensions)
+    lines.append("validation:")
+    lines.append("  command_whitelist: []")
+    if commands:
+        lines.append("  commands:")
+        for module, cmds in commands.items():
+            lines.append(f"    {module}:")
+            lines.extend(f"      - '{cmd}'" for cmd in cmds)
+    else:
+        lines.append("  commands: {}")
+    return "\n".join(lines) + "\n"
+
+
+@iterate_app.command("init")
+def iterate_init(
+    defaults: bool = typer.Option(False, "--defaults", help="Non-interactive; use detected defaults"),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing config"),
+    goal: str = typer.Option("Improve code quality and maintainability", "--goal"),
+) -> None:
+    """Initialize iterate.config.yaml with detected project settings."""
+    cwd = Path.cwd()
+    target = cwd / "iterate.config.yaml"
+    if target.exists() and not force:
+        print(f"iterate.config.yaml already exists (use --force to overwrite): {target}", file=sys.stderr)
+        raise typer.Exit(1)
+    dimensions, commands = _detect_project(cwd)
+    if not defaults and sys.stdin.isatty():
+        try:
+            import questionary
+
+            selected = questionary.checkbox(
+                "Select review dimensions",
+                choices=[questionary.Choice(d, checked=d in dimensions) for d in _ITERATE_DIMENSIONS],
+            ).ask()
+            if selected:
+                dimensions = [d for d in _ITERATE_DIMENSIONS if d in selected]
+        except Exception:  # noqa: BLE001 - fall back to detected defaults
+            pass
+    target.write_text(_render_config_yaml(goal, dimensions, commands), encoding="utf-8")
+    print(f"Wrote {target}")
+    print(f"  dimensions: {', '.join(dimensions)}")
+    total_cmds = sum(len(v) for v in commands.values())
+    print(f"  validation commands: {total_cmds}")
+
+
+def _run_headless(kickoff: str) -> None:
+    """Run one canonical iterate prompt through the kernel print pipeline."""
+    import asyncio
+
+    from openharness.ui.app import run_print_mode
+
+    asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
+
+
+@iterate_app.command("review")
+def iterate_review(
+    rounds: int = typer.Option(3, "--rounds", min=1, max=20, help="Review round cap"),
+) -> None:
+    """Dry-run pure review: multi-round convergence, read-only, audited report."""
+    from openharness.iterate import prompts as iterate_prompts
+    from openharness.iterate.config_loader import load_effective_config
+
+    effective_goal = load_effective_config(str(Path.cwd())).config.goal
+    _run_headless(iterate_prompts.dry_run_kickoff(effective_goal, rounds))
+
+
+@iterate_app.command("run")
+def iterate_run(
+    rounds: int = typer.Option(3, "--rounds", min=1, max=20, help="Loop round cap"),
+) -> None:
+    """Autonomous loop: review -> fix atomic findings -> validate -> repeat."""
+    from openharness.iterate import prompts as iterate_prompts
+    from openharness.iterate.config_loader import load_effective_config
+
+    effective_goal = load_effective_config(str(Path.cwd())).config.goal
+    _run_headless(iterate_prompts.normal_kickoff(effective_goal, rounds))
+
+
+@iterate_app.command("resume")
+def iterate_resume(
+    session_id: str = typer.Option("", "--session", help="Session id (default: most recent)"),
+) -> None:
+    """Resume a previous session and continue the iterate loop in the REPL."""
+    import asyncio
+
+    from openharness.services.session_storage import (
+        list_session_snapshots,
+        load_session_by_id,
+        load_session_snapshot,
+    )
+    from openharness.ui.app import run_repl
+
+    cwd = str(Path.cwd())
+    session_data = None
+    if session_id:
+        session_data = load_session_by_id(cwd, session_id)
+        if session_data is None:
+            print(f"Session not found: {session_id}", file=sys.stderr)
+            raise typer.Exit(1)
+    else:
+        session_data = load_session_snapshot(cwd) or (list_session_snapshots(cwd, limit=1) or [None])[0]
+        if session_data is None:
+            print("No previous session found in this directory.", file=sys.stderr)
+            raise typer.Exit(1)
+    print(f"Resuming session: {session_data.get('summary', '(untitled)')[:60]}")
+    asyncio.run(
+        run_repl(
+            prompt=None,
+            cwd=cwd,
+            model=session_data.get("model"),
+            restore_messages=session_data.get("messages"),
+            restore_tool_metadata=session_data.get("tool_metadata"),
+        )
+    )
+
+
+@iterate_app.command("log")
+def iterate_log(
+    tail: int = typer.Option(20, "--tail", min=1, help="Show last N entries"),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of text"),
+) -> None:
+    """View the append-only iterate decision log."""
+    from openharness.iterate import decision_log as iter_log
+
+    entries = iter_log.read_entries(str(Path.cwd()))
+    if as_json:
+        print(json.dumps([e.__dict__ for e in entries], ensure_ascii=False, indent=2))
+        return
+    if not entries:
+        print("Decision log is empty (.iterate/decision-log.jsonl).")
+        return
+    for entry in entries[-tail:]:
+        data = json.dumps(entry.data, ensure_ascii=False) if entry.data else ""
+        print(f"[{entry.timestamp}] r{entry.round} {entry.type} {data}".rstrip())
+    print(f"({len(entries)} entries total)")
 
 
 # ---- plugin subcommands ----

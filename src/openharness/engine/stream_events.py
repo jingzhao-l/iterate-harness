@@ -78,6 +78,27 @@ class CompactProgressEvent:
     metadata: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class ReviewProgressEvent:
+    """Structured progress event for the iterate review loop.
+
+    Emitted by the engine's iterate control block (via
+    ``QueryContext.iterate_policy``) each time a new deterministic aggregate
+    lands, carrying per-round findings, per-dimension counts, and the
+    running USD cost from the iterate money layer.
+    """
+
+    round: int
+    new_findings: int
+    total_findings: int
+    per_dimension: dict[str, int]
+    converged: bool
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    mode: str = "dry-run"
+
+
 StreamEvent = (
     AssistantTextDelta
     | AssistantTurnComplete
@@ -86,4 +107,5 @@ StreamEvent = (
     | ErrorEvent
     | StatusEvent
     | CompactProgressEvent
+    | ReviewProgressEvent
 )

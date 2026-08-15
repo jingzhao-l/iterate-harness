@@ -19,6 +19,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from openharness.hooks.schemas import HookDefinition
+from openharness.iterate.settings import IterateSettings
 from openharness.mcp.types import McpServerConfig
 from openharness.permissions.modes import PermissionMode
 from openharness.utils.file_lock import exclusive_file_lock
@@ -48,13 +49,16 @@ class PathRuleConfig(BaseModel):
 
 
 class PermissionSettings(BaseModel):
-    """Permission mode configuration."""
+    """Permission knobs (mode, tool lists, path rules, command lists)."""
 
     mode: PermissionMode = PermissionMode.DEFAULT
     allowed_tools: list[str] = Field(default_factory=list)
     denied_tools: list[str] = Field(default_factory=list)
     path_rules: list[PathRuleConfig] = Field(default_factory=list)
     denied_commands: list[str] = Field(default_factory=list)
+    # Exact-match (after trim) command allowlist evaluated BEFORE
+    # denied_commands; only bash-like tools carry a command payload.
+    allowed_commands: list[str] = Field(default_factory=list)
 
 
 class MemorySettings(BaseModel):
@@ -519,6 +523,7 @@ class Settings(BaseModel):
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     allow_project_plugins: bool = False
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+    iterate: IterateSettings = Field(default_factory=IterateSettings)
 
     # UI
     theme: str = "default"

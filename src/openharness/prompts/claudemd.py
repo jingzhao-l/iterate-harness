@@ -15,6 +15,7 @@ def discover_claude_md_files(cwd: str | Path) -> list[Path]:
         for candidate in (
             directory / "CLAUDE.md",
             directory / ".claude" / "CLAUDE.md",
+            directory / "ITERATE.md",
         ):
             if candidate.exists() and candidate not in seen:
                 results.append(candidate)

@@ -711,6 +711,43 @@ def _create_hook_attachments(hook_note: str | None) -> list[CompactAttachment]:
     return [attachment] if attachment is not None else []
 
 
+def create_iterate_review_attachment_if_needed(
+    iterate_state: Any,
+) -> CompactAttachment | None:
+    """Preserve iterate review-loop state across a compaction boundary.
+
+    The iterate loop's findings and convergence stats are the run's primary
+    evidence; without this attachment, microcompact would irreversibly clear
+    them (design §11.3.2 finding #10).
+    """
+    if not isinstance(iterate_state, dict) or not iterate_state:
+        return None
+    lines = ["Iterate review loop state carried across compaction:"]
+    mode = str(iterate_state.get("mode", "dry-run"))
+    rounds = iterate_state.get("rounds_seen", 0)
+    total = iterate_state.get("total_findings", 0)
+    converged = bool(iterate_state.get("converged", False))
+    lines.append(f"- mode={mode} rounds={rounds} totalFindings={total} converged={converged}")
+    by_round = iterate_state.get("findings_by_round")
+    if isinstance(by_round, list) and by_round:
+        lines.append(f"- findingsByRound={by_round}")
+    by_dim = iterate_state.get("by_dimension")
+    if isinstance(by_dim, dict) and by_dim:
+        dim_summary = ", ".join(f"{k}={v}" for k, v in sorted(by_dim.items()))
+        lines.append(f"- byDimension: {dim_summary}")
+    return _create_attachment(
+        "iterate_review",
+        "Iterate review state",
+        lines,
+        metadata={
+            "mode": mode,
+            "rounds_seen": rounds,
+            "total_findings": total,
+            "converged": converged,
+        },
+    )
+
+
 def _build_compact_attachments(
     messages: list[ConversationMessage],
     *,
@@ -728,6 +765,7 @@ def _build_compact_attachments(
         create_invoked_skills_attachment_if_needed(metadata.get("invoked_skills")),
         create_async_agent_attachment_if_needed(metadata.get("async_agent_state")),
         create_work_log_attachment_if_needed(metadata.get("recent_work_log")),
+        create_iterate_review_attachment_if_needed(metadata.get("iterate_state")),
     ]
     attachments.extend(attachment for attachment in builders if attachment is not None)
     return attachments

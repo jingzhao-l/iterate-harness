@@ -8,50 +8,103 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
 - :mod:`.meta_review` — deterministic audit of a review report
 - :mod:`.validate` — exact-match validation command runner
 - :mod:`.decision_log` — append-only JSONL decision log
+- :mod:`.settings` — kernel Settings bridge (IterateSettings)
+- :mod:`.loop_policy` — engine-level convergence enforcement
+- :mod:`.cost` — USD money layer over token usage
+- :mod:`.personalization` — 9-category per-project personalization
+- :mod:`.prompts` — canonical workflow prompt templates
+- :mod:`.worktree_flow` — fix-round git isolation orchestration
+
+This ``__init__`` uses PEP 562 lazy attribute resolution: the kernel's
+``config.settings`` imports ``iterate.settings`` at module load, so eager
+re-exports here would create an import cycle
+(config.settings → iterate → cost → api → auth → config.settings).
 """
 
-from .config_loader import (
-    EffectiveConfig,
-    default_config,
-    flatten_commands,
-    is_command_allowed,
-    load_config,
-    load_effective_config,
-    merge_config,
-    validate_config,
-)
-from .decision_log import append_entry, log_path, make_entry, read_entries
-from .meta_review import META_REVIEW_CHECKS, build_final_review_report, meta_review_report
-from .review import (
-    SEVERITY_RANK,
-    aggregate_rounds,
-    build_review_plan,
-    build_review_report,
-    compute_convergence,
-    dedupe_findings,
-    filter_known_intentional,
-    finding_key,
-    findings_schema,
-    normalize_summary,
-    reviewer_task_prompt,
-    sort_findings,
-)
-from .types import (
-    IterateConfig,
-    KnownIntentional,
-    ReviewFinding,
-    ReviewReport,
-    ReviewRound,
-    ValidationResult,
-)
-from .validate import run_command, run_validation
+from __future__ import annotations
+
+from typing import Any
+
+_EXPORTS: dict[str, str] = {
+    # config_loader
+    "EffectiveConfig": ".config_loader",
+    "default_config": ".config_loader",
+    "flatten_commands": ".config_loader",
+    "is_command_allowed": ".config_loader",
+    "load_config": ".config_loader",
+    "load_effective_config": ".config_loader",
+    "merge_config": ".config_loader",
+    "validate_config": ".config_loader",
+    # cost
+    "CostMeter": ".cost",
+    "ModelUsage": ".cost",
+    "price_for": ".cost",
+    # decision_log
+    "append_entry": ".decision_log",
+    "log_path": ".decision_log",
+    "make_entry": ".decision_log",
+    "read_entries": ".decision_log",
+    # loop_policy
+    "AggregateSnapshot": ".loop_policy",
+    "ITERATE_STATE_KEY": ".loop_policy",
+    "IterateLoopPolicy": ".loop_policy",
+    "LoopDecision": ".loop_policy",
+    # meta_review
+    "META_REVIEW_CHECKS": ".meta_review",
+    "build_final_review_report": ".meta_review",
+    "meta_review_report": ".meta_review",
+    # prompts
+    "ITERATE_SKILL_PROMPT": ".prompts",
+    "convergence_stop_notice": ".prompts",
+    "dry_run_kickoff": ".prompts",
+    "next_round_instruction": ".prompts",
+    "normal_kickoff": ".prompts",
+    # review
+    "SEVERITY_RANK": ".review",
+    "aggregate_rounds": ".review",
+    "build_review_plan": ".review",
+    "build_review_report": ".review",
+    "compute_convergence": ".review",
+    "dedupe_findings": ".review",
+    "filter_known_intentional": ".review",
+    "finding_key": ".review",
+    "findings_schema": ".review",
+    "normalize_summary": ".review",
+    "plan_to_dict": ".review",
+    "report_from_dict": ".review",
+    "report_to_dict": ".review",
+    "reviewer_task_prompt": ".review",
+    "sort_findings": ".review",
+    # settings
+    "IterateSettings": ".settings",
+    "effective_review_rounds": ".settings",
+    "project_config": ".settings",
+    # types
+    "IterateConfig": ".types",
+    "KnownIntentional": ".types",
+    "ReviewFinding": ".types",
+    "ReviewReport": ".types",
+    "ReviewRound": ".types",
+    "ValidationResult": ".types",
+    # validate
+    "run_command": ".validate",
+    "run_validation": ".validate",
+}
 
 __all__ = [
+    "ITERATE_SKILL_PROMPT",
+    "ITERATE_STATE_KEY",
     "META_REVIEW_CHECKS",
     "SEVERITY_RANK",
+    "AggregateSnapshot",
+    "CostMeter",
     "EffectiveConfig",
     "IterateConfig",
+    "IterateLoopPolicy",
+    "IterateSettings",
     "KnownIntentional",
+    "LoopDecision",
+    "ModelUsage",
     "ReviewFinding",
     "ReviewReport",
     "ReviewRound",
@@ -62,8 +115,11 @@ __all__ = [
     "build_review_plan",
     "build_review_report",
     "compute_convergence",
+    "convergence_stop_notice",
     "dedupe_findings",
     "default_config",
+    "dry_run_kickoff",
+    "effective_review_rounds",
     "filter_known_intentional",
     "finding_key",
     "findings_schema",
@@ -75,11 +131,32 @@ __all__ = [
     "make_entry",
     "merge_config",
     "meta_review_report",
+    "next_round_instruction",
+    "normal_kickoff",
     "normalize_summary",
+    "plan_to_dict",
+    "price_for",
+    "project_config",
     "read_entries",
+    "report_from_dict",
+    "report_to_dict",
     "reviewer_task_prompt",
     "run_command",
     "run_validation",
     "sort_findings",
     "validate_config",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    module_path = _EXPORTS.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    module = importlib.import_module(module_path, __package__)
+    return getattr(module, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_EXPORTS))
