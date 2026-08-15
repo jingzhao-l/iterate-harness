@@ -261,7 +261,7 @@ def run_onboard(
         channel=channel, fingerprints=fingerprints, completed_at=completed_at
     )
     written_config = init_wizard.write_config(cwd, config)
-    _print_flush(f"\nOnboarding complete:")
+    _print_flush("\nOnboarding complete:")
     _print_flush(f"  - {md_path}")
     _print_flush(f"  - {written_config} ({len(fingerprints)} manifest fingerprints)")
     _print_flush("Next: `ih iterate review --changed` for a quick changed-only review.")

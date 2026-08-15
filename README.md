@@ -71,6 +71,7 @@ ih iterate report --html # single-file HTML report (convergence curve, diffs, sh
 ih iterate batch a/ b/   # review multiple repos sequentially, rank worst-first
 ih iterate schedule add "0 9 * * 1-5" # daily changed-only quick review (cron, UTC)
 ih iterate hook install  # managed pre-commit hook: 1-round changed-only gate
+ih iterate doctor        # skill↔harness dimension-system consistency check
 ```
 
 Onboarding note: `ih iterate onboard` first gates on a configured model
@@ -118,6 +119,7 @@ providers are also supported — see `ih --help`).
 | **Model-driven onboarding** | `ih iterate onboard` chains auth gate → detection evidence → model scan → `ITERATE.md` knowledge base (AI/user region markers) + manifest fingerprints; `refresh` re-fingerprints, `reonboard` re-scans while preserving your notes; every kickoff injects the knowledge base and warns on drift — skill-compatible artifacts. TUI onboarding gets its fingerprints auto-captured on the next review/run — no manual `refresh` needed |
 | **Personalization wizard** | `ih iterate personalize` walks the skill's 9 categories (protected paths, risk areas, known-intentional, dimension focus, fix priority, forbidden fixes, notes, conventions, extra validation commands): structured rules land in `iterate.config.yaml` (protected paths ALSO enforced by the kernel permission layer), free text lands in the `ITERATE.md` user region, and every kickoff carries the constraints; extra commands pass a strict whitelist before merging into `validation.commands` |
 | **Pre-commit hook** | `ih iterate hook install` writes a MARKED managed `.git/hooks/pre-commit` that runs a 1-round changed-only review and gates the commit on `--fail-on` severity; refuses to touch foreign hooks, skippable via `ITERATE_SKIP_HOOK=1` / `--no-verify` |
+| **Dimension doctor** | `ih iterate doctor` checks the whole dimension system in one shot: bundled canonical definitions vs harness internals vs your `iterate.config.yaml` (unknown dimension keys, inert resource/threshold entries, personalization references outside the enabled set); exits 1 on drift so CI can gate on it |
 | **Decision log** | Append-only `.iterate/decision-log.jsonl`: every round, fix, validation and triage decision is recorded |
 | **Project knowledge** | `ITERATE.md` project knowledge + per-project structured personalization (9 categories) |
 

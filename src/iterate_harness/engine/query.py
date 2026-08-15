@@ -1279,8 +1279,6 @@ async def _handle_iterate_pause(
     menu via ``ask_user_select``; everything else falls back to the
     free-text question prompt.
     """
-    from iterate_harness.iterate import prompts
-
     round_number = int(getattr(progress, "round", 0) or 0)
     new_findings = int(getattr(progress, "new_findings", 0) or 0)
     select_cb = context.ask_user_select
