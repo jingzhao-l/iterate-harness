@@ -38,8 +38,10 @@ convergence policy are layered on top.
 ## 🚀 Quick Start
 
 ```bash
-# one-click install (macOS / Linux / WSL)
-curl -fsSL https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.sh | bash
+# install (npm wrapper; needs Node + Python >= 3.10)
+npm install -g iterate-harness
+# ...or no-Node one-liner (macOS / Linux / WSL, Python only)
+# curl -fsSL https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.sh | bash
 
 # launch the TUI
 ih

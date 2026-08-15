@@ -36,8 +36,10 @@
 ## 🚀 快速开始
 
 ```bash
-# 一键安装（macOS / Linux / WSL）
-curl -fsSL https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.sh | bash
+# 安装（npm 包装器；需要 Node + Python >= 3.10）
+npm install -g iterate-harness
+# ……或无 Node 一键安装（macOS / Linux / WSL，仅需 Python）
+# curl -fsSL https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.sh | bash
 
 # 启动 TUI
 ih
