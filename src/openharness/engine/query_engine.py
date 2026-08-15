@@ -116,6 +116,11 @@ class QueryEngine:
         return self._tool_metadata
 
     @property
+    def iterate_policy(self):
+        """Return the attached iterate loop policy (``None`` when disabled)."""
+        return self._iterate_policy
+
+    @property
     def total_usage(self):
         """Return the total usage across all turns."""
         return self._cost_tracker.total
@@ -177,6 +182,13 @@ class QueryEngine:
 
     async def submit_message(self, prompt: str | ConversationMessage) -> AsyncIterator[StreamEvent]:
         """Append a user message and execute the query loop."""
+        if self._iterate_policy is not None:
+            # A fresh submit is a fresh intent: drop any pause left over from
+            # an earlier loop so it cannot fire on this run's round boundary.
+            # (``iterate_policy=False`` explicitly disables iterate upstream.)
+            clear_pause = getattr(self._iterate_policy, "clear_pause", None)
+            if callable(clear_pause):
+                clear_pause()
         user_message = (
             prompt
             if isinstance(prompt, ConversationMessage)

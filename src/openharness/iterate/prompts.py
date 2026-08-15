@@ -142,3 +142,38 @@ def convergence_stop_notice(reason: str, total_findings: int) -> str:
         'meta-review via iterate_review(operation="meta-review"), append '
         "the single report entry to the decision log, and summarize."
     )
+
+
+def pause_menu_question(round_number: int, new_findings: int) -> str:
+    """The Esc intervention menu (design §11.2.1) shown at a round boundary.
+
+    Answers (parsed by the engine): ``s`` skip the current top finding,
+    ``n <dims>`` narrow the review dimensions, ``x`` stop now, empty/other
+    resumes the normal loop.
+    """
+    return (
+        f"Iterate loop paused (round {round_number}, {new_findings} new finding(s)). "
+        "Choose an action:\n"
+        "  s = skip the current top finding, then continue\n"
+        "  n <dimensions> = narrow the review to the given dimensions, then continue\n"
+        "  x = stop the loop now\n"
+        "  (empty / anything else = resume the normal loop)"
+    )
+
+
+def skip_current_finding_instruction() -> str:
+    """Engine-injected message for the pause-menu ``s`` answer."""
+    return (
+        "[iterate] User intervention: SKIP the current top finding (mark it "
+        "skipped in the decision log with a decision entry), then continue "
+        "the loop with the next finding — do not spend another round on it."
+    )
+
+
+def narrow_dimensions_instruction(dimensions: str) -> str:
+    """Engine-injected message for the pause-menu ``n <dims>`` answer."""
+    return (
+        f"[iterate] User intervention: NARROW the review to these dimensions "
+        f"only: {dimensions}. Log the narrowing as a decision entry, then "
+        "continue the loop restricted to them."
+    )

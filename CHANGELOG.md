@@ -6,6 +6,18 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-15
+
+Esc mid-loop intervention + dependency vulnerability cleanup.
+
+### Added
+
+- Esc intervention (design §11.2.1): pressing Esc while an iterate loop is running no longer hard-cancels the turn — the loop pauses at the next round boundary and surfaces the intervention menu through the existing question modal: `s` skip the current top finding, `n <dimensions>` narrow the review scope, `x` stop now, empty/anything else resumes the normal loop. A second Esc force-interrupts the current turn. Every intervention decision is appended to the decision log (`type=decision`, `kind=intervention`); headless sessions (no interactive channel) default to a safe stop. `QueryEngine.submit_message` drops stale pause flags so a leftover request cannot fire on a later run.
+
+### Changed
+
+- Dependency security cleanup (all 10 dependabot alerts, 5 high): `autopilot-dashboard` vite `^6.3.2` → `^6.4.3` (pulls patched postcss/esbuild/@babel/core); `frontend/terminal` marked `^18.0.0` → `^18.0.9`, tsx `^4.19.2` → `^4.23.12` (esbuild 0.28.2, ws 8.21.3). Both packages now report 0 npm-audit vulnerabilities; vite build and `tsc --noEmit` verified.
+
 ## [0.3.0] - 2026-08-15
 
 Interactive safety for autonomous fixes + CI consumption of the final report.

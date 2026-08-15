@@ -38,6 +38,11 @@ class LoopDecision:
     stop_reason: str | None = None
     inject_message: str | None = None
     progress: object | None = None  # ReviewProgressEvent (typed in engine layer)
+    # Set when the user requested a pause (Esc): the engine must surface the
+    # intervention menu instead of injecting ``inject_message`` right away.
+    # ``inject_message`` keeps the original next-round instruction so the
+    # "resume" answer can proceed unchanged.
+    paused: bool = False
 
 
 @dataclass
@@ -102,6 +107,10 @@ class IterateLoopPolicy:
     # normal-mode iterate loop is active.
     require_fix_approval: bool = False
     price_overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Esc intervention channel (design §11.2.1): set externally by the
+    # backend interrupt path while an iterate loop is running; consumed at
+    # the next round boundary.
+    pause_requested: bool = False
 
     cost_meter: CostMeter = field(default=None)  # type: ignore[assignment]
     _rounds_seen: int = 0
@@ -110,6 +119,14 @@ class IterateLoopPolicy:
     def __post_init__(self) -> None:
         if self.cost_meter is None:
             self.cost_meter = CostMeter(price_overrides=self.price_overrides)
+
+    def request_pause(self) -> None:
+        """Ask the loop to pause at the next round boundary (user pressed Esc)."""
+        self.pause_requested = True
+
+    def clear_pause(self) -> None:
+        """Drop a pending pause (fresh submit / stale request)."""
+        self.pause_requested = False
 
     def on_turn_end(
         self,
@@ -158,14 +175,23 @@ class IterateLoopPolicy:
             return self._stop_decision(
                 snapshot, f"round cap reached ({self.max_review_rounds})", progress
             )
-        return LoopDecision(
+        decision = LoopDecision(
             inject_message=prompts.next_round_instruction(snapshot.rounds_seen, last_new),
             progress=progress,
         )
+        if self.pause_requested:
+            # Consume the pause at the round boundary: hand control to the
+            # engine's intervention menu; the original next-round instruction
+            # stays on the decision for the "resume" answer.
+            self.pause_requested = False
+            decision.paused = True
+        return decision
 
     def _stop_decision(
         self, snapshot: AggregateSnapshot, reason: str, progress: object
     ) -> LoopDecision:
+        # The loop is ending anyway; a pending pause is moot.
+        self.pause_requested = False
         notice = prompts.convergence_stop_notice(reason, snapshot.total_findings)
         if not self.stop_on_convergence:
             # Keep looping but steer the model toward the closing report.

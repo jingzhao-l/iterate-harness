@@ -881,11 +881,23 @@ async def run_query(
             )
             if isinstance(decision.progress, ReviewProgressEvent):
                 yield decision.progress, None
-            if decision.inject_message is not None:
+            inject_message = decision.inject_message
+            if decision.paused:
+                # Esc intervention (design §11.2.1): surface the pause menu
+                # at the round boundary and follow the chosen action.
+                action, message = await _handle_iterate_pause(context, decision.progress)
+                if action == "stop":
+                    yield StatusEvent(
+                        message="iterate loop stopped by user (pause menu)"
+                    ), None
+                    return
+                if action != "resume":
+                    inject_message = message
+            if inject_message is not None:
                 messages.append(
                     ConversationMessage(
                         role="user",
-                        content=[TextBlock(text=decision.inject_message)],
+                        content=[TextBlock(text=inject_message)],
                     )
                 )
             if decision.stop_reason is not None:
@@ -1235,3 +1247,72 @@ def _clip_diff(header: str, lines: Any) -> str:
     if len(materialized) > MAX_APPROVAL_DIFF_LINES:
         body += f"\n... ({len(materialized) - MAX_APPROVAL_DIFF_LINES} more diff lines)"
     return f"{header}\n{body}"
+
+
+# -- Esc intervention (iterate pause menu, design §11.2.1) ------------------
+
+PAUSE_ACTION_STOP = "stop"
+PAUSE_ACTION_SKIP = "skip"
+PAUSE_ACTION_NARROW = "narrow"
+PAUSE_ACTION_RESUME = "resume"
+
+
+async def _handle_iterate_pause(
+    context: "QueryContext",
+    progress: object | None,
+) -> tuple[str, str | None]:
+    """Surface the pause menu and map the answer to a loop action.
+
+    Returns ``(action, message)``: ``stop`` halts the loop, ``skip`` /
+    ``narrow`` replace the next-round injection with the matching
+    intervention instruction, ``resume`` keeps the original injection.
+    Headless sessions (no interactive channel) default to a safe stop.
+    Every decision is recorded in the iterate decision log (audit trail).
+    """
+    from openharness.iterate import prompts
+
+    round_number = int(getattr(progress, "round", 0) or 0)
+    new_findings = int(getattr(progress, "new_findings", 0) or 0)
+    prompt_cb = context.ask_user_prompt
+    if prompt_cb is None:
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "headless default")
+        return PAUSE_ACTION_STOP, None
+    try:
+        answer = (await prompt_cb(prompts.pause_menu_question(round_number, new_findings)) or "").strip()
+    except Exception:  # noqa: BLE001 - a broken prompt channel must stop the loop safely
+        log.exception("iterate pause prompt failed; stopping the loop")
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "prompt error")
+        return PAUSE_ACTION_STOP, None
+
+    normalized = answer.lower()
+    if normalized in ("x", "stop", "quit"):
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, answer)
+        return PAUSE_ACTION_STOP, None
+    if normalized == "s" or normalized.startswith("skip"):
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_SKIP, answer)
+        return PAUSE_ACTION_SKIP, prompts.skip_current_finding_instruction()
+    if normalized.startswith("n ") and len(normalized) > 2:
+        dimensions = answer[2:].strip()
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_NARROW, dimensions)
+        return PAUSE_ACTION_NARROW, prompts.narrow_dimensions_instruction(dimensions)
+    await _log_pause_decision(context, round_number, PAUSE_ACTION_RESUME, answer)
+    return PAUSE_ACTION_RESUME, None
+
+
+async def _log_pause_decision(
+    context: "QueryContext", round_number: int, action: str, detail: str
+) -> None:
+    """Append the intervention decision to the decision log (best effort)."""
+    try:
+        from openharness.iterate.decision_log import append_entry, make_entry
+
+        append_entry(
+            str(context.cwd),
+            make_entry(
+                entry_type="decision",
+                round_number=max(round_number, 1),
+                data={"kind": "intervention", "action": action, "detail": detail},
+            ),
+        )
+    except Exception:  # noqa: BLE001 - logging must never break the loop control
+        log.warning("iterate pause decision could not be logged", exc_info=True)

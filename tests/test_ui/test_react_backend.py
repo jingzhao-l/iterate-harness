@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 
@@ -177,6 +178,56 @@ async def test_run_active_request_recovers_from_cancel(tmp_path, monkeypatch):
         for event in events
     )
     assert any(event.type == "line_complete" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_pauses_active_iterate_loop(tmp_path, monkeypatch):
+    """First Esc pauses an iterate loop at the round boundary; second Esc force-cancels."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+
+    host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
+    host._bundle = await build_runtime(api_client=StaticApiClient("unused"))
+    events = []
+
+    async def _emit(event):
+        events.append(event)
+
+    host._emit = _emit  # type: ignore[method-assign]
+    await start_runtime(host._bundle)
+
+    policy = host._bundle.engine.iterate_policy
+    assert policy is not None  # iterate is enabled by default
+    host._bundle.engine.tool_metadata["iterate_state"] = {"rounds_seen": 1}
+
+    async def _long_running():
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(_long_running())
+    host._active_request_task = task
+    try:
+        await host._interrupt_active_request()
+        # Graceful pause: the task survives, the flag is set, notice emitted.
+        assert not task.cancelled() and not task.done()
+        assert policy.pause_requested is True
+        assert any(
+            event.type == "transcript_item"
+            and event.item
+            and event.item.role == "system"
+            and "pausing" in event.item.text
+            for event in events
+        )
+        # Second Esc (pause already pending) force-interrupts the turn.
+        await host._interrupt_active_request()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await close_runtime(host._bundle)
 
 
 @pytest.mark.asyncio

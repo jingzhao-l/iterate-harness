@@ -92,6 +92,53 @@ class TestLoopPolicy:
             assert decision.progress is None
 
 
+class TestPauseMechanics:
+    """Esc intervention: pause_requested consumed at the round boundary."""
+
+    def test_pause_requested_marks_decision_paused_with_original_injection(self):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        policy.request_pause()
+        decision = policy.on_turn_end({ITERATE_STATE_KEY: state()}, UsageSnapshot(), "m")
+        assert decision.paused is True
+        assert decision.stop_reason is None
+        # The original next-round instruction is preserved for "resume".
+        assert decision.inject_message is not None
+        assert "Round 1" in decision.inject_message
+        assert isinstance(decision.progress, ReviewProgressEvent)
+        # The pause is consumed exactly once.
+        assert policy.pause_requested is False
+
+    def test_no_pause_without_request_keeps_normal_decision(self):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        decision = policy.on_turn_end({ITERATE_STATE_KEY: state()}, UsageSnapshot(), "m")
+        assert decision.paused is False
+
+    def test_pause_pending_before_noop_turn_survives(self):
+        """A pause set during a long turn must survive a no-aggregate turn."""
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        policy.request_pause()
+        policy.on_turn_end({}, UsageSnapshot(), "m")  # no new aggregate yet
+        assert policy.pause_requested is True
+        decision = policy.on_turn_end({ITERATE_STATE_KEY: state()}, UsageSnapshot(), "m")
+        assert decision.paused is True
+
+    def test_stop_decision_clears_pending_pause(self):
+        policy = IterateLoopPolicy(max_review_rounds=2)
+        policy.request_pause()
+        snapshot = state(rounds_seen=2, findings_by_round=[3, 0], converged=True)
+        decision = policy.on_turn_end({ITERATE_STATE_KEY: snapshot}, UsageSnapshot(), "m")
+        assert decision.paused is False
+        assert decision.stop_reason is not None
+        assert policy.pause_requested is False
+
+    def test_clear_pause_drops_stale_request(self):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        policy.request_pause()
+        policy.clear_pause()
+        decision = policy.on_turn_end({ITERATE_STATE_KEY: state()}, UsageSnapshot(), "m")
+        assert decision.paused is False
+
+
 class TestCostMeter:
     def test_price_for_matches_patterns_and_overrides(self):
         assert price_for("claude-sonnet-4-6") == (3.0, 15.0)

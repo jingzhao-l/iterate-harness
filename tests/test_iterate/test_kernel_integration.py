@@ -35,11 +35,14 @@ class _FakeResponse:
 
 
 class FakeApiClient:
-    def __init__(self, responses: list[_FakeResponse]) -> None:
+    def __init__(self, responses: list[_FakeResponse], on_stream=None) -> None:
         self._responses = list(responses)
+        self._on_stream = on_stream
 
     async def stream_message(self, request):
         del request
+        if self._on_stream is not None:
+            self._on_stream()
         response = self._responses.pop(0)
         for block in response.message.content:
             if isinstance(block, TextBlock) and block.text:
@@ -580,6 +583,192 @@ class TestFixApproval:
             "edit_file", None, {"old_str": big_old, "new_str": big_new}, object()
         )
         assert "more diff lines" in reason
+
+
+class TestEscIntervention:
+    """Esc intervention: pause at the round boundary → menu → action."""
+
+    def _engine(self, tmp_path, responses, *, ask, policy, on_stream=None):
+        return QueryEngine(
+            api_client=FakeApiClient(responses, on_stream=on_stream),
+            tool_registry=create_default_tool_registry(),
+            permission_checker=PermissionChecker(
+                PermissionSettings(mode=PermissionMode.FULL_AUTO)
+            ),
+            cwd=tmp_path,
+            model="claude-sonnet-4-6",
+            system_prompt="system",
+            iterate_policy=policy,
+            ask_user_prompt=ask,
+        )
+
+    @staticmethod
+    def _pause_during_first_stream(policy):
+        """Simulate Esc pressed mid-turn: pause set during the first stream."""
+        calls = {"n": 0}
+
+        def on_stream():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                policy.request_pause()
+
+        return on_stream
+
+    def _injected(self, engine):
+        return [m.text for m in engine.messages if m.role == "user" and "[iterate]" in m.text]
+
+    @pytest.mark.asyncio
+    async def test_stop_answer_halts_loop(self, tmp_path):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        engine = self._engine(
+            tmp_path,
+            [
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[aggregate_call(AGGREGATE_ROUNDS_ACTIVE)]),
+                    usage=UsageSnapshot(input_tokens=10, output_tokens=5),
+                ),
+                _FakeResponse(  # would run if the loop (wrongly) continued
+                    message=ConversationMessage(role="assistant", content=[TextBlock(text="unreachable")]),
+                    usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+            ],
+            ask=_a("x"),
+            policy=policy,
+            on_stream=self._pause_during_first_stream(policy),
+        )
+        events = [event async for event in engine.submit_message("run dry-run")]
+        stops = [e for e in events if isinstance(e, StatusEvent) and "pause menu" in e.message]
+        assert stops
+        assert not any(
+            isinstance(e, AssistantTurnComplete) and "unreachable" in e.message.text for e in events
+        )
+
+    @pytest.mark.asyncio
+    async def test_skip_answer_injects_skip_instruction(self, tmp_path):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        engine = self._engine(
+            tmp_path,
+            [
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[aggregate_call(AGGREGATE_ROUNDS_ACTIVE)]),
+                    usage=UsageSnapshot(input_tokens=10, output_tokens=5),
+                ),
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
+                    usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+            ],
+            ask=_a("s"),
+            policy=policy,
+            on_stream=self._pause_during_first_stream(policy),
+        )
+        [event async for event in engine.submit_message("run dry-run")]
+        injected = self._injected(engine)
+        assert injected and "SKIP the current top finding" in injected[-1]
+
+    @pytest.mark.asyncio
+    async def test_narrow_answer_injects_narrow_instruction(self, tmp_path):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        engine = self._engine(
+            tmp_path,
+            [
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[aggregate_call(AGGREGATE_ROUNDS_ACTIVE)]),
+                    usage=UsageSnapshot(input_tokens=10, output_tokens=5),
+                ),
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
+                    usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+            ],
+            ask=_a("n security"),
+            policy=policy,
+            on_stream=self._pause_during_first_stream(policy),
+        )
+        [event async for event in engine.submit_message("run dry-run")]
+        injected = self._injected(engine)
+        assert injected and "NARROW" in injected[-1] and "security" in injected[-1]
+
+    @pytest.mark.asyncio
+    async def test_resume_answer_keeps_original_next_round(self, tmp_path):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        engine = self._engine(
+            tmp_path,
+            [
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[aggregate_call(AGGREGATE_ROUNDS_ACTIVE)]),
+                    usage=UsageSnapshot(input_tokens=10, output_tokens=5),
+                ),
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
+                    usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+            ],
+            ask=_a(""),
+            policy=policy,
+            on_stream=self._pause_during_first_stream(policy),
+        )
+        [event async for event in engine.submit_message("run dry-run")]
+        injected = self._injected(engine)
+        assert injected and "Round 1" in injected[-1] and "NARROW" not in injected[-1]
+
+    @pytest.mark.asyncio
+    async def test_headless_pause_defaults_to_stop(self, tmp_path):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        engine = self._engine(
+            tmp_path,
+            [
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[aggregate_call(AGGREGATE_ROUNDS_ACTIVE)]),
+                    usage=UsageSnapshot(input_tokens=10, output_tokens=5),
+                ),
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[TextBlock(text="unreachable")]),
+                    usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+            ],
+            ask=None,
+            policy=policy,
+            on_stream=self._pause_during_first_stream(policy),
+        )
+        events = [event async for event in engine.submit_message("run dry-run")]
+        stops = [e for e in events if isinstance(e, StatusEvent) and "pause menu" in e.message]
+        assert stops
+
+    @pytest.mark.asyncio
+    async def test_intervention_decision_logged(self, tmp_path):
+        from openharness.iterate.decision_log import read_entries
+
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        engine = self._engine(
+            tmp_path,
+            [
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[aggregate_call(AGGREGATE_ROUNDS_ACTIVE)]),
+                    usage=UsageSnapshot(input_tokens=10, output_tokens=5),
+                ),
+                _FakeResponse(
+                    message=ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
+                    usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+            ],
+            ask=_a("x"),
+            policy=policy,
+            on_stream=self._pause_during_first_stream(policy),
+        )
+        [event async for event in engine.submit_message("run dry-run")]
+        interventions = [
+            e for e in read_entries(tmp_path) if e.type == "decision"
+            and isinstance(e.data, dict) and e.data.get("kind") == "intervention"
+        ]
+        assert interventions and interventions[-1].data.get("action") == "stop"
+
+
+def _a(answer: str):
+    async def ask(question: str) -> str:
+        return answer
+
+    return ask
 
 
 class TestRegistration:

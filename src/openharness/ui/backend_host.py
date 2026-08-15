@@ -233,7 +233,39 @@ class ReactBackendHost:
         task = self._active_request_task
         if task is None or task.done():
             return
+        # Graceful iterate pause (design §11.2.1 Esc intervention): when an
+        # iterate loop is mid-run, Esc pauses the loop at the next round
+        # boundary (intervention menu) instead of hard-cancelling the turn.
+        if await self._request_iterate_pause():
+            return
         task.cancel()
+
+    async def _request_iterate_pause(self) -> bool:
+        """Try to pause an active iterate loop; True when the pause was set."""
+        bundle = self._bundle
+        if bundle is None:
+            return False
+        policy = bundle.engine.iterate_policy
+        if policy is None or not hasattr(policy, "request_pause"):
+            return False
+        if getattr(policy, "pause_requested", False):
+            # Pause already pending: a second Esc force-interrupts the turn.
+            return False
+        metadata = bundle.engine.tool_metadata
+        if not isinstance(metadata, dict) or "iterate_state" not in metadata:
+            return False
+        policy.request_pause()
+        await self._emit(
+            BackendEvent(
+                type="transcript_item",
+                item=TranscriptItem(
+                    role="system",
+                    text="Iterate loop pausing at the next round boundary — "
+                    "press Esc again to force-interrupt the current turn.",
+                ),
+            )
+        )
+        return True
 
     async def _process_line(self, line: str, *, transcript_line: str | None = None) -> bool:
         assert self._bundle is not None
