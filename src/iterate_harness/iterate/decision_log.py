@@ -15,7 +15,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .types import DecisionLogEntry
+from .types import DecisionLogEntry as DecisionLogEntry
 
 LOG_DIR = ".iterate"
 LOG_FILE = "decision-log.jsonl"

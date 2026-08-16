@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from iterate_harness.iterate.checkpoint import checkpoint_path, save_checkpoint
+from iterate_harness.iterate.checkpoint import save_checkpoint
 from iterate_harness.iterate.last_state import summarize_last_run
 
 

@@ -210,15 +210,15 @@ class IterateLoopPolicy:
             return self._stop_decision(
                 snapshot, budget_stop, self._build_progress(snapshot, usage, model)
             )
-        snapshot = read_state(tool_metadata)
-        if snapshot is None or snapshot.rounds_seen <= self._rounds_seen:
+        current = read_state(tool_metadata)
+        if current is None or current.rounds_seen <= self._rounds_seen:
             # No NEW aggregate this turn → nothing iterate-specific to do.
             return LoopDecision()
-        self._rounds_seen = snapshot.rounds_seen
+        self._rounds_seen = current.rounds_seen
         self._emitted_progress += 1
-        self._record_dimension_usage(snapshot)
-        progress = self._build_progress(snapshot, usage, model)
-        return self._decide(snapshot, progress)
+        self._record_dimension_usage(current)
+        progress = self._build_progress(current, usage, model)
+        return self._decide(current, progress)
 
     def _record_dimension_usage(self, snapshot: AggregateSnapshot) -> None:
         """Relay reviewer-reported per-dimension token usage into the meter.

@@ -18,7 +18,7 @@ color table before touching CSS, so log content cannot inject markup.
 from __future__ import annotations
 
 import html as _html
-from typing import Any
+from typing import Any, Callable
 
 from .ci_report import latest_report_entry
 from .decision_log import DecisionLogEntry
@@ -153,8 +153,10 @@ def _render_header(data: dict[str, Any], report: DecisionLogEntry) -> str:
 
 
 def _render_summary_cards(data: dict[str, Any]) -> str:
-    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
-    convergence = data.get("convergence") if isinstance(data.get("convergence"), dict) else {}
+    summary_raw = data.get("summary")
+    summary: dict[str, Any] = summary_raw if isinstance(summary_raw, dict) else {}
+    convergence_raw = data.get("convergence")
+    convergence: dict[str, Any] = convergence_raw if isinstance(convergence_raw, dict) else {}
     cards = [
         ("total findings", _int_or_zero(summary.get("totalFindings"))),
         ("critical", _int_or_zero(summary.get("critical"))),
@@ -171,7 +173,8 @@ def _render_summary_cards(data: dict[str, Any]) -> str:
 
 def _render_convergence_chart(data: dict[str, Any]) -> str:
     """Inline SVG line chart of findings per round (convergence curve)."""
-    convergence = data.get("convergence") if isinstance(data.get("convergence"), dict) else {}
+    convergence_raw = data.get("convergence")
+    convergence: dict[str, Any] = convergence_raw if isinstance(convergence_raw, dict) else {}
     raw_series = convergence.get("findingsByRound")
     series = [v for v in raw_series if isinstance(v, int)] if isinstance(raw_series, list) else []
     width, height, pad = 720, 220, 34
@@ -210,7 +213,8 @@ def _render_convergence_chart(data: dict[str, Any]) -> str:
 
 def _render_distribution(data: dict[str, Any]) -> str:
     """Severity and per-dimension distribution bars."""
-    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    summary_raw = data.get("summary")
+    summary: dict[str, Any] = summary_raw if isinstance(summary_raw, dict) else {}
     severity_rows = _bars(
         [("critical", _int_or_zero(summary.get("critical"))),
          ("high", _int_or_zero(summary.get("high"))),
@@ -232,7 +236,7 @@ def _render_distribution(data: dict[str, Any]) -> str:
     )
 
 
-def _bars(pairs: list[tuple[str, int]], *, color_fn) -> str:
+def _bars(pairs: list[tuple[str, int]], *, color_fn: Callable[[str], str]) -> str:
     """Render horizontal bars; scale is relative to the largest value."""
     if not pairs:
         return "<p class=\"meta\">none</p>"

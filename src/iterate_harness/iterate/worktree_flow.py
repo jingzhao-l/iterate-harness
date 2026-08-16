@@ -66,7 +66,12 @@ def deserialize_session(data: object) -> WorktreeSession | None:
     slug = data.get("slug")
     branch = data.get("branch")
     worktree_path = data.get("worktree_path")
-    if not all(isinstance(v, str) and v for v in (repo_path, slug, branch, worktree_path)):
+    if (
+        not isinstance(repo_path, str) or not repo_path
+        or not isinstance(slug, str) or not slug
+        or not isinstance(branch, str) or not branch
+        or not isinstance(worktree_path, str) or not worktree_path
+    ):
         return None
     return WorktreeSession(
         repo_path=Path(repo_path),
