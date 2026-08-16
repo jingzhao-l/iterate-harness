@@ -1425,6 +1425,119 @@ def create_default_command_registry(
             return CommandResult(message=message, refresh_runtime=True)
         return CommandResult(message="Usage: /model [show|list|add MODEL|remove MODEL|clear|MODEL]")
 
+    def _parse_flag_args(args: str) -> tuple[list[str], dict[str, list[str]]]:
+        """Parse ``--flag value`` style tokens into ``(positionals, flags)``.
+
+        Values are collected until the next ``--flag`` token; a flag with no
+        following value records an empty list. Lenient on purpose — TUI slash
+        commands carry no shell quoting layer.
+        """
+        positionals: list[str] = []
+        flags: dict[str, list[str]] = {}
+        current_flag: str | None = None
+        for token in args.split():
+            if token.startswith("--"):
+                current_flag = token[2:]
+                flags.setdefault(current_flag, [])
+            elif current_flag is not None:
+                flags[current_flag].append(token)
+            else:
+                positionals.append(token)
+        return positionals, flags
+
+    async def _provider_add_handler(args: str, context: CommandContext) -> CommandResult:
+        """TUI entrypoint to register a custom (BYOK) provider profile.
+
+        Mirrors ``ih auth provider add`` so headless/CLI and TUI share the
+        same profile creation semantics: ``/provider add NAME --provider
+        PROVIDER --api-format FORMAT --model MODEL [--label LABEL]
+        [--auth-source SOURCE] [--base-url URL] [--credential-slot SLOT]
+        [--allowed-model MODEL ...] [--api-key KEY]``.
+        """
+        from iterate_harness.config.settings import (
+            ProviderProfile,
+            default_auth_source_for_provider,
+        )
+        from iterate_harness.config.settings import auth_source_uses_api_key
+
+        positionals, flags = _parse_flag_args(args)
+        if not positionals:
+            return CommandResult(
+                message=(
+                    "Usage: /provider add NAME --provider PROVIDER --api-format FORMAT "
+                    "--model MODEL [--label LABEL] [--auth-source SOURCE] [--base-url URL] "
+                    "[--credential-slot SLOT] [--allowed-model MODEL ...] [--api-key KEY]"
+                )
+            )
+        name = positionals[0].strip()
+        provider = "".join(flags.get("provider", [])).strip()
+        api_format = "".join(flags.get("api-format", [])).strip()
+        model = "".join(flags.get("model", [])).strip()
+        if not (name and provider and api_format and model):
+            return CommandResult(
+                message=(
+                    "/provider add requires --provider, --api-format and --model "
+                    "(plus a profile name)."
+                )
+            )
+        label = "".join(flags.get("label", [])).strip() or name
+        auth_source = "".join(flags.get("auth-source", [])).strip() or default_auth_source_for_provider(
+            provider, api_format
+        )
+        base_url = "".join(flags.get("base-url", [])).strip() or None
+        credential_slot = "".join(flags.get("credential-slot", [])).strip() or None
+        if credential_slot is None and not auth_source_uses_api_key(auth_source):
+            credential_slot = None
+        elif credential_slot is None:
+            credential_slot = name
+        allowed_models = _dedupe_model_values(
+            flags.get("allowed-model", []) or ([model] if credential_slot else [])
+        )
+        context_window_tokens = _parse_int_flag(flags.get("context-window-tokens"))
+        auto_compact_threshold_tokens = _parse_int_flag(flags.get("auto-compact-threshold-tokens"))
+
+        manager = AuthManager()
+        manager.upsert_profile(
+            name,
+            ProviderProfile(
+                label=label,
+                provider=provider,
+                api_format=api_format,
+                auth_source=auth_source,
+                default_model=model,
+                last_model=model,
+                base_url=base_url,
+                credential_slot=credential_slot,
+                allowed_models=allowed_models,
+                context_window_tokens=context_window_tokens,
+                auto_compact_threshold_tokens=auto_compact_threshold_tokens,
+            ),
+        )
+        api_key = "".join(flags.get("api-key", [])).strip()
+        if api_key:
+            manager.store_profile_credential(name, "api_key", api_key)
+            credential_note = " (API key set)"
+        else:
+            credential_note = " (set key with --api-key or /auth)"
+        updated = load_settings()
+        context.engine.set_model(updated.model)
+        if context.app_state is not None:
+            updated_profile = updated.resolve_profile()[1]
+            context.app_state.set(model=display_model_setting(updated_profile))
+        return CommandResult(
+            message=f"Added provider profile '{name}'{credential_note}.",
+            refresh_runtime=True,
+        )
+
+    def _parse_int_flag(values: list[str]) -> int | None:
+        """Parse a single integer flag value (invalid values become None)."""
+        if not values:
+            return None
+        try:
+            return int(values[0].strip())
+        except (TypeError, ValueError):
+            return None
+
     async def _provider_handler(args: str, context: CommandContext) -> CommandResult:
         manager = AuthManager()
         profiles = manager.get_profile_statuses()
@@ -1449,6 +1562,9 @@ def create_default_command_registry(
                 configured = "configured" if info["configured"] else "missing auth"
                 lines.append(f"{marker} {name} [{configured}] {info['label']} -> {info['model']}")
             return CommandResult(message="\n".join(lines))
+        if tokens[0] == "add":
+            sub_args = " ".join(tokens[1:])
+            return await _provider_add_handler(sub_args, context)
         target = tokens[1] if tokens[0] == "use" and len(tokens) == 2 else (tokens[0] if len(tokens) == 1 else None)
         if target is None:
             return CommandResult(message="Usage: /provider [show|list|PROFILE]")

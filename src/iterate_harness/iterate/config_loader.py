@@ -106,6 +106,9 @@ def _default_config_dict() -> dict[str, object]:
             name: resources_to_dict(res) for name, res in cfg.dimension_resources.items()
         },
         "token_budget": cfg.token_budget,
+        "budget_usd": cfg.budget_usd,
+        "max_turns_per_minute": cfg.max_turns_per_minute,
+        "worktree_isolation": cfg.worktree_isolation,
         "thresholds": thresholds_to_dict(cfg.thresholds),
     }
 
@@ -181,6 +184,41 @@ def parse_token_budget(raw: object) -> tuple[int | None, list[str]]:
     if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
         return None, ["token_budget must be a positive integer"]
     return raw, []
+
+
+def parse_budget_usd(raw: object) -> tuple[float | None, list[str]]:
+    """Parse the whole-run ``budget_usd`` (positive number, ``None``=off)."""
+    if raw is None:
+        return None, []
+    if isinstance(raw, bool):
+        return None, ["budget_usd must be a positive number"]
+    if isinstance(raw, int):
+        value = float(raw)
+    elif isinstance(raw, float):
+        value = raw
+    else:
+        return None, ["budget_usd must be a positive number"]
+    if value <= 0:
+        return None, ["budget_usd must be a positive number"]
+    return round(value, 6), []
+
+
+def parse_rate_limit(raw: object) -> tuple[int | None, list[str]]:
+    """Parse ``max_turns_per_minute`` (positive integer, ``None``=off)."""
+    if raw is None:
+        return None, []
+    if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
+        return None, ["max_turns_per_minute must be a positive integer"]
+    return raw, []
+
+
+def parse_worktree_isolation(raw: object) -> tuple[bool, list[str]]:
+    """Parse ``worktree_isolation`` (boolean; anything else falls back to off)."""
+    if raw is None:
+        return False, []
+    if isinstance(raw, bool):
+        return raw, []
+    return False, ["worktree_isolation must be a boolean"]
 
 
 def _parse_threshold_metric(
@@ -360,6 +398,9 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
         data.get("dimension_resources")
     )
     token_budget, _budget_errors = parse_token_budget(data.get("token_budget"))
+    budget_usd, _budget_usd_errors = parse_budget_usd(data.get("budget_usd"))
+    max_turns_per_minute, _rate_errors = parse_rate_limit(data.get("max_turns_per_minute"))
+    worktree_isolation, _worktree_errors = parse_worktree_isolation(data.get("worktree_isolation"))
     thresholds, _threshold_errors = parse_thresholds(data.get("thresholds"))
 
     return IterateConfig(
@@ -374,6 +415,9 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
         reviewer=reviewer,
         dimension_resources=dimension_resources,
         token_budget=token_budget,
+        budget_usd=budget_usd,
+        max_turns_per_minute=max_turns_per_minute,
+        worktree_isolation=worktree_isolation,
         thresholds=thresholds,
         onboarding=dict(onboarding) if isinstance(onboarding, dict) else None,
         personalization=dict(personalization) if isinstance(personalization, dict) else None,
@@ -455,6 +499,12 @@ def validate_config(config: object) -> list[str]:
         errors.extend(resource_errors)
     _, budget_errors = parse_token_budget(config.get("token_budget"))
     errors.extend(budget_errors)
+    _, budget_usd_errors = parse_budget_usd(config.get("budget_usd"))
+    errors.extend(budget_usd_errors)
+    _, rate_errors = parse_rate_limit(config.get("max_turns_per_minute"))
+    errors.extend(rate_errors)
+    _, worktree_errors = parse_worktree_isolation(config.get("worktree_isolation"))
+    errors.extend(worktree_errors)
     raw_thresholds = config.get("thresholds")
     if raw_thresholds is not None:
         _, threshold_errors = parse_thresholds(raw_thresholds)

@@ -43,6 +43,11 @@ def _default_iterate_policy(cwd: Path) -> object | None:
             max_review_rounds=rounds,
             require_fix_approval=kernel.require_fix_approval,
             total_token_budget=project.config.token_budget,
+            budget_usd=project.config.budget_usd,
+            max_turns_per_minute=project.config.max_turns_per_minute,
+            worktree_isolation=(
+                kernel.worktree_isolation or project.config.worktree_isolation
+            ),
             price_overrides={
                 model: tuple(price)
                 for model, price in (kernel.price_overrides or {}).items()

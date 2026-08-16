@@ -709,6 +709,14 @@ async def run_query(
         return
 
     turn_count = 0
+    # Restore an active worktree-isolation session from durable tool
+    # metadata (design §11.3.2 finding #7): lets ``continue_pending`` keep
+    # writing fixes inside the same isolated workspace across submit
+    # boundaries. No-op when no session is active.
+    if context.iterate_policy is not None:
+        from iterate_harness.iterate import worktree_runtime
+
+        await worktree_runtime.resume_if_needed(context)
     while context.max_turns is None or turn_count < context.max_turns:
         turn_count += 1
         if effective_max_tokens != context.max_tokens and not reported_token_clamp:
@@ -732,6 +740,21 @@ async def run_query(
         async for event in _preprocess_images_in_messages(messages, context):
             yield event, None
         # -----------------------------------------------------------------------------
+
+        # --- iterate rate limiting: honor max_turns_per_minute before calling ---
+        if context.iterate_policy is not None:
+            before_request = getattr(context.iterate_policy, "before_request", None)
+            if callable(before_request):
+                delay_seconds = before_request()
+                if delay_seconds > 0:
+                    yield StatusEvent(
+                        message=(
+                            f"rate limit: throttling {delay_seconds:.0f}s to honor "
+                            "max_turns_per_minute"
+                        )
+                    ), None
+                    await asyncio.sleep(delay_seconds)
+        # ----------------------------------------------------------------------
 
         final_message: ConversationMessage | None = None
         usage = UsageSnapshot()
@@ -887,12 +910,54 @@ async def run_query(
             )
             if isinstance(decision.progress, ReviewProgressEvent):
                 yield decision.progress, None
+                # Persist a failure-recovery checkpoint at every successful
+                # convergence point so a crashed/interrupted run can be
+                # resumed via /iterate resume (design §failure recovery).
+                try:
+                    from iterate_harness.iterate.checkpoint import save_checkpoint
+
+                    save_checkpoint(
+                        context.cwd,
+                        round=decision.progress.round,
+                        new_findings=decision.progress.new_findings,
+                        total_findings=decision.progress.total_findings,
+                        per_dimension=decision.progress.per_dimension,
+                        converged=decision.progress.converged,
+                        input_tokens=decision.progress.input_tokens,
+                        output_tokens=decision.progress.output_tokens,
+                        cost_usd=decision.progress.cost_usd,
+                        mode=decision.progress.mode,
+                    )
+                except Exception as exc:  # checkpoint must never break the loop
+                    log.warning("iterate checkpoint save failed: %s", exc)
+                # Session workspace isolation (design §11.3.2 finding #7):
+                # on the first normal-mode progress event, swap the loop into
+                # a dedicated git worktree so the next round's fix writes and
+                # validation never collide with concurrent sessions. Merged
+                # back (or dropped) when the loop finalizes below.
+                from iterate_harness.iterate import worktree_runtime
+
+                session = await worktree_runtime.enter_for_round(
+                    context, decision.progress
+                )
+                if session is not None:
+                    yield StatusEvent(
+                        message=(
+                            "iterate: isolated fix workspace in git worktree "
+                            f"{session.branch} ({session.worktree_path})"
+                        )
+                    ), None
             inject_message = decision.inject_message
             if decision.paused:
                 # Esc intervention (design §11.2.1): surface the pause menu
                 # at the round boundary and follow the chosen action.
                 action, message = await _handle_iterate_pause(context, decision.progress)
                 if action == "stop":
+                    # Abnormal termination: drop the isolated workspace
+                    # without merging (auto-rollback).
+                    from iterate_harness.iterate import worktree_runtime
+
+                    await worktree_runtime.finalize(context, merged=False)
                     yield StatusEvent(
                         message="iterate loop stopped by user (pause menu)"
                     ), None
@@ -907,6 +972,11 @@ async def run_query(
                     )
                 )
             if decision.stop_reason is not None:
+                # Normal stop (converged / round cap / budget): commit the
+                # fix batch and merge it back into the main checkout.
+                from iterate_harness.iterate import worktree_runtime
+
+                await worktree_runtime.finalize(context, merged=True)
                 yield StatusEvent(
                     message=f"iterate loop stopped: {decision.stop_reason}"
                 ), None

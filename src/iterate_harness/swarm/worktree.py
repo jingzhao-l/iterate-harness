@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import time
@@ -16,6 +17,21 @@ from pathlib import Path
 _VALID_SEGMENT = re.compile(r"^[a-zA-Z0-9._-]+$")
 _MAX_SLUG_LENGTH = 64
 _COMMON_SYMLINK_DIRS = ("node_modules", ".venv", "__pycache__", ".tox")
+
+#: Length of the per-repo directory hash used to namespace worktrees.
+_REPO_SLUG_LENGTH = 12
+
+
+def repo_namespace(repo_path: str | Path) -> str:
+    """Return a deterministic, path-safe namespace for a repository.
+
+    Worktrees are stored under ``base_dir/<repo_namespace>/<slug>`` so that
+    two different repositories can never collide on the same slug (session
+    workspace isolation across repos / concurrent sessions).
+    """
+    raw = str(Path(repo_path).resolve())
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()
+    return digest[:_REPO_SLUG_LENGTH]
 
 
 def validate_worktree_slug(slug: str) -> str:
@@ -156,6 +172,10 @@ class WorktreeManager:
     ) -> WorktreeInfo:
         """Create (or resume) a git worktree for *slug*.
 
+        Worktrees are namespaced per repository under
+        ``base_dir/<repo_namespace>/<flat_slug>`` so concurrent sessions on
+        different repos never collide.
+
         If the worktree directory already exists and is a valid git worktree,
         it is resumed without re-running ``git worktree add``.
 
@@ -173,7 +193,8 @@ class WorktreeManager:
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
         flat_slug = _flatten_slug(slug)
-        worktree_path = self.base_dir / flat_slug
+        namespace = repo_namespace(repo_path)
+        worktree_path = self.base_dir / namespace / flat_slug
         worktree_branch = branch or _worktree_branch(slug)
 
         # Fast resume: check whether the worktree is already registered
@@ -210,19 +231,32 @@ class WorktreeManager:
             agent_id=agent_id,
         )
 
-    async def remove_worktree(self, slug: str) -> bool:
+    async def remove_worktree(self, slug: str, repo_path: Path | None = None) -> bool:
         """Remove a worktree by slug.
 
         Cleans up symlinks first, then runs ``git worktree remove --force``.
+
+        When ``repo_path`` is given the namespaced path is used directly;
+        otherwise the worktree is located by searching every repository
+        namespace (and the legacy flat layout) under ``base_dir``.
 
         Returns:
             True if the worktree was removed; False if it did not exist.
         """
         validate_worktree_slug(slug)
         flat_slug = _flatten_slug(slug)
-        worktree_path = self.base_dir / flat_slug
 
-        if not worktree_path.exists():
+        candidates: list[Path] = []
+        if repo_path is not None:
+            candidates.append(self.base_dir / repo_namespace(repo_path) / flat_slug)
+        if not candidates or not any(c.exists() for c in candidates):
+            if self.base_dir.exists():
+                candidates.extend(self.base_dir.glob(f"*/{flat_slug}"))
+                # Legacy flat layout: base_dir/<flat_slug>
+                candidates.append(self.base_dir / flat_slug)
+
+        worktree_path = next((c for c in candidates if c.exists()), None)
+        if worktree_path is None:
             return False
 
         # Remove symlinks before git removes the directory
@@ -234,11 +268,11 @@ class WorktreeManager:
         )
         if code == 0 and git_common:
             # git_common points to .git inside the main repo
-            repo_path = Path(git_common).resolve().parent
-            if repo_path.exists():
+            repo_path_resolved = Path(git_common).resolve().parent
+            if repo_path_resolved.exists():
                 await _run_git(
                     "worktree", "remove", "--force", str(worktree_path),
-                    cwd=repo_path,
+                    cwd=repo_path_resolved,
                 )
                 return True
 
@@ -251,14 +285,30 @@ class WorktreeManager:
         return code == 0
 
     async def list_worktrees(self) -> list[WorktreeInfo]:
-        """Return WorktreeInfo for every known worktree under base_dir."""
+        """Return WorktreeInfo for every known worktree under base_dir.
+
+        Handles both the namespaced layout (``base_dir/<ns>/<slug>``) and
+        the legacy flat layout (``base_dir/<slug>``).
+        """
         if not self.base_dir.exists():
             return []
 
-        results: list[WorktreeInfo] = []
+        candidates: list[Path] = []
         for child in self.base_dir.iterdir():
             if not child.is_dir():
                 continue
+            code, _, _ = await _run_git("rev-parse", "--git-dir", cwd=child)
+            if code == 0:
+                # Legacy flat layout: the directory itself is a worktree.
+                candidates.append(child)
+                continue
+            # Namespaced layout: one level deeper.
+            for grandchild in child.iterdir():
+                if grandchild.is_dir():
+                    candidates.append(grandchild)
+
+        results: list[WorktreeInfo] = []
+        for child in candidates:
             code, _, _ = await _run_git("rev-parse", "--git-dir", cwd=child)
             if code != 0:
                 continue

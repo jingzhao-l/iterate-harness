@@ -22,6 +22,7 @@ from iterate_harness.engine.stream_events import (
     AssistantTurnComplete,
     CompactProgressEvent,
     ErrorEvent,
+    ReviewProgressEvent,
     StatusEvent,
     StreamEvent,
     ToolExecutionCompleted,
@@ -175,10 +176,14 @@ class IterateHarnessTerminalApp(App[None]):
         border: solid $accent;
     }
 
-    #status-bar, #tasks-panel, #mcp-panel {
+    #status-bar, #tasks-panel, #mcp-panel, #iterate-panel {
         border: round $surface;
         padding: 0 1;
         margin-bottom: 1;
+    }
+
+    #iterate-panel {
+        max-height: 16;
     }
 
     #permission-dialog {
@@ -231,6 +236,9 @@ class IterateHarnessTerminalApp(App[None]):
         self._last_tasks_snapshot: tuple[tuple[str, str, object, object], ...] | None = None
         self._last_mcp_summary: str | None = None
         self._last_current_response: str | None = None
+        # Latest iterate convergence snapshot for the dashboard panel.
+        self._latest_review: ReviewProgressEvent | None = None
+        self._last_iterate_snapshot: tuple[object, ...] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -243,6 +251,7 @@ class IterateHarnessTerminalApp(App[None]):
                 yield Static("Starting...", id="status-bar")
                 yield Static("No tasks yet.", id="tasks-panel")
                 yield Static("No MCP servers configured.", id="mcp-panel")
+                yield Static("No iterate session yet.", id="iterate-panel")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -383,6 +392,15 @@ class IterateHarnessTerminalApp(App[None]):
             return
         if isinstance(event, StatusEvent):
             self._append_line(f"system> {event.message}")
+            return
+        if isinstance(event, ReviewProgressEvent):
+            self._latest_review = event
+            self._refresh_iterate_panel()
+            self._append_line(
+                f"iterate> round {event.round}: +{event.new_findings} findings "
+                f"(total {event.total_findings}) · ${event.cost_usd:.4f}"
+                + (" · converged" if event.converged else "")
+            )
 
     def action_clear_conversation(self) -> None:
         if self._bundle is None:
@@ -493,3 +511,44 @@ class IterateHarnessTerminalApp(App[None]):
         if force or mcp_summary != self._last_mcp_summary:
             self.query_one("#mcp-panel", Static).update(mcp_summary)
             self._last_mcp_summary = mcp_summary
+
+        self._refresh_iterate_panel(force=force)
+
+    def _refresh_iterate_panel(self, *, force: bool = False) -> None:
+        """Render the live iterate convergence dashboard panel."""
+        if self._latest_review is None:
+            return
+        review = self._latest_review
+        snapshot = (
+            review.round,
+            review.new_findings,
+            review.total_findings,
+            review.converged,
+            review.input_tokens,
+            review.output_tokens,
+            review.cost_usd,
+            tuple(sorted(review.per_dimension.items())),
+        )
+        if not force and snapshot == self._last_iterate_snapshot:
+            return
+
+        dim_lines = []
+        for dimension, count in sorted(review.per_dimension.items()):
+            dim_lines.append(f"  {dimension}: {count}")
+        dim_text = "\n".join(dim_lines) if dim_lines else "  (none yet)"
+
+        status = "[b green]converged[/b green]" if review.converged else "[yellow]in progress[/yellow]"
+        lines = [
+            "[b]Iterate convergence[/b]",
+            f"round: {review.round}",
+            f"new findings: +{review.new_findings}",
+            f"total findings: {review.total_findings}",
+            f"mode: {review.mode}",
+            f"tokens: {review.input_tokens:,} in / {review.output_tokens:,} out",
+            f"cost: ${review.cost_usd:.4f}",
+            f"status: {status}",
+            "by dimension:",
+            dim_text,
+        ]
+        self.query_one("#iterate-panel", Static).update("\n".join(lines))
+        self._last_iterate_snapshot = snapshot

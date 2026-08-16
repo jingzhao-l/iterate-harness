@@ -312,6 +312,7 @@ def resume_kickoff(goal: str, max_rounds: int, last_summary: dict) -> str:
     verdict = str(last_summary.get("verdict") or "unknown")
     last_rounds = int(last_summary.get("rounds") or 0)
     total = int(last_summary.get("totalFindings") or 0)
+    interrupted = last_summary.get("interrupted", False)
     preview_lines: list[str] = []
     for finding in last_summary.get("preview") or []:
         if not isinstance(finding, dict):
@@ -325,6 +326,22 @@ def resume_kickoff(goal: str, max_rounds: int, last_summary: dict) -> str:
             )
         )
     preview = "\n".join(preview_lines) or "- (no finding previews recorded)"
+    if interrupted:
+        return (
+            f"Resume the interrupted iterate run on this project. Goal: {goal}. "
+            f"The previous run was interrupted after round {last_rounds} (last "
+            f"convergence checkpoint: {total} finding(s)). The checkpoint "
+            f"per-dimension breakdown is: "
+            f"{dict(last_summary.get('perDimension') or {})}. "
+            "Re-read the decision log (.iterate/decision-log.jsonl) via "
+            "iterate_log first, re-verify which of the previously reported "
+            "findings still reproduce on the current state, then continue "
+            "the canonical loop (dry-run rules if the last run was dry-run, "
+            "normal fix rules otherwise) within a fresh cap of "
+            f"{max_rounds} rounds. Previously reported findings:\n{preview}\n"
+            "Do NOT re-report findings that no longer reproduce; log the "
+            "resume as a decision entry before the first new round."
+        )
     return (
         f"Resume the last iterate run on this project. Goal: {goal}. "
         f"The previous run stopped after round {last_rounds} with verdict "

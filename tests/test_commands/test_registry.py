@@ -9,6 +9,7 @@ import pytest
 
 import iterate_harness.commands.registry as registry_module
 from iterate_harness.commands.registry import CommandContext, create_default_command_registry, lookup_skill_slash_command
+from iterate_harness.auth.manager import AuthManager
 from iterate_harness.autopilot import RepoVerificationStep
 from iterate_harness.config.paths import get_feedback_log_path, get_project_issue_file, get_project_pr_comments_file
 from iterate_harness.config.settings import load_settings, save_settings, Settings
@@ -531,6 +532,71 @@ async def test_provider_command_switches_profile_and_requests_runtime_refresh(tm
     assert loaded.active_profile == "kimi-anthropic"
     assert loaded.base_url == "https://api.moonshot.cn/anthropic"
     assert loaded.model == "kimi-k2.5"
+
+
+@pytest.mark.asyncio
+async def test_provider_add_command_rejects_missing_flags(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    registry = create_default_command_registry()
+    context = _make_context(tmp_path)
+
+    command, args = registry.lookup("/provider add my-vendor")
+    assert command is not None
+    result = await command.handler(args, context)
+
+    assert "requires --provider, --api-format and --model" in result.message
+    assert result.refresh_runtime is False
+
+
+@pytest.mark.asyncio
+async def test_provider_add_command_creates_profile_and_stores_key(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    registry = create_default_command_registry()
+    context = _make_context(tmp_path)
+
+    command, args = registry.lookup(
+        "/provider add my-vendor --provider openai --api-format openai "
+        "--model gpt-test --base-url https://my.gateway.example/v1 "
+        "--api-key sk-test-123 --allowed-model gpt-test --allowed-model gpt-test-2"
+    )
+    assert command is not None
+    result = await command.handler(args, context)
+
+    assert "Added provider profile 'my-vendor'" in result.message
+    assert "(API key set)" in result.message
+    assert result.refresh_runtime is True
+
+    manager = AuthManager()
+    profile = manager.list_profiles()["my-vendor"]
+    assert profile.provider == "openai"
+    assert profile.api_format == "openai"
+    assert profile.default_model == "gpt-test"
+    assert profile.base_url == "https://my.gateway.example/v1"
+    assert profile.credential_slot == "my-vendor"
+    assert profile.allowed_models == ["gpt-test", "gpt-test-2"]
+
+
+@pytest.mark.asyncio
+async def test_provider_add_command_defaults_slot_and_models(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    registry = create_default_command_registry()
+    context = _make_context(tmp_path)
+
+    command, args = registry.lookup(
+        "/provider add gateway --provider openai --api-format openai --model gpt-test"
+    )
+    assert command is not None
+    result = await command.handler(args, context)
+
+    assert "Added provider profile 'gateway'" in result.message
+    assert "set key with --api-key or /auth" in result.message
+
+    manager = AuthManager()
+    profile = manager.list_profiles()["gateway"]
+    # openai_api_key auth source -> credential_slot defaults to the profile name
+    assert profile.credential_slot == "gateway"
+    # allowed_models defaults to the single model
+    assert profile.allowed_models == ["gpt-test"]
 
 
 @pytest.mark.asyncio

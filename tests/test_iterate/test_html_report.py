@@ -154,6 +154,89 @@ class TestBuildHtmlReport:
         assert page.count("atomic_fix") == html_report.MAX_TIMELINE_ENTRIES
 
 
+# ---- build_replay_page --------------------------------------------------
+
+
+class TestBuildReplayPage:
+    def _replay_entries(self) -> list[DecisionLogEntry]:
+        return [
+            make_entry(
+                entry_type="round_start",
+                round_number=1,
+                data={"goal": "review", "mode": "normal", "dimensions": ["correctness"]},
+            ),
+            make_entry(
+                entry_type="review_result",
+                round_number=1,
+                data={
+                    "newFindings": 2,
+                    "totalFindings": 2,
+                    "converged": False,
+                    "findings": [_finding(), _finding("low")],
+                },
+            ),
+            make_entry(
+                entry_type="atomic_fix",
+                round_number=1,
+                data={"file": "src/app.py", "summary": "guard x", "diff": "- x < 1\n+ x <= 1"},
+            ),
+            make_entry(
+                entry_type="validation",
+                round_number=1,
+                data={"command": "pytest", "exitCode": 0, "status": "passed", "stdout": "ok"},
+            ),
+            *(_entries_with_report(_report_data())),
+        ]
+
+    def test_none_when_empty_log(self):
+        assert html_report.build_replay_page([]) is None
+
+    def test_renders_round_panels_and_report_panel(self):
+        page = html_report.build_replay_page(self._replay_entries())
+        assert page is not None
+        assert page.startswith("<!DOCTYPE html>")
+        assert page.rstrip().endswith("</html>")
+        assert "Round" in page
+        assert "Final report" in page
+        assert page.count("rp-panel") >= 3  # round 1 + final report panel(s)
+
+    def test_includes_replay_controls_and_script(self):
+        page = html_report.build_replay_page(self._replay_entries())
+        assert 'id="rp-prev"' in page
+        assert 'id="rp-next"' in page
+        assert "rp-jump" in page
+        assert "<script>" in page and "</script>" in page
+
+    def test_renders_entry_cards(self):
+        page = html_report.build_replay_page(self._replay_entries())
+        assert "round_start" in page
+        assert "review_result" in page
+        assert "atomic_fix" in page
+        assert "validation" in page
+        assert "guard x" in page
+        assert "pytest" in page
+
+    def test_escapes_log_content(self):
+        entries = [
+            make_entry(
+                entry_type="atomic_fix",
+                round_number=1,
+                data={"file": "a.py", "summary": "<script>alert(1)</script>"},
+            ),
+            *(_entries_with_report(_report_data())),
+        ]
+        page = html_report.build_replay_page(entries)
+        assert "<script>alert" not in page
+        assert "&lt;script&gt;alert" in page
+
+    def test_report_only_log_still_renders(self):
+        entries = _entries_with_report(_report_data())
+        page = html_report.build_replay_page(entries)
+        assert page is not None
+        assert "Final report" in page
+        assert "src/app.py" in page
+
+
 # ---- CLI --html ---------------------------------------------------------
 
 

@@ -212,6 +212,21 @@ class IterateConfig:
     # Whole-run token budget enforced by the engine-level loop policy: the
     # iterate loop hard-stops once the main-loop usage exceeds it.
     token_budget: int | None = None
+    # Whole-run monetary budget (USD) enforced by the engine-level loop
+    # policy: the loop hard-stops once the accumulated cost exceeds it.
+    # ``None`` disables the cap.
+    budget_usd: float | None = None
+    # Turn-level rate cap (requests per minute) for long-running loops:
+    # when exceeded, the policy injects a backoff message instead of
+    # hammering the endpoint. ``None`` disables throttling.
+    max_turns_per_minute: int | None = None
+    # Session workspace isolation (design §11.3.2 finding #7): when True, a
+    # normal-mode iterate loop runs its fix rounds inside a dedicated git
+    # worktree (``iterate/round-N``) so concurrent sessions never write the
+    # same files. Fixes merge back on a successful stop and are dropped on an
+    # abnormal one (auto-rollback). May also be enabled via the harness-level
+    # ``IterateSettings.worktree_isolation``.
+    worktree_isolation: bool = False
     thresholds: ThresholdsConfig = field(default_factory=ThresholdsConfig)
     onboarding: dict[str, object] | None = None
     personalization: dict[str, object] | None = None

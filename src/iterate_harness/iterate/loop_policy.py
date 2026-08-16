@@ -22,6 +22,7 @@ All logic is pure and unit-testable; the engine only wires it in.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from ..api.usage import UsageSnapshot
@@ -29,6 +30,9 @@ from . import prompts
 from .cost import CostMeter
 
 ITERATE_STATE_KEY = "iterate_state"
+
+#: Width (seconds) of the rolling window for ``max_turns_per_minute``.
+RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 @dataclass
@@ -156,6 +160,17 @@ class IterateLoopPolicy:
     # once the main-loop usage exceeds it the loop hard-stops and steers the
     # model toward the closing report. ``None`` disables the cap.
     total_token_budget: int | None = None
+    # Whole-run monetary budget (USD): once the accumulated cost exceeds it
+    # the loop hard-stops. ``None`` disables the cap.
+    budget_usd: float | None = None
+    # Turn-level rate cap (requests per minute) for long-running loops:
+    # when exceeded, the policy injects a backoff message instead of the
+    # normal next-round instruction. ``None`` disables throttling.
+    max_turns_per_minute: int | None = None
+    # Session workspace isolation (design §11.3.2 finding #7): when True and
+    # a normal-mode loop is active, the engine runs fix rounds inside a
+    # dedicated git worktree (merged on success, dropped on abnormal stop).
+    worktree_isolation: bool = False
     # Esc intervention channel (design §11.2.1): set externally by the
     # backend interrupt path while an iterate loop is running; consumed at
     # the next round boundary.
@@ -164,6 +179,9 @@ class IterateLoopPolicy:
     cost_meter: CostMeter = field(default=None)  # type: ignore[assignment]
     _rounds_seen: int = 0
     _emitted_progress: int = 0
+    # Rolling window of turn timestamps for rate limiting (seconds since
+    # epoch). Pruned to ``RATE_LIMIT_WINDOW_SECONDS`` on each check.
+    _turn_timestamps: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.cost_meter is None:
@@ -217,14 +235,52 @@ class IterateLoopPolicy:
             self.cost_meter.record_dimension_total(dimension, tokens)
 
     def _budget_stop_reason(self) -> str | None:
-        """Return the token-budget stop reason, or None when within budget."""
-        budget = self.total_token_budget
-        if budget is None:
-            return None
-        used = self.cost_meter.total_tokens
-        if used > budget:
-            return f"token budget exhausted ({used:,}/{budget:,} tokens)"
-        return None
+        """Return the budget stop reason (token and/or USD), or None within budget."""
+        reasons: list[str] = []
+        token_budget = self.total_token_budget
+        if token_budget is not None:
+            used_tokens = self.cost_meter.total_tokens
+            if used_tokens > token_budget:
+                reasons.append(f"token budget exhausted ({used_tokens:,}/{token_budget:,} tokens)")
+        usd_budget = self.budget_usd
+        if usd_budget is not None:
+            used_usd = self.cost_meter.total_cost_usd
+            if used_usd > usd_budget:
+                reasons.append(f"monetary budget exhausted (${used_usd:.4f}/${usd_budget:.4f})")
+        return "; ".join(reasons) if reasons else None
+
+    def before_request(self, now: float | None = None) -> float:
+        """Consulted by the engine before each main-loop API request.
+
+        Returns the number of seconds the engine must sleep before issuing the
+        request so the per-minute turn cap (``max_turns_per_minute``) is
+        honored, then records the (deferred) request timestamp. Returns ``0.0``
+        when no cap is configured or the loop is within the limit.
+        """
+        timestamp = time.monotonic() if now is None else now
+        delay = self._throttle_delay(timestamp)
+        if self.max_turns_per_minute is not None and self.max_turns_per_minute > 0:
+            # Record the request at its actual issue time so a throttled request
+            # counts toward the cap from when it is finally sent.
+            self._turn_timestamps.append(timestamp + delay)
+        return delay
+
+    def rate_limit_engaged(self, now: float | None = None) -> bool:
+        """True while the policy is actively throttling (a cap is configured and
+        the request rate is at or above it)."""
+        return self._throttle_delay(time.monotonic() if now is None else now) > 0
+
+    def _throttle_delay(self, now: float) -> float:
+        """Seconds until the oldest in-window turn falls out (0 when within cap)."""
+        cap = self.max_turns_per_minute
+        if cap is None or cap <= 0 or not self._turn_timestamps:
+            return 0.0
+        window_start = now - RATE_LIMIT_WINDOW_SECONDS
+        recent = [t for t in self._turn_timestamps if t >= window_start]
+        if len(recent) < cap:
+            return 0.0
+        oldest = min(recent)
+        return max(0.0, oldest + RATE_LIMIT_WINDOW_SECONDS - now)
 
     # -- internals --------------------------------------------------------
 

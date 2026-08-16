@@ -37,6 +37,23 @@ SEVERITY_COLORS: dict[str, str] = {
     "low": "#2563eb",
 }
 
+#: Replay entry types that get their own card inside a round panel.
+REPLAY_ENTRY_TYPES = (
+    "round_start",
+    "review_result",
+    "atomic_fix",
+    "architectural_fix",
+    "revert",
+    "validation",
+    "decision",
+)
+
+#: Upper bound of per-round findings rendered in the replay page.
+MAX_REPLAY_FINDINGS = 200
+
+#: Upper bound of diff preview lines inside a replay card.
+MAX_REPLAY_DIFF_LINES = 80
+
 _BASE_CSS = (
     ":root{color-scheme:light}*{box-sizing:border-box}"
     "body{font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;"
@@ -322,9 +339,354 @@ def _render_diff_body(diff_text: str) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Interactive round replay page (design §14.4 finding #6 "HTML 报告服务化")
+#
+# A second self-contained page: every decision-log round becomes one
+# navigable panel (review → fixes → validation → decision), plus a final
+# full-report panel. Navigation (prev / next / jump dots / ← → keys) is
+# implemented with a tiny inline script that only toggles CSS classes —
+# every piece of log-derived text is rendered server-side and HTML-escaped,
+# so no user data ever flows into JavaScript.
+# ---------------------------------------------------------------------------
+
+_REPLAY_CSS = (
+    ".rp{max-width:820px;margin:0 auto;padding:24px 20px 64px}"
+    ".rp h1{font-size:20px;margin:0 0 2px}"
+    ".rp p.sub{color:#64748b;font-size:13px;margin:2px 0 0}"
+    ".rp .controls{display:flex;align-items:center;gap:10px;margin:16px 0;"
+    "position:sticky;top:0;background:#f8fafc;padding:8px 0;z-index:5}"
+    ".rp button{border:1px solid #cbd5e1;background:#fff;color:#0f172a;"
+    "border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer}"
+    ".rp button:hover:not(:disabled){background:#f1f5f9}"
+    ".rp button:disabled{opacity:.4;cursor:default}"
+    ".rp .round-num{font-weight:600;font-size:13px;min-width:112px;text-align:center}"
+    ".rp .jumps{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}"
+    ".rp .jumps button{min-width:30px;padding:4px 8px;font-variant-numeric:tabular-nums}"
+    ".rp .jumps button.on{background:#2563eb;border-color:#2563eb;color:#fff}"
+    ".rp-panel{display:none}"
+    ".rp-panel.on{display:block}"
+    ".rp-panel h2{font-size:16px;margin:0 0 2px}"
+    ".rp-panel p.round-meta{color:#64748b;font-size:12px;margin:2px 0 10px}"
+    ".rp-card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;"
+    "padding:14px 16px;margin:12px 0}"
+    ".rp-card .tag{font-size:11px;font-weight:700;color:#fff;border-radius:5px;"
+    "padding:2px 8px;display:inline-block;vertical-align:middle}"
+    ".rp-card .meta{color:#64748b;font-size:12px;margin:6px 0}"
+    ".rp-card h3{font-size:14px;margin:8px 0 4px;color:#334155}"
+    ".rp-card p{font-size:13px;margin:6px 0}"
+    ".rp-card ul{font-size:13px;margin:6px 0;padding-left:18px}"
+    ".rp-card pre.out{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:10px;"
+    "font-size:12px;overflow-x:auto;max-height:260px;overflow-y:auto}"
+    ".ok{color:#16a34a;font-weight:600}.bad{color:#b91c1c;font-weight:600}"
+    ".kbd{font-size:11px;color:#94a3b8}"
+)
+
+#: Fixed tag colors per replay entry type (never derived from the log).
+REPLAY_TAG_COLORS: dict[str, str] = {
+    "round_start": "#475569",
+    "review_result": "#2563eb",
+    "atomic_fix": "#16a34a",
+    "architectural_fix": "#0d9488",
+    "revert": "#b91c1c",
+    "validation": "#ca8a04",
+    "decision": "#7c3aed",
+    "report": "#0f172a",
+}
+
+#: Replay page navigation script (static; only toggles CSS classes).
+_REPLAY_SCRIPT = (
+    "<script>(function(){"
+    "var panels=document.querySelectorAll('.rp-panel');"
+    "var jumps=document.querySelectorAll('.rp-jump');"
+    "var prev=document.getElementById('rp-prev');"
+    "var next=document.getElementById('rp-next');"
+    "var num=document.getElementById('rp-num');"
+    "var current=0,total=panels.length;"
+    "function show(i){"
+    "if(i<0||i>=total)return;current=i;"
+    "for(var k=0;k<panels.length;k++){panels[k].classList.toggle('on',k===i);}"
+    "for(var k=0;k<jumps.length;k++){jumps[k].classList.toggle('on',k===i);}"
+    "prev.disabled=(i===0);next.disabled=(i===total-1);"
+    "num.textContent='Round '+(i+1)+' / '+total;"
+    "window.scrollTo(0,0);"
+    "}"
+    "prev.addEventListener('click',function(){show(current-1);});"
+    "next.addEventListener('click',function(){show(current+1);});"
+    "for(var k=0;k<jumps.length;k++){(function(k){"
+    "jumps[k].addEventListener('click',function(){show(k);});})(k);}"
+    "document.addEventListener('keydown',function(e){"
+    "if(e.key==='ArrowLeft')show(current-1);"
+    "if(e.key==='ArrowRight')show(current+1);});"
+    "show(0);"
+    "})();</script>"
+)
+
+
+def build_replay_page(entries: list[DecisionLogEntry]) -> str | None:
+    """Render the whole decision log as an interactive round-by-round page.
+
+    Returns ``None`` when the log is empty. Every round becomes one
+    navigable panel; a final panel renders the full report (if present).
+    """
+    if not entries:
+        return None
+    groups = _group_entries_by_round(entries)
+    panels = [
+        _render_replay_round_panel(round_number, panel_entries)
+        for round_number, panel_entries in groups
+    ]
+    report = latest_report_entry(entries)
+    if report is not None:
+        panels.append(_render_replay_report_panel(report))
+    if not panels:
+        return None
+    first = entries[0]
+    last = entries[-1]
+    goal = "(none)"
+    for entry in entries:
+        data = entry.data if isinstance(entry.data, dict) else {}
+        if data.get("goal"):
+            goal = str(data["goal"])
+            break
+    title = "iterate replay"
+    jump_buttons = "".join(
+        f"<button class=\"rp-jump\" type=\"button\">{index + 1}</button>"
+        for index in range(len(panels))
+    )
+    return (
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{title}</title>"
+        f"<style>{_BASE_CSS}{_REPLAY_CSS}</style></head>"
+        "<body><div class=\"wrap rp\">"
+        f"<header><h1>{title}</h1>"
+        f"<p class=\"sub\">goal: {_esc(goal)} · {_esc(first.timestamp[:19])} → "
+        f"{_esc(last.timestamp[:19])} · {len(entries)} log entries</p></header>"
+        "<div class=\"controls\">"
+        "<button id=\"rp-prev\" type=\"button\">← prev</button>"
+        "<span class=\"round-num\" id=\"rp-num\"></span>"
+        "<button id=\"rp-next\" type=\"button\">next →</button>"
+        "</div>"
+        f"<div class=\"jumps\">{jump_buttons}</div>"
+        + "".join(panels)
+        + "<p class=\"kbd\">use ← / → arrow keys to move between rounds</p>"
+        + _REPLAY_SCRIPT
+        + "<footer>generated by iterate-harness · replay page · works offline</footer>"
+        + "</div></body></html>"
+    )
+
+
+def _group_entries_by_round(
+    entries: list[DecisionLogEntry],
+) -> list[tuple[int, list[DecisionLogEntry]]]:
+    """Group replay entries by round number; report entries are excluded.
+
+    The report renders as its own dedicated final panel so reviewers get a
+    clean full-report view after stepping through the rounds.
+    """
+    groups: dict[int, list[DecisionLogEntry]] = {}
+    for entry in entries:
+        if entry.type == "report":
+            continue
+        groups.setdefault(entry.round, []).append(entry)
+    return [(round_number, groups[round_number]) for round_number in sorted(groups)]
+
+
+def _render_replay_round_panel(
+    round_number: int, entries: list[DecisionLogEntry]
+) -> str:
+    cards = "".join(_render_replay_entry_card(entry) for entry in entries)
+    first_stamp = entries[0].timestamp[:19] if entries else ""
+    return (
+        "<section class=\"rp-panel\"><h2>Round "
+        f"{_int_or_zero(round_number)}</h2>"
+        f"<p class=\"round-meta\">{_esc(first_stamp)} · {len(entries)} log entries</p>"
+        f"{cards}</section>"
+    )
+
+
+def _render_replay_entry_card(entry: DecisionLogEntry) -> str:
+    """Render one decision-log entry as a replay card."""
+    data = entry.data if isinstance(entry.data, dict) else {}
+    color = REPLAY_TAG_COLORS.get(entry.type, "#475569")
+    header = (
+        f"<span class=\"tag\" style=\"background:{color}\">{_esc(entry.type)}</span>"
+        f"<span class=\"meta\">&nbsp;&nbsp;{_esc(entry.timestamp[:19])}</span>"
+    )
+    body = _render_replay_card_body(entry.type, data)
+    return f"<div class=\"rp-card\">{header}{body}</div>"
+
+
+def _render_replay_card_body(entry_type: str, data: dict[str, Any]) -> str:
+    """Type-specific body for one replay card (defensive on every field)."""
+    if entry_type == "round_start":
+        return _replay_card_text(
+            [("goal", data.get("goal")), ("mode", data.get("mode")),
+             ("dimensions", data.get("dimensions"))]
+        )
+    if entry_type == "review_result":
+        return _replay_review_result(data)
+    if entry_type in ("atomic_fix", "architectural_fix"):
+        return _replay_fix_card(data)
+    if entry_type == "revert":
+        return _replay_card_text(
+            [("file", data.get("file")), ("reason", data.get("reason")),
+             ("summary", data.get("summary"))]
+        )
+    if entry_type == "validation":
+        return _replay_validation_card(data)
+    if entry_type == "decision":
+        return _replay_card_text(
+            [("action", data.get("action")), ("kind", data.get("kind")),
+             ("detail", data.get("detail"))]
+        )
+    # Unknown entry type: fall back to a compact JSON preview.
+    preview = _esc(data)[:400] if data else "(no payload)"
+    return f"<p>{preview}</p>"
+
+
+def _replay_card_text(pairs: list[tuple[str, object]]) -> str:
+    """Render label/value pairs, skipping empty values."""
+    parts = []
+    for label, value in pairs:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        parts.append(f"<p><strong>{_esc(label)}:</strong> {_esc(text)}</p>")
+    return "".join(parts) if parts else "<p class=\"meta\">(no payload)</p>"
+
+
+def _replay_review_result(data: dict[str, Any]) -> str:
+    summary_line = (
+        f"new: {_int_or_zero(data.get('newFindings'))} · "
+        f"total: {_int_or_zero(data.get('totalFindings'))}"
+    )
+    converged = bool(data.get("converged"))
+    status = "<span class=\"ok\">converged</span>" if converged else (
+        "<span class=\"bad\">not converged</span>"
+    )
+    lines = [f"<p class=\"meta\">{summary_line} · {status}</p>"]
+    raw = data.get("findings")
+    findings = [f for f in raw if isinstance(f, dict)] if isinstance(raw, list) else []
+    if findings:
+        rows = []
+        for finding in findings[:MAX_REPLAY_FINDINGS]:
+            severity = str(finding.get("severity") or "?")
+            color = _severity_color(severity)
+            location = _esc(finding.get("file") or "(no file)")
+            line_value = finding.get("line")
+            if isinstance(line_value, int) and line_value > 0:
+                location += f" · line {line_value}"
+            rows.append(
+                f"<tr><td><span class=\"badge\" style=\"background:{color}\">"
+                f"{_esc(severity)}</span></td>"
+                f"<td><code>{location}</code></td>"
+                f"<td>{_esc(finding.get('dimension') or 'general')}</td>"
+                f"<td>{_esc(finding.get('summary') or '')}</td></tr>"
+            )
+        lines.append(
+            "<table><thead><tr><th>severity</th><th>location</th><th>dimension</th>"
+            "<th>summary</th></tr></thead><tbody>"
+            + "".join(rows)
+            + "</tbody></table>"
+        )
+        if len(findings) > MAX_REPLAY_FINDINGS:
+            lines.append(
+                f"<p class=\"meta\">… +{len(findings) - MAX_REPLAY_FINDINGS} "
+                "more findings not shown</p>"
+            )
+    else:
+        lines.append("<p class=\"meta\">no findings recorded</p>")
+    return "".join(lines)
+
+
+def _replay_fix_card(data: dict[str, Any]) -> str:
+    text = _replay_card_text(
+        [("file", data.get("file")), ("summary", data.get("summary")),
+         ("description", data.get("description"))]
+    )
+    diff_raw = data.get("diff")
+    if isinstance(diff_raw, str) and diff_raw.strip():
+        lines = diff_raw.splitlines()
+        if len(lines) > MAX_REPLAY_DIFF_LINES:
+            truncated = "\n".join(lines[:MAX_REPLAY_DIFF_LINES])
+            text += (
+                "<pre class=\"diff\">"
+                + _render_diff_body(truncated)
+                + "</pre><p class=\"meta\">diff truncated "
+                f"(+{len(lines) - MAX_REPLAY_DIFF_LINES} more lines)</p>"
+            )
+        else:
+            text += "<pre class=\"diff\">" + _render_diff_body(diff_raw) + "</pre>"
+    return text
+
+
+def _replay_validation_card(data: dict[str, Any]) -> str:
+    exit_code = data.get("exitCode")
+    timed_out = bool(data.get("timedOut"))
+    status_text = str(data.get("status") or "").strip()
+    if exit_code is not None and not isinstance(exit_code, (int, str)):
+        exit_code = None
+    parts = [f"<p class=\"meta\">command: <code>{_esc(data.get('command') or '')}</code></p>"]
+    if status_text:
+        css = "ok" if status_text.lower() in ("ok", "success", "passed") else "bad"
+        parts.append(f"<p>status: <span class=\"{css}\">{_esc(status_text)}</span>"
+                     + (f" · exit: {_esc(exit_code)}" if exit_code is not None else "")
+                     + (" · timed out" if timed_out else "") + "</p>")
+    elif exit_code is not None:
+        css = "ok" if str(exit_code) in ("0", "0.0") else "bad"
+        parts.append(
+            f"<p>exit: <span class=\"{css}\">{_esc(exit_code)}</span>"
+            + (" · timed out" if timed_out else "") + "</p>"
+        )
+    for key in ("stdout", "stderr"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            body = value if len(value) <= 1200 else value[:1200] + "\n… (truncated)"
+            parts.append(
+                f"<p><strong>{_esc(key)}</strong></p>"
+                f"<pre class=\"out\">{_esc(body)}</pre>"
+            )
+    return "".join(parts)
+
+
+def _render_replay_report_panel(report: DecisionLogEntry) -> str:
+    """Final panel: the full report rendered from the latest report entry."""
+    data = report.data if isinstance(report.data, dict) else {}
+    timeline = _collect_timeline(decision_log_entries_sentinel(report), report)
+    body = (
+        _render_header(data, report)
+        + _render_summary_cards(data)
+        + _render_convergence_chart(data)
+        + _render_distribution(data)
+        + _render_findings_table(data)
+        + _render_fix_timeline(timeline)
+    )
+    return f"<section class=\"rp-panel\"><h2>Final report</h2>{body}</section>"
+
+
+def decision_log_entries_sentinel(report: DecisionLogEntry) -> list[DecisionLogEntry]:
+    """Placeholder for report-only rendering; see _render_replay_report_panel.
+
+    The timeline for the replay page is intentionally minimal (the full
+    report panel reuses the single-file renderers which need the log tail);
+    callers pass the report entry alone so the timeline section shows the
+    placeholder message instead of duplicating every round.
+    """
+    return [report]
+
+
 __all__ = [
+    "MAX_REPLAY_DIFF_LINES",
+    "MAX_REPLAY_FINDINGS",
     "MAX_TIMELINE_ENTRIES",
+    "REPLAY_ENTRY_TYPES",
+    "REPLAY_TAG_COLORS",
     "SEVERITY_COLORS",
     "TIMELINE_TYPES",
     "build_html_report",
+    "build_replay_page",
 ]

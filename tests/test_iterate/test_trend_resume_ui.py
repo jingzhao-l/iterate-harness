@@ -228,7 +228,40 @@ async def test_iterate_log_trend_alias(tmp_path):
 async def test_iterate_resume_without_history_is_friendly(tmp_path):
     result = await iterate_command_handler("resume", make_context(tmp_path))
     assert result.submit_prompt is None
-    assert "No finished iterate run to resume" in (result.message or "")
+    assert "No iterate run to resume" in (result.message or "")
+
+
+@pytest.mark.asyncio
+async def test_iterate_resume_interrupted_uses_checkpoint(tmp_path):
+    from iterate_harness.iterate.checkpoint import save_checkpoint
+
+    append_entry(
+        tmp_path,
+        make_entry(
+            entry_type="review_result",
+            round_number=1,
+            data={"findings": [finding()]},
+        ),
+    )
+    save_checkpoint(
+        tmp_path,
+        round=2,
+        new_findings=0,
+        total_findings=1,
+        per_dimension={"security": 1},
+        converged=False,
+        input_tokens=500,
+        output_tokens=1500,
+        cost_usd=0.03,
+        mode="dry-run",
+    )
+
+    result = await iterate_command_handler("resume", make_context(tmp_path))
+    assert result.submit_prompt is not None
+    assert "Resume the interrupted iterate run" in result.submit_prompt
+    assert "per-dimension breakdown" in result.submit_prompt
+    assert "Resuming interrupted iterate run" in (result.message or "")
+    assert "last converged checkpoint at round 2" in (result.message or "")
 
 
 @pytest.mark.asyncio

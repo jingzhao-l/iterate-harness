@@ -42,6 +42,18 @@ class IterateSettings(BaseModel):
     # Per-MTok USD price overrides keyed by model name (falls back to the
     # built-in table in iterate.cost).
     price_overrides: dict[str, tuple[float, float]] = Field(default_factory=dict)
+    # Whole-run monetary budget (USD): the engine-level loop policy hard-stops
+    # once the accumulated cost exceeds it. ``None`` disables the cap.
+    budget_usd: float | None = None
+    # Turn-level rate cap (requests per minute) for long-running loops.
+    # ``None`` disables throttling.
+    max_turns_per_minute: int | None = None
+    # Session workspace isolation (design §11.3.2 finding #7): when True and a
+    # normal-mode iterate loop is active, the engine swaps the loop's working
+    # directory to a dedicated ``iterate/round-N`` git worktree so concurrent
+    # sessions never write the same files. Fixes are merged back on a
+    # successful stop and dropped on an abnormal one (auto-rollback).
+    worktree_isolation: bool = False
     # Personalization data directory override (default ~/.iterate-harness/iterate).
     data_dir: str | None = None
 

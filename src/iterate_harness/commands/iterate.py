@@ -300,11 +300,20 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
         summary = summarize_last_run(cwd)
         if summary is None:
             return _result(
-                message="No finished iterate run to resume (.iterate/decision-log.jsonl has no report entry)."
+                message="No iterate run to resume (.iterate/decision-log.jsonl has no report entry and no checkpoint)."
             )
         effective = config_loader.load_effective_config(cwd)
         rounds = _resolve_rounds(cwd)
         kickoff = prompts.resume_kickoff(effective.config.goal, rounds, summary)
+        if summary.get("interrupted"):
+            return _result(
+                message=(
+                    f"Resuming interrupted iterate run ({summary['mode']}, last converged "
+                    f"checkpoint at round {summary['rounds']}, {summary['totalFindings']} "
+                    f"finding(s)) — continuing from last successful convergence point…"
+                ),
+                submit_prompt=kickoff,
+            )
         return _result(
             message=(
                 f"Resuming last iterate run ({summary['mode']}, stopped at round "
@@ -337,6 +346,38 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
         if report_entry is None:
             return _result(
                 message="No report entry in the decision log yet (run /iterate review or /iterate run first)."
+            )
+        if "--serve" in rest:
+            from iterate_harness.iterate import html_report as html_mod
+            from iterate_harness.iterate import report_server
+
+            target = Path(cwd) / ".iterate"
+            target.mkdir(parents=True, exist_ok=True)
+            report_page = html_mod.build_html_report(entries)
+            replay_page = html_mod.build_replay_page(entries)
+            written: list[str] = []
+            if report_page is not None:
+                report_path = target / "report.html"
+                report_path.write_text(report_page, encoding="utf-8")
+                written.append(str(report_path))
+            if replay_page is not None:
+                replay_path = target / "replay.html"
+                replay_path.write_text(replay_page, encoding="utf-8")
+                written.append(str(replay_path))
+            if not written:
+                return _result(message="No report or log entries to serve.")
+            report_server.serve_report(
+                target,
+                port=report_server.DEFAULT_PORT,
+                oneshot=False,
+                open_browser=True,
+            )
+            return _result(
+                message=(
+                    "Serving report from a local HTTP server — this blocks the "
+                    "session. Open the URLs printed above, then press Ctrl+C to "
+                    "return. Files written:\n- " + "\n- ".join(written)
+                )
             )
         if "--html" in rest:
             from iterate_harness.iterate import html_report as html_mod
@@ -432,7 +473,9 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             "- resume: continue the last finished run from its decision log\n"
             "- log [n]: tail the decision log (or `log trend`)\n"
             "- trend: cross-run finding trend (new/fixed/stubborn)\n"
-            "- report: render the final report from the decision log\n"
+            "- report [--html|--serve]: render the final report from the decision log\n"
+            "  --html writes .iterate/report.html; --serve also writes .iterate/replay.html\n"
+            "  and starts a local HTTP server that opens in the browser\n"
             "- init [--write]: detect the stack and suggest an iterate.config.yaml\n"
             "- doctor: skill↔harness dimension-system consistency check\n"
             "- validate <command>: run a preconfigured validation command"

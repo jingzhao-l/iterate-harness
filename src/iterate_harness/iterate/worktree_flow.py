@@ -44,6 +44,38 @@ class WorktreeSession:
     worktree_path: Path
 
 
+def serialize_session(session: WorktreeSession) -> dict[str, str]:
+    """Serialize a session for durable storage (e.g. engine tool_metadata)."""
+    return {
+        "repo_path": str(session.repo_path),
+        "slug": session.slug,
+        "branch": session.branch,
+        "worktree_path": str(session.worktree_path),
+    }
+
+
+def deserialize_session(data: object) -> WorktreeSession | None:
+    """Rebuild a :class:`WorktreeSession` from :func:`serialize_session` output.
+
+    Returns ``None`` when the payload is malformed (missing fields / empty
+    slug) — callers treat that as "no active worktree session".
+    """
+    if not isinstance(data, dict):
+        return None
+    repo_path = data.get("repo_path")
+    slug = data.get("slug")
+    branch = data.get("branch")
+    worktree_path = data.get("worktree_path")
+    if not all(isinstance(v, str) and v for v in (repo_path, slug, branch, worktree_path)):
+        return None
+    return WorktreeSession(
+        repo_path=Path(repo_path),
+        slug=slug,
+        branch=branch,
+        worktree_path=Path(worktree_path),
+    )
+
+
 async def _git(args: list[str], cwd: Path) -> str:
     """Run one git command; raise :class:`WorktreeFlowError` on failure."""
     proc = await asyncio.create_subprocess_exec(

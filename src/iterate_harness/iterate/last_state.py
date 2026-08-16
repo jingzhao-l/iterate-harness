@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .checkpoint import load_checkpoint
 from .decision_log import DecisionLogEntry, read_entries
 
 #: How many finding summaries to preview in the resume panel.
@@ -22,15 +23,29 @@ _SEVERITY_KEYS = ("critical", "high", "medium", "low")
 
 
 def summarize_last_run(project_root: str) -> dict[str, Any] | None:
-    """Summarize the last finished iterate run; ``None`` when no history."""
+    """Summarize the last iterate run; ``None`` when no history.
+
+    Prefers a final ``report`` entry (finished run). When the run was
+    interrupted/failed before a report landed, falls back to the persisted
+    convergence checkpoint so ``/iterate resume`` can continue from the
+    last successful convergence point.
+    """
     entries = read_entries(project_root)
-    if not entries:
+    if not entries and load_checkpoint(project_root) is None:
         return None
 
     report = _last_entry(entries, "report")
-    if report is None:
-        return None
+    if report is not None:
+        return _summarize_report(entries, report)
 
+    checkpoint = load_checkpoint(project_root)
+    if checkpoint is not None:
+        return _summarize_checkpoint(entries, checkpoint)
+
+    return None
+
+
+def _summarize_report(entries: list[DecisionLogEntry], report: DecisionLogEntry) -> dict[str, Any]:
     severity_counts = {key: 0 for key in _SEVERITY_KEYS}
     findings = _findings_of(report)
     for finding in findings:
@@ -58,6 +73,54 @@ def summarize_last_run(project_root: str) -> dict[str, Any] | None:
         ],
         "lastIntervention": intervention,
         "entryCount": len(entries),
+    }
+
+
+def _summarize_checkpoint(
+    entries: list[DecisionLogEntry], checkpoint: dict[str, Any]
+) -> dict[str, Any]:
+    """Build an "interrupted" summary from the persisted checkpoint."""
+    per_dimension = checkpoint.get("per_dimension")
+    if not isinstance(per_dimension, dict):
+        per_dimension = {}
+    severity_counts = {key: 0 for key in _SEVERITY_KEYS}
+    # Preview the most recent review_result findings when available so the
+    # resume panel still shows concrete findings for an interrupted run.
+    preview: list[dict[str, Any]] = []
+    for entry in reversed(entries):
+        if entry.type != "review_result":
+            continue
+        findings = _findings_of(entry)
+        for finding in findings:
+            severity = str(finding.get("severity") or "?")
+            if severity in severity_counts:
+                severity_counts[severity] += 1
+            preview.append(
+                {
+                    "severity": severity,
+                    "file": str(finding.get("file") or "?"),
+                    "dimension": str(finding.get("dimension") or "?"),
+                    "summary": str(finding.get("summary") or "")[:120],
+                }
+            )
+            if len(preview) >= MAX_PREVIEW_FINDINGS:
+                break
+        if len(preview) >= MAX_PREVIEW_FINDINGS:
+            break
+    return {
+        "timestamp": str(checkpoint.get("timestamp") or ""),
+        "mode": str(checkpoint.get("mode") or "dry-run"),
+        "verdict": "interrupted",
+        "rounds": int(checkpoint.get("round") or 0),
+        "totalFindings": int(checkpoint.get("total_findings") or 0),
+        "severity": severity_counts,
+        "perDimension": {
+            str(key): int(value) for key, value in per_dimension.items()
+        },
+        "preview": preview,
+        "lastIntervention": _last_intervention(entries),
+        "entryCount": len(entries),
+        "interrupted": True,
     }
 
 

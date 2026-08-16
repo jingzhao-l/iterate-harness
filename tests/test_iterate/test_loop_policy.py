@@ -207,6 +207,136 @@ class TestCostMeter:
         assert "deepseek-chat" in summary
 
 
+class TestUsdBudget:
+    """v1.35: whole-run monetary budget hard-stop (``budget_usd``)."""
+
+    def test_usd_budget_within_limit_does_not_stop(self):
+        policy = IterateLoopPolicy(
+            max_review_rounds=3, budget_usd=10.0, price_overrides={"m1": (0.5, 1.0)}
+        )
+        # 1M in @ $0.5 + 1M out @ $1.0 = $1.5 — under the $10 cap.
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=1_000_000, output_tokens=1_000_000),
+            "m1",
+        )
+        assert decision.stop_reason is None
+
+    def test_usd_budget_exceeded_stops(self):
+        policy = IterateLoopPolicy(
+            max_review_rounds=3, budget_usd=10.0, price_overrides={"m1": (10.0, 20.0)}
+        )
+        # 1M in @ $10 + 1M out @ $20 = $30 > $10 → hard stop with closing notice.
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=1_000_000, output_tokens=1_000_000),
+            "m1",
+        )
+        assert decision.stop_reason is not None
+        assert "monetary budget exhausted" in decision.stop_reason
+        assert decision.inject_message is not None
+
+    def test_usd_budget_accumulates_across_turns(self):
+        policy = IterateLoopPolicy(
+            max_review_rounds=3, budget_usd=1.5, price_overrides={"m1": (2.0, 0.0)}
+        )
+        first = state(rounds_seen=1, findings_by_round=[3])
+        second = state(rounds_seen=2, findings_by_round=[2])
+        first_decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: first},
+            UsageSnapshot(input_tokens=500_000, output_tokens=0),
+            "m1",
+        )
+        assert first_decision.stop_reason is None
+        # Second turn pushes total to $2.0 > $1.5 → stop.
+        second_decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: second},
+            UsageSnapshot(input_tokens=500_000, output_tokens=0),
+            "m1",
+        )
+        assert second_decision.stop_reason is not None
+        assert "monetary budget exhausted" in second_decision.stop_reason
+
+    def test_usd_budget_exact_boundary_does_not_stop(self):
+        policy = IterateLoopPolicy(
+            max_review_rounds=3, budget_usd=1.0, price_overrides={"m1": (2.0, 0.0)}
+        )
+        # 0.5M * $2 = $1.0 — exactly at the cap (not over) → no stop.
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=500_000, output_tokens=0),
+            "m1",
+        )
+        assert decision.stop_reason is None
+
+    def test_usd_budget_none_disables_cap(self):
+        policy = IterateLoopPolicy(
+            max_review_rounds=3, budget_usd=None, price_overrides={"m1": (100.0, 100.0)}
+        )
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=1_000_000, output_tokens=1_000_000),
+            "m1",
+        )
+        assert decision.stop_reason is None
+
+    def test_token_and_usd_budget_combined_reason(self):
+        policy = IterateLoopPolicy(
+            max_review_rounds=3,
+            total_token_budget=100,
+            budget_usd=0.01,
+            price_overrides={"m1": (10.0, 0.0)},
+        )
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=1_000_000, output_tokens=1_000_000),
+            "m1",
+        )
+        assert decision.stop_reason is not None
+        assert "token budget exhausted" in decision.stop_reason
+        assert "monetary budget exhausted" in decision.stop_reason
+
+
+class TestRateLimiting:
+    """v1.35: ``max_turns_per_minute`` throttling via ``before_request``."""
+
+    def test_no_cap_returns_zero_and_records_nothing(self):
+        policy = IterateLoopPolicy(max_review_rounds=3)
+        assert policy.before_request(now=1000.0) == 0.0
+        assert policy._turn_timestamps == []
+
+    def test_requests_within_cap_return_zero(self):
+        policy = IterateLoopPolicy(max_review_rounds=3, max_turns_per_minute=3)
+        assert policy.before_request(now=1000.0) == 0.0
+        assert policy.before_request(now=1001.0) == 0.0
+        assert policy.before_request(now=1002.0) == 0.0
+        assert len(policy._turn_timestamps) == 3
+
+    def test_requests_over_cap_return_delay_and_defer_timestamp(self):
+        policy = IterateLoopPolicy(max_review_rounds=3, max_turns_per_minute=2)
+        policy.before_request(now=1000.0)
+        policy.before_request(now=1001.0)
+        delay = policy.before_request(now=1002.0)
+        # Oldest in-window turn (t=1000) falls out at t=1060 → wait 58s.
+        assert delay > 0
+        assert abs(delay - 58.0) < 1e-9
+        # The throttled request is recorded at its deferred issue time.
+        assert policy._turn_timestamps[-1] == 1002.0 + delay
+
+    def test_old_turns_fall_out_of_window(self):
+        policy = IterateLoopPolicy(max_review_rounds=3, max_turns_per_minute=1)
+        policy.before_request(now=0.0)
+        # 61s later the only recorded turn is out of the window → no delay.
+        assert policy.before_request(now=61.0) == 0.0
+
+    def test_rate_limit_engaged_flag(self):
+        policy = IterateLoopPolicy(max_review_rounds=3, max_turns_per_minute=1)
+        assert policy.rate_limit_engaged(now=0.0) is False
+        policy.before_request(now=0.0)
+        assert policy.rate_limit_engaged(now=1.0) is True
+        assert policy.rate_limit_engaged(now=61.0) is False
+
+
 class TestDimensionCostUsd:
     """v1.3-c: reviewer-reported dimension tokens → estimated USD."""
 

@@ -1314,6 +1314,19 @@ def iterate_report(
         "--html",
         help="Write a self-contained single-file HTML report (path or '-' for default .iterate/report.html)",
     ),
+    serve: bool = typer.Option(
+        False,
+        "--serve",
+        help="Serve the HTML report + replay page on a local HTTP server (opens the browser)",
+    ),
+    serve_port: int = typer.Option(
+        0, "--serve-port", help="Port for --serve (default: OS-assigned ephemeral port)"
+    ),
+    persist: bool = typer.Option(
+        False,
+        "--serve-persist",
+        help="Keep the --serve server running until Ctrl+C (default: stop after one request)",
+    ),
     fail_on: str = typer.Option(
         "high",
         "--fail-on",
@@ -1324,8 +1337,16 @@ def iterate_report(
 
     Exit code is 1 when any finding is at or above --fail-on severity;
     a missing or malformed report degrades to an empty report (exit 0).
+    Use --html --serve to view the report + round-replay in a browser.
     """
-    from iterate_harness.iterate import ci_report, html_report, pr_comment
+    # Normalize typer OptionInfo defaults so direct Python calls (tests /
+    # embedding) behave like the CLI: OptionInfo is always truthy, which
+    # would otherwise make every boolean flag evaluate True.
+    serve = _typer_flag(serve)
+    persist = _typer_flag(persist)
+    serve_port = _typer_int(serve_port)
+
+    from iterate_harness.iterate import ci_report, html_report, pr_comment, report_server
     from iterate_harness.iterate import decision_log as iter_log
 
     threshold = fail_on.strip().lower()
@@ -1346,6 +1367,14 @@ def iterate_report(
 
     if html_out:
         _write_html_report(html_report, entries, html_out)
+        if serve:
+            _write_html_replay(html_report, entries)
+            report_server.serve_report(
+                Path.cwd() / ".iterate",
+                port=serve_port,
+                oneshot=not persist,
+                open_browser=True,
+            )
 
     if github:
         print(ci_report.render_github(summary))
@@ -1362,6 +1391,32 @@ def iterate_report(
     raise typer.Exit(exit_code)
 
 
+def _typer_flag(value: object) -> bool:
+    """Normalize a typer OptionInfo default to a plain bool.
+
+    ``typer.Option(False)`` passes an ``OptionInfo`` object rather than
+    ``False`` when the function is called directly (not through the CLI
+    parser).  This helper strips the wrapper so that direct calls behave
+    identically to CLI invocation.
+    """
+    # OptionInfo is always truthy, so check for the type explicitly.
+    from typer.models import OptionInfo
+
+    if isinstance(value, OptionInfo):
+        return bool(value.default)
+    return bool(value)
+
+
+def _typer_int(value: object) -> int:
+    """Normalize a typer OptionInfo default to a plain int."""
+    from typer.models import OptionInfo
+
+    if isinstance(value, OptionInfo):
+        v = value.default
+        return int(v) if v is not None else 0
+    return int(value) if value is not None else 0
+
+
 def _write_html_report(html_report: object, entries: list, html_out: str) -> None:
     """Render and write the single-file HTML report for this project."""
     page = html_report.build_html_report(entries)
@@ -1372,6 +1427,18 @@ def _write_html_report(html_report: object, entries: list, html_out: str) -> Non
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(page, encoding="utf-8")
     print(f"HTML report written: {target}")
+
+
+def _write_html_replay(html_report: object, entries: list) -> None:
+    """Render and write the interactive round-replay page (--serve companion)."""
+    page = html_report.build_replay_page(entries)
+    if page is None:
+        print("No decision-log entries to replay.", file=sys.stderr)
+        return
+    target = Path.cwd() / ".iterate" / "replay.html"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(page, encoding="utf-8")
+    print(f"Replay page written: {target}")
 
 
 # ---- plugin subcommands ----
