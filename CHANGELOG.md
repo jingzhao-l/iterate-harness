@@ -6,6 +6,15 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-08-16
+
+Distribution-only patch for the npm wrapper. Found during the 1.9.0 release e2e: on hosts where Python's TLS trust store is broken (typical for macOS python.org installs that never ran `Install Certificates.command`), `pip install <github tarball>` fails certificate verification while every other tool on the machine (curl, Node, browsers) downloads the same URL fine — the wrapper dead-ended with guidance text.
+
+### Fixed
+
+- **Tarball download fallback** (`npm/iterate-harness`): when the pinned GitHub release tarball cannot be pip-installed, the wrapper now retries by downloading the tarball with Node's own https stack (redirect-following, 120s timeout, partial-file cleanup) into `~/.iterate-harness-npm/cache/` and pip-installing the local file. Non-http targets (local path / `ITERATE_HARNESS_INSTALL_URL` overrides) keep the old single-attempt behavior; when both attempts fail, the error carries the original pip diagnosis plus the fallback failure reason.
+- **Entry points**: `ih` / `iterate-harness` bin shims now handle the async bootstrap (failures still exit 1 with the same actionable message, never a raw stack trace or unhandled rejection).
+
 ## [1.9.0] - 2026-08-16
 
 Closes the v1.24 leftover: the 9-category personalize wizard is now fully usable inside the TUI — no terminal hop required. `/iterate personalize` opens a directional-key menu flow over the same channels the Esc intervention menu uses (select modal + question modal); headless sessions keep the summary + CLI pointer.
