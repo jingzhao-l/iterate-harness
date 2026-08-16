@@ -6,6 +6,19 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-16
+
+Closes the v1.24 leftover: the 9-category personalize wizard is now fully usable inside the TUI — no terminal hop required. `/iterate personalize` opens a directional-key menu flow over the same channels the Esc intervention menu uses (select modal + question modal); headless sessions keep the summary + CLI pointer.
+
+### Added
+
+- **Directional-key personalize wizard** (`iterate_harness.iterate.personalize_tui`): `/iterate personalize` now runs an interactive 9-category wizard in the TUI. Main menu lists every category with live entry counts plus Save&finish / Cancel; each category editor supports add (text via the question modal) and per-entry removal; `known_intentional` collects file → dimension (select over the canonical 9) → line (invalid → 0) → reason; `dimension_focus` pairs the dimension select with a focus prompt; `fix_priority_order` reorders via move-to-front (any permutation reachable) plus reset-to-default; `extra_validation_commands` keeps the strict whitelist validation with the rejection reason surfaced in the re-prompt. A final confirm gate offers save / keep-editing / discard. The save chain is byte-identical to the CLI wizard (`save_personalization_to_config` + `update_iterate_md_user_section`); wizard mutations happen on a deep copy, so cancel discards cleanly.
+- **`QueryEngine.ask_user_select_channel` / `ask_user_prompt_channel`**: read-only properties exposing the interactive channels to slash commands (both `None` in headless runs).
+
+### Changed
+
+- `/iterate personalize` without interactive channels (headless) still shows the personalization summary and points at `ih iterate personalize`; nothing changes for CLI users.
+
 ## [1.8.0] - 2026-08-15
 
 Closes the last v1.22 v2 candidate: the skill↔harness dimension-system consistency check. The 9 review dimensions are defined in six places across the two repositories (canonical yaml, JSON-schema enum, skill wizard constants, harness `ALL_DIMENSIONS`, harness default config, and every project's config references) — any of them can drift during a rename. This release bundles the canonical definitions inside the harness and ships a `doctor` command that answers "are my dimensions consistent?" in one shot, plus a six-source lock test in the skill repository that fails CI on drift.

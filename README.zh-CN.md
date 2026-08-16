@@ -26,7 +26,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-1.8.0-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.9.0-brightgreen" alt="Version">
 </p>
 
 ---
@@ -44,6 +44,7 @@ ih
 
 # REPL 内
 /iterate review        # dry-run：只读多轮评审，直到收敛
+/iterate personalize   # 方向键 9 类个性化向导（选择弹窗 + 输入弹窗，无需切终端）
 ```
 
 也可以走 CLI：
@@ -111,7 +112,7 @@ OpenAI 兼容供应商，见 `ih --help`）。
 | **定时评审时区** | `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` 按本地时区解释 cron（存储为 UTC 标准化时间），"每天 9 点"就是你所在地的 9 点 |
 | **检测式 init** | `ih iterate init` 探测项目标记文件（package.json / pyproject / go.mod / Cargo.toml / …），基于真实证据推断测试命令，推荐评审维度（前端依赖解锁 `frontend-backend` / `ui-ux`），预览 yaml 并确认后才写入；TUI 内 `/iterate init` 同效 |
 | **模型驱动 onboarding** | `ih iterate onboard` 串联凭证门禁 → 检测证据 → 模型扫描 → `ITERATE.md` 知识库（AI/用户分区标记）+ manifest 指纹；`refresh` 重采指纹、`reonboard` 保留手写区重扫；每次 kickoff 注入知识库并检测漂移——产物与 skill 生态字节兼容。TUI onboard 的指纹会在下一次 review/run 自动补录，无需手动 `refresh` |
-| **个性化向导** | `ih iterate personalize` 走完 skill 同款 9 类（禁区、风险区、已知意图、维度定制、修复优先级、禁止修复方式、注意点、代码约定、补充验证命令）：结构化规则写入 `iterate.config.yaml`（禁区同时由内核权限层强制拦截），自由文本写入 `ITERATE.md` 用户区，每次 kickoff 附带约束；补充命令先过严格白名单再合并进 `validation.commands` |
+| **个性化向导** | `ih iterate personalize` 走完 skill 同款 9 类（禁区、风险区、已知意图、维度定制、修复优先级、禁止修复方式、注意点、代码约定、补充验证命令）：结构化规则写入 `iterate.config.yaml`（禁区同时由内核权限层强制拦截），自由文本写入 `ITERATE.md` 用户区，每次 kickoff 附带约束；补充命令先过严格白名单再合并进 `validation.commands`。TUI 内 `/iterate personalize` 以方向键菜单流跑同一向导（分类菜单带实时条目数 → 增删 → 保存/继续编辑/放弃）；无头会话保留摘要 + CLI 指引 |
 | **pre-commit 钩子** | `ih iterate hook install` 写入带标记的托管 `.git/hooks/pre-commit`：提交前跑 1 轮 changed-only 评审并按 `--fail-on` 严重度门禁；拒绝覆盖第三方钩子，可用 `ITERATE_SKIP_HOOK=1` / `--no-verify` 跳过 |
 | **维度 doctor** | `ih iterate doctor` 一条命令检查整个维度体系：内置 canonical 定义 vs harness 内部常量 vs 你的 `iterate.config.yaml`（未知维度键、惰性的资源/门禁条目、超出启用集的个性化引用）；发现漂移退出码 1，可直接做 CI 门禁 |
 | **决策日志** | append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘 |

@@ -4,8 +4,9 @@ Subcommands:
 - ``/iterate`` or ``/iterate status`` — effective config + decision-log summary
 - ``/iterate onboard [goal]`` — model-driven project scan that writes ITERATE.md
   (fingerprints auto-recorded on the next review/run, or via ``ih iterate refresh``)
-- ``/iterate personalize`` — show personalization state; run ``ih iterate
-  personalize`` in a terminal for the interactive 9-category wizard
+- ``/iterate personalize`` — directional-key 9-category personalization wizard
+  (falls back to a summary + ``ih iterate personalize`` pointer when no
+  interactive channel is available)
 - ``/iterate review [--changed] [--ref <ref>]`` — kick off the canonical dry-run loop
 - ``/iterate run [--changed] [--ref <ref>]`` — kick off the canonical normal-mode autonomous loop
 - ``/iterate resume`` — continue the last finished run from its decision log
@@ -59,6 +60,49 @@ def _result(**kwargs: object):
     from iterate_harness.commands.registry import CommandResult
 
     return CommandResult(**kwargs)  # type: ignore[arg-type]
+
+
+async def _handle_personalize(cwd: str, ctx: CommandContext) -> CommandResult:
+    """``/iterate personalize`` — directional-key wizard when interactive channels
+    are available, summary + CLI pointer otherwise."""
+    from iterate_harness.iterate import onboarding as onboarding_mod
+    from iterate_harness.iterate import personalize_cmd, personalize_tui
+
+    if not onboarding_mod.is_onboarded(cwd):
+        return _result(
+            message="Not onboarded yet — run `/iterate onboard` (or `ih iterate onboard`) first."
+        )
+
+    ask_select = getattr(ctx.engine, "ask_user_select_channel", None)
+    ask_prompt = getattr(ctx.engine, "ask_user_prompt_channel", None)
+    if ask_select is None or ask_prompt is None:
+        existing = personalize_cmd.load_existing_personalization(Path(cwd))
+        return _result(
+            message=(
+                "Current personalization:\n- "
+                + "\n- ".join(personalize_tui.summarize_changes(existing).splitlines())
+                + "\n\nThe interactive 9-category wizard runs in a terminal:\n"
+                "  ih iterate personalize"
+            )
+        )
+
+    existing = personalize_cmd.load_existing_personalization(Path(cwd))
+    data = await personalize_tui.run_tui_personalize(
+        existing, ask_select=ask_select, ask_prompt=ask_prompt
+    )
+    if data is None:
+        return _result(message="Personalization cancelled — nothing written.")
+
+    try:
+        config_path = personalize_cmd.save_personalization_to_config(Path(cwd), data)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        return _result(message=f"Save failed: {exc}")
+    md_updated = personalize_cmd.update_iterate_md_user_section(Path(cwd), data)
+    message = "Personalization saved!\n" + personalize_tui.summarize_changes(data)
+    message += f"\n  - updated: {config_path}"
+    if md_updated:
+        message += f"\n  - updated: {Path(cwd) / onboarding_mod.ITERATE_MD_FILENAME} (user-owned region)"
+    return _result(message=message)
 
 
 def _resolve_rounds(cwd: str) -> int:
@@ -192,35 +236,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
         )
 
     if sub == "personalize":
-        from iterate_harness.iterate import onboarding as onboarding_mod
-        from iterate_harness.iterate import personalize_cmd
-
-        if not onboarding_mod.is_onboarded(cwd):
-            return _result(
-                message="Not onboarded yet — run `/iterate onboard` (or `ih iterate onboard`) first."
-            )
-        existing = personalize_cmd.load_existing_personalization(Path(cwd))
-        counts = (
-            f"protected paths: {len(existing.protected_paths)}",
-            f"risk areas: {len(existing.risk_areas)}",
-            f"known intentional: {len(existing.known_intentional)}",
-            f"dimension focus: {len(existing.dimension_focus)}",
-            f"fix priority order: {len(existing.fix_priority_order)}",
-            f"forbidden fixes: {len(existing.forbidden_fixes)}",
-            f"iterate notes: {len(existing.iterate_notes)}",
-            f"code conventions: {len(existing.code_conventions)}",
-            f"extra validation commands: {sum(len(c) for c in existing.extra_validation_commands.values())}",
-        )
-        return _result(
-            message=(
-                "Current personalization:\n- "
-                + "\n- ".join(counts)
-                + "\n\nThe interactive 9-category wizard runs in a terminal:\n"
-                "  ih iterate personalize\n"
-                "Structured rules are written to iterate.config.yaml, free-text notes "
-                "to the ITERATE.md user-owned region."
-            )
-        )
+        return await _handle_personalize(cwd, context)
 
     if sub == "review":
         effective = config_loader.load_effective_config(cwd)
@@ -409,7 +425,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|report|init|doctor|validate]\n"
             "- status|config: effective config summary\n"
             "- onboard [goal]: model-driven project scan that writes ITERATE.md\n"
-            "- personalize: show personalization state (wizard: `ih iterate personalize`)\n"
+            "- personalize: directional-key 9-category wizard (or terminal: `ih iterate personalize`)\n"
             "- review [--changed] [--ref <ref>]: dry-run pure review (read-only, convergence-enforced);\n"
             "  --changed pins the loop to files changed vs <ref> (default HEAD)\n"
             "- run [--changed] [--ref <ref>]: autonomous review-fix-validate loop (same flags)\n"

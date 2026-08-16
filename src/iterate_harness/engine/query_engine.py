@@ -132,6 +132,16 @@ class QueryEngine:
         return self._iterate_policy
 
     @property
+    def ask_user_select_channel(self) -> AskUserSelect | None:
+        """Return the interactive select channel (``None`` when headless)."""
+        return self._ask_user_select
+
+    @property
+    def ask_user_prompt_channel(self) -> AskUserPrompt | None:
+        """Return the free-text question channel (``None`` when headless)."""
+        return self._ask_user_prompt
+
+    @property
     def total_usage(self):
         """Return the total usage across all turns."""
         return self._cost_tracker.total

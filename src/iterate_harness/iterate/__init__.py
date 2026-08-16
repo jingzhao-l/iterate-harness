@@ -14,6 +14,7 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
 - :mod:`.personalization` — 9-category per-project personalization
 - :mod:`.onboarding` / :mod:`.onboard_cmd` — ITERATE.md knowledge base + fingerprints
 - :mod:`.personalize_cmd` — skill-parity 9-category personalize wizard
+- :mod:`.personalize_tui` — directional-key personalize wizard for the TUI
 - :mod:`.dimension_check` — skill↔harness dimension-system consistency doctor
 - :mod:`.prompts` — canonical workflow prompt templates
 - :mod:`.trend_store` — finding fingerprint trend library (new/fixed/stubborn)
@@ -48,6 +49,10 @@ _EXPORTS: dict[str, str] = {
     "log_path": ".decision_log",
     "make_entry": ".decision_log",
     "read_entries": ".decision_log",
+    # personalize_tui
+    "project_root_guard": ".personalize_tui",
+    "run_tui_personalize": ".personalize_tui",
+    "summarize_changes": ".personalize_tui",
     # dimension_check
     "DimensionDoctorReport": ".dimension_check",
     "load_canonical_dimensions": ".dimension_check",
@@ -170,6 +175,7 @@ __all__ = [
     "post_pr_comment",
     "price_for",
     "project_config",
+    "project_root_guard",
     "read_entries",
     "record_run",
     "render_doctor_report",
@@ -180,9 +186,11 @@ __all__ = [
     "reviewer_task_prompt",
     "run_command",
     "run_dimension_doctor",
+    "run_tui_personalize",
     "run_validation",
     "sort_findings",
     "summarize",
+    "summarize_changes",
     "validate_config",
 ]
 
