@@ -1,0 +1,38 @@
+{
+  "name": "iterate-harness",
+  "version": "1.9.1",
+  "description": "npm distribution wrapper for iterate-harness — installs the Python harness (ih CLI) into a managed venv on first run and exposes it as a global command",
+  "license": "MIT",
+  "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jingzhao-l/iterate-harness.git"
+  },
+  "homepage": "https://github.com/jingzhao-l/iterate-harness#readme",
+  "bugs": {
+    "url": "https://github.com/jingzhao-l/iterate-harness/issues"
+  },
+  "bin": {
+    "ih": "bin/ih.js",
+    "iterate-harness": "bin/iterate-harness.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "iterate",
+    "code-review",
+    "agent-harness",
+    "cli",
+    "installer"
+  ],
+  "scripts": {
+    "test": "node --test test/bootstrap.test.js"
+  }
+}

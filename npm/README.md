@@ -1,0 +1,77 @@
+# iterate-harness (npm distribution wrapper)
+
+npm one-liner install for [iterate-harness](https://github.com/jingzhao-l/iterate-harness) —
+the dedicated agent harness for the iterate review/fix loop (`ih` CLI, React TUI,
+six `iterate_*` tools, engine-enforced convergence).
+
+```bash
+npm install -g iterate-harness
+ih --version        # first run bootstraps the Python side, then prints the version
+```
+
+## What this package is (and is not)
+
+The harness itself is a **Python package**. This npm package is a thin
+distribution wrapper: it does not re-implement anything, it just makes `ih`
+installable with npm and keeps it up to date.
+
+On first run the wrapper:
+
+1. Finds a Python interpreter >= 3.10 (`py -3` / `python` / `python3`,
+   overridable via `ITERATE_HARNESS_PYTHON`).
+2. Creates a managed virtualenv at `~/.iterate-harness-npm/venv`
+   (overridable via `ITERATE_HARNESS_NPM_HOME`).
+3. `pip install`s the harness **release tarball pinned to this npm package's
+   version** — npm `1.6.0` always installs harness `v1.6.0`. Upgrading the npm
+   package automatically re-installs the matching harness version on the next
+   run.
+4. Delegates to the venv's real `ih` executable with argv, stdio, signals and
+   exit codes forwarded.
+
+The React TUI's frontend dependencies (`node_modules`) are installed
+automatically by the harness itself on first TUI launch — npm users always
+have Node, so the TUI always works.
+
+## Requirements
+
+- Node.js >= 16 (you have it — you installed this via npm)
+- Python >= 3.10 (`ITERATE_HARNESS_PYTHON=/path/to/python3.12` to override)
+- Network access to registry.npmjs.org (done), pypi.org and github.com (for
+  the one-time pip install)
+
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `ITERATE_HARNESS_PYTHON` | Use this interpreter instead of auto-detection |
+| `ITERATE_HARNESS_NPM_HOME` | Runtime dir (default `~/.iterate-harness-npm`) |
+| `ITERATE_HARNESS_INSTALL_URL` | Install from this pip URL instead of the pinned release tarball (e.g. a git branch for testing) |
+| `ITERATE_HARNESS_SKIP_INSTALL=1` | Skip bootstrap entirely; just run the already-installed `ih` |
+
+## npx (no global install)
+
+```bash
+npx -y iterate-harness iterate review --changed
+```
+
+## Uninstall
+
+```bash
+npm uninstall -g iterate-harness
+rm -rf ~/.iterate-harness-npm   # the managed venv
+```
+
+## Versioning
+
+This package's version is kept in lockstep with the harness: wrapper `x.y.z`
+installs harness tag `vx.y.z`. The wrapper is maintained in the
+[iterate-skill monorepo](https://github.com/jingzhao-l/iterate-skill) at
+`harness/iterate-harness/npm/`, synced to the
+[iterate-harness release repo](https://github.com/jingzhao-l/iterate-harness)
+via `git subtree` and published to npm from there.
+
+## License
+
+MIT — same as the harness. The agent kernel originates from
+[OpenHarness](https://github.com/HKUDS/OpenHarness); the iterate semantic layer
+originates from [iterate-skill](https://github.com/jingzhao-l/iterate-skill).

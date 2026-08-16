@@ -12,7 +12,7 @@ Distribution-only patch for the npm wrapper. Found during the 1.9.0 release e2e:
 
 ### Fixed
 
-- **Tarball download fallback** (`npm/iterate-harness`): when the pinned GitHub release tarball cannot be pip-installed, the wrapper now retries by downloading the tarball into `~/.iterate-harness-npm/cache/` and pip-installing the local file. The download itself is two-tiered: Node's own https stack first (redirect-following, 120s timeout), then `curl` (system trust store — survives intercepting proxies and Node's bundled-CA gaps; TLS verification stays ON in both tiers, partial files are cleaned up between attempts). Non-http targets (local path / `ITERATE_HARNESS_INSTALL_URL` overrides) keep the old single-attempt behavior; when everything fails, the error carries the original pip diagnosis plus every download-tier failure reason.
+- **Tarball download fallback** (`harness/iterate-harness/npm`): when the pinned GitHub release tarball cannot be pip-installed, the wrapper now retries by downloading the tarball into `~/.iterate-harness-npm/cache/` and pip-installing the local file. The download itself is two-tiered: Node's own https stack first (redirect-following, 120s timeout), then `curl` (system trust store — survives intercepting proxies and Node's bundled-CA gaps; TLS verification stays ON in both tiers, partial files are cleaned up between attempts). Non-http targets (local path / `ITERATE_HARNESS_INSTALL_URL` overrides) keep the old single-attempt behavior; when everything fails, the error carries the original pip diagnosis plus every download-tier failure reason.
 - **Entry points**: `ih` / `iterate-harness` bin shims now handle the async bootstrap (failures still exit 1 with the same actionable message, never a raw stack trace or unhandled rejection).
 
 ## [1.9.0] - 2026-08-16
@@ -75,7 +75,7 @@ Personalization parity with the skill: the full 9-category wizard, kernel-enforc
 
 ### Distribution
 
-- **npm distribution wrapper** (`iterate-harness` on npm, maintained at `npm/iterate-harness/` in the iterate-skill monorepo): `npm install -g iterate-harness` exposes `ih` everywhere npm works. The wrapper is a zero-dependency Node shim — first run resolves Python ≥ 3.10 (env override `ITERATE_HARNESS_PYTHON`), creates a managed venv (`~/.iterate-harness-npm`), pip-installs the release tarball **pinned to the npm package version** (lockstep: npm 1.6.0 → harness v1.6.0, npm upgrades self-heal on next run), then delegates to the real `ih` with argv/stdio/signals/exit-code passthrough. Requires network access to pypi.org + github.com for the one-time install; `ITERATE_HARNESS_SKIP_INSTALL=1` runs an existing install directly. 10 unit tests (`node --test`) cover the pure helpers.
+- **npm distribution wrapper** (`iterate-harness` on npm, maintained at `harness/iterate-harness/npm/` in the iterate-skill monorepo): `npm install -g iterate-harness` exposes `ih` everywhere npm works. The wrapper is a zero-dependency Node shim — first run resolves Python ≥ 3.10 (env override `ITERATE_HARNESS_PYTHON`), creates a managed venv (`~/.iterate-harness-npm`), pip-installs the release tarball **pinned to the npm package version** (lockstep: npm 1.6.0 → harness v1.6.0, npm upgrades self-heal on next run), then delegates to the real `ih` with argv/stdio/signals/exit-code passthrough. Requires network access to pypi.org + github.com for the one-time install; `ITERATE_HARNESS_SKIP_INSTALL=1` runs an existing install directly. 10 unit tests (`node --test`) cover the pure helpers.
 
 ### Changed
 
