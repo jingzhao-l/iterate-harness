@@ -12,7 +12,7 @@ Distribution-only patch for the npm wrapper. Found during the 1.9.0 release e2e:
 
 ### Fixed
 
-- **Tarball download fallback** (`npm/iterate-harness`): when the pinned GitHub release tarball cannot be pip-installed, the wrapper now retries by downloading the tarball with Node's own https stack (redirect-following, 120s timeout, partial-file cleanup) into `~/.iterate-harness-npm/cache/` and pip-installing the local file. Non-http targets (local path / `ITERATE_HARNESS_INSTALL_URL` overrides) keep the old single-attempt behavior; when both attempts fail, the error carries the original pip diagnosis plus the fallback failure reason.
+- **Tarball download fallback** (`npm/iterate-harness`): when the pinned GitHub release tarball cannot be pip-installed, the wrapper now retries by downloading the tarball into `~/.iterate-harness-npm/cache/` and pip-installing the local file. The download itself is two-tiered: Node's own https stack first (redirect-following, 120s timeout), then `curl` (system trust store — survives intercepting proxies and Node's bundled-CA gaps; TLS verification stays ON in both tiers, partial files are cleaned up between attempts). Non-http targets (local path / `ITERATE_HARNESS_INSTALL_URL` overrides) keep the old single-attempt behavior; when everything fails, the error carries the original pip diagnosis plus every download-tier failure reason.
 - **Entry points**: `ih` / `iterate-harness` bin shims now handle the async bootstrap (failures still exit 1 with the same actionable message, never a raw stack trace or unhandled rejection).
 
 ## [1.9.0] - 2026-08-16
