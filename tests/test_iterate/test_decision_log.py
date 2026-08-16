@@ -84,6 +84,45 @@ class TestCorruptionHandling:
         (log_dir / LOG_FILE).write_text('["a","list"]\n', encoding="utf-8")
         assert read_entries(tmp_path) == []
 
+    def test_non_numeric_round_is_skipped_not_fatal(self, tmp_path):
+        log_dir = tmp_path / LOG_DIR
+        log_dir.mkdir()
+        (log_dir / LOG_FILE).write_text(
+            json.dumps({"timestamp": "t", "round": "abc", "type": "decision", "data": {}})
+            + "\n"
+            + json.dumps({"timestamp": "t", "round": 2, "type": "validation", "data": {}})
+            + "\n",
+            encoding="utf-8",
+        )
+        entries = read_entries(tmp_path)
+        assert len(entries) == 1
+        assert entries[0].round == 2
+
+    def test_non_mapping_data_is_skipped_not_fatal(self, tmp_path):
+        log_dir = tmp_path / LOG_DIR
+        log_dir.mkdir()
+        (log_dir / LOG_FILE).write_text(
+            json.dumps({"timestamp": "t", "round": 1, "type": "decision", "data": ["a", "b"]})
+            + "\n"
+            + json.dumps({"timestamp": "t", "round": 1, "type": "report", "data": {}})
+            + "\n",
+            encoding="utf-8",
+        )
+        entries = read_entries(tmp_path)
+        assert len(entries) == 1
+        assert entries[0].type == "report"
+
+    def test_corrupt_entry_does_not_break_later_appends(self, tmp_path):
+        log_dir = tmp_path / LOG_DIR
+        log_dir.mkdir()
+        (log_dir / LOG_FILE).write_text(
+            json.dumps({"timestamp": "t", "round": "bad", "type": "decision", "data": {}}) + "\n",
+            encoding="utf-8",
+        )
+        count, _ = append_entry(tmp_path, entry(round=2, type="validation"))
+        assert count == 1  # only the valid entry survives the corrupt one
+        assert read_entries(tmp_path)[0].round == 2
+
 
 class TestMakeEntry:
     def test_builds_timestamped_utc_entry(self):

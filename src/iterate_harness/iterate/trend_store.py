@@ -80,11 +80,11 @@ class TrendRecord:
             "line": self.line,
             "severity": self.severity,
             "summary": self.summary,
-            "firstSeen": self.first_seen,
-            "lastSeen": self.last_seen,
+            "first_seen": self.first_seen,
+            "last_seen": self.last_seen,
             "runs": self.runs,
             "status": self.status,
-            "fixedAt": self.fixed_at,
+            "fixed_at": self.fixed_at,
         }
 
 

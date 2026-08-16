@@ -357,6 +357,20 @@ class TestRefreshReonboard:
         restored = (tmp_path / "ITERATE.md").read_text(encoding="utf-8")
         assert restored == VALID_MD
 
+    def test_reonboard_preserves_existing_config_sections(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_project(tmp_path)
+        config_path = tmp_path / "iterate.config.yaml"
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        raw["personalization"] = {"code_style_preferences": {"indent": "2"}}
+        raw["review"] = {"focus": ["security"]}
+        config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        (tmp_path / "package.json").unlink()
+        assert onboard_cmd.run_reonboard(yes=True, no_ai=True) == 0
+        new_raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert new_raw["personalization"]["code_style_preferences"]["indent"] == "2"
+        assert new_raw["review"]["focus"] == ["security"]
+
     def test_reonboard_requires_onboarding(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         assert onboard_cmd.run_reonboard(yes=True) == 1

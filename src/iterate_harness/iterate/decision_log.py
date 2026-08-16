@@ -87,12 +87,19 @@ def read_entries(project_root: str | Path) -> list[DecisionLogEntry]:
             continue
         if not isinstance(parsed, dict):
             continue
+        try:
+            timestamp = str(parsed.get("timestamp", ""))
+            round_val = int(parsed.get("round", 0))
+            entry_type = str(parsed.get("type", ""))
+            data = dict(parsed.get("data") or {})
+        except (ValueError, TypeError):
+            continue
         entries.append(
             DecisionLogEntry(
-                timestamp=str(parsed.get("timestamp", "")),
-                round=int(parsed.get("round", 0)),
-                type=str(parsed.get("type", "")),
-                data=dict(parsed.get("data") or {}),
+                timestamp=timestamp,
+                round=round_val,
+                type=entry_type,
+                data=data,
             )
         )
     return entries

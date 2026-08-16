@@ -13,7 +13,6 @@ import json
 import logging
 import os
 import signal
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -335,28 +334,31 @@ def _run_daemon() -> None:
 
 
 def start_daemon() -> int:
-    """Fork and start the scheduler daemon.  Returns the child PID."""
+    """Start the scheduler daemon (cross-platform, subprocess-based).
+
+    Replaces the old ``os.fork()``+``os.setsid()`` pattern which is
+    Unix-only.  Spawns ``_run_daemon`` in a fully detached subprocess
+    instead.
+    """
+    import subprocess
+    import sys as _sys
+
     existing = read_pid()
     if existing is not None:
         raise RuntimeError(f"Scheduler already running (pid={existing})")
 
-    pid = os.fork()
-    if pid > 0:
-        # Parent — wait a moment for the child to write its PID file
-        time.sleep(0.3)
-        return pid
-
-    # Child — detach
-    os.setsid()
-    # Redirect stdio
-    devnull = os.open(os.devnull, os.O_RDWR)
-    os.dup2(devnull, 0)
-    os.dup2(devnull, 1)
-    os.dup2(devnull, 2)
-    os.close(devnull)
-
-    _run_daemon()
-    sys.exit(0)
+    code = (
+        "from iterate_harness.services.cron_scheduler import _run_daemon; _run_daemon()"
+    )
+    proc = subprocess.Popen(
+        [_sys.executable, "-c", code],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+    )
+    # Wait a moment for the child to write its PID file
+    time.sleep(0.3)
+    return proc.pid
 
 
 def scheduler_status() -> dict[str, Any]:

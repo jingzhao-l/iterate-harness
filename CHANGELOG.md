@@ -4,7 +4,20 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
-## [Unreleased]
+## [1.9.2] - 2026-08-16
+
+Found during the post-1.9.1 full code review of the harness core (`iterate/` loop bookkeeping, `services/cron_scheduler`, `iterate/onboard_cmd`): four real data-integrity / robustness / portability defects, each with a regression test.
+
+### Fixed
+
+- **Decision log defensive parsing** (`iterate/decision_log.py`): `read_entries` raised `ValueError`/`TypeError` on malformed entries (non-numeric `round`, non-mapping `data`), crashing consumers like `report --fail-on` and trend analysis on a single bad line. Field parsing is now guarded; malformed lines are skipped with a warning instead of aborting the whole read. Tests: non-numeric round skipped, non-mapping data skipped, corrupt-file resilience.
+- **Trend library key mismatch** (`iterate/trend_store.py`): `TrendRecord.to_dict()` serialized camelCase (`firstSeen`/`lastSeen`/`fixedAt`) while reads used snake_case, so cross-run trend classification (`new`/`fixed`/`regressed`/`stubborn`) silently misread persisted data after a restart. Serialization standardized on snake_case to match deserialization.
+- **Onboarding config overwrite** (`iterate/onboard_cmd.py`): `run_onboard` (and thus `reonboard`) rebuilt `iterate.config.yaml` from scratch, dropping user-owned sections (personalization, review, budget, cron, …) whenever onboarding ran against an existing config. New fields now merge over the existing config (`_merge_into_existing`) instead of replacing it.
+- **Cron scheduler daemon on Windows** (`services/cron_scheduler.py`): `start_daemon` used `os.fork()`/`os.setsid()`, which are Unix-only and crash on Windows. Daemon spawn now uses `subprocess.Popen` with a fully detached child, keeping the scheduler usable on all supported platforms.
+
+### Reviewed (no change)
+
+- **Pre-commit hook gate** (`iterate/git_hook.py`): the `|| exit 1` after `iterate review --changed --clean-ok` was flagged during review. Analysis: `review --changed` only exits non-zero on a genuine review failure (model/auth crash) or invalid ref; in that case failing the commit closed is the intended fail-closed behavior, and it does NOT bypass the `report --fail-on` severity gate (which runs whenever review exits 0). Removing it would make the hook fail-open on a crashed review — left unchanged.
 
 ## [1.9.1] - 2026-08-16
 

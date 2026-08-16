@@ -72,7 +72,7 @@ def test_record_run_marks_new_findings_and_persists(tmp_path):
     assert len(library) == 1
     record = next(iter(library.values()))
     assert record["status"] == trend_store.STATUS_OPEN
-    assert record["firstSeen"] == "2026-01-01T00:00:00+00:00"
+    assert record["first_seen"] == "2026-01-01T00:00:00+00:00"
 
 
 def test_absent_finding_becomes_fixed_then_regressed(tmp_path):
@@ -91,6 +91,26 @@ def test_stubborn_after_three_open_runs(tmp_path):
         assert delta.stubborn_findings == []
     delta3 = trend_store.record_run(tmp_path, [finding()], run_timestamp=stamp % 3)
     assert delta3.stubborn_findings and delta3.stubborn_findings[0]["runs"] == 3
+
+
+def test_first_seen_persists_across_runs(tmp_path):
+    stamp = "2026-01-0%dT00:00:00+00:00"
+    trend_store.record_run(tmp_path, [finding()], run_timestamp=stamp % 1)
+    trend_store.record_run(tmp_path, [finding()], run_timestamp=stamp % 2)
+    library = trend_store.load_library(tmp_path)
+    record = next(iter(library.values()))
+    assert record["first_seen"] == stamp % 1
+    assert record["last_seen"] == stamp % 2
+
+
+def test_fixed_at_persists_in_library(tmp_path):
+    stamp = "2026-01-0%dT00:00:00+00:00"
+    trend_store.record_run(tmp_path, [finding()], run_timestamp=stamp % 1)
+    trend_store.record_run(tmp_path, [], run_timestamp=stamp % 2)
+    library = trend_store.load_library(tmp_path)
+    record = next(iter(library.values()))
+    assert record["status"] == trend_store.STATUS_FIXED
+    assert record["fixed_at"] == stamp % 2
 
 
 def test_malformed_findings_are_skipped(tmp_path):

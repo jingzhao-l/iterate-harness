@@ -53,6 +53,34 @@ def check_auth_configured() -> str | None:
     )
 
 
+def _load_existing_config(path: Path) -> dict[str, object] | None:
+    """Read an existing config as a dict, or None when absent/unreadable."""
+    if not path.is_file():
+        return None
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _merge_into_existing(
+    new_config: dict[str, object], config_path: Path
+) -> dict[str, object]:
+    """Merge a freshly built config over an existing one, preserving user sections.
+
+    ``onboard``/``reonboard`` must refresh goal/dimensions/rounds/validation and
+    the ``onboarding`` section WITHOUT dropping user-owned sections
+    (personalization, review, budget, cron, …) that already live in the config.
+    """
+    existing = _load_existing_config(config_path)
+    if existing is None:
+        return new_config
+    merged = dict(existing)
+    merged.update(new_config)
+    return merged
+
+
 def render_detection_iterate_md(
     *,
     profile: init_wizard.ProjectProfile,
@@ -260,7 +288,8 @@ def run_onboard(
     config["onboarding"] = onboarding.build_onboarding_section(
         channel=channel, fingerprints=fingerprints, completed_at=completed_at
     )
-    written_config = init_wizard.write_config(cwd, config)
+    safe_config = _merge_into_existing(config, init_wizard.existing_config_path(cwd))
+    written_config = init_wizard.write_config(cwd, safe_config)
     _print_flush("\nOnboarding complete:")
     _print_flush(f"  - {md_path}")
     _print_flush(f"  - {written_config} ({len(fingerprints)} manifest fingerprints)")
