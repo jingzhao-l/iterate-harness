@@ -4,6 +4,24 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.9.3] - 2026-08-16
+
+Six high-value capability gaps identified in the post-1.9.2 UX review (design §15.3) are now implemented end to end: BYOK custom model providers, convergence dashboard in the TUI, failure recovery via checkpoints, session workspace isolation, budget enforcement / rate limiting, and an HTML report service with round replay.
+
+### Added
+
+- **Custom model provider (BYOK)** (`config/settings.py`): `ProviderProfile` (BaseModel) supports custom API format / auth source / `base_url` / default model. Ten built-in provider profiles (claude-api / claude-subscription / openai-compatible / codex / copilot / moonshot / gemini / minimax / nvidia / qwen / modelscope) plus `default_provider_profiles()` / `merged_profiles()` / `resolve_profile()`. `ih provider add` registers a custom endpoint; `auth/manager.py` loads credentials per profile; `/model` shows profile state.
+- **Convergence dashboard in the TUI**: `ReviewProgressEvent` (round / new_findings / per_dimension / token_cost) dispatches through `ui/app.py` into a React `ReviewProgressPanel` — findings sparkline, per-dimension counts, cumulative cost.
+- **Failure recovery / checkpoint resume** (`iterate/checkpoint.py`, `iterate/last_state.py`): atomic checkpoints (`save_checkpoint` / `load_checkpoint` / `clear_checkpoint` with file locking) persist the last successful round's state; the engine reloads it on resume so a model failure resumes from the last converged point instead of round 1.
+- **Session workspace isolation** (`iterate/worktree_flow.py`, `iterate/worktree_runtime.py`, `swarm/worktree.py`): `WorktreeSession` (serializable) + git command wrapper create / merge / roll back a dedicated git worktree per round; the engine (`engine/query.py`) runs fix rounds inside the sandboxed worktree, merges on success, drops on failure. Includes per-repo namespace hashing and stale-worktree cleanup.
+- **Budget enforcement / rate limiting** (`iterate/loop_policy.py`): `IterateLoopPolicy` gains `total_token_budget` (hard token cap → STOP with closing report guidance) and `budget_usd` (CostMeter-cumulative USD cap → STOP) via `_budget_stop_reason()`; `max_turns_per_minute` throttling (`RATE_LIMIT_WINDOW_SECONDS=60` rolling window + `_throttle_delay`) is consulted by the engine via `before_request`.
+- **HTML report service** (`iterate/report_server.py`, `iterate/html_report.py`): static HTTP server (`serve_report`, oneshot/persist modes, auto-browser-open, MIME table) and an interactive round-replay page (`build_replay_page` — per-round panels, prev/next navigation, jump dots, keyboard ←/→, type-specific entry cards, HTML-escaped against XSS). Both CLI (`iterate report --serve/--serve-port/--serve-persist`) and TUI (`/iterate report --serve`) entry points.
+
+### Fixed
+
+- **`mcp` dependency pin** (`pyproject.toml`): narrowed `mcp>=1.0.0` to `mcp>=1.0.0,<2.0.0` — mcp 2.0 removed `mcp.server.fastmcp`, breaking the MCP HTTP integration tests. The upper bound keeps the FastMCP server API that the tests rely on.
+- **Package `py.typed` marker** (`src/iterate_harness/py.typed`): the package previously shipped without a typed marker, so mypy treated it as an untyped third-party package and skipped analysis. The marker makes mypy type-check the harness source properly (new modules verified clean).
+
 ## [1.9.2] - 2026-08-16
 
 Found during the post-1.9.1 full code review of the harness core (`iterate/` loop bookkeeping, `services/cron_scheduler`, `iterate/onboard_cmd`): four real data-integrity / robustness / portability defects, each with a regression test.

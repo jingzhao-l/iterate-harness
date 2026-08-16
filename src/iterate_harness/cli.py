@@ -10,12 +10,15 @@ import sys
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
+from types import ModuleType
 from typing import Optional
 from urllib.parse import urlparse
 
 import typer
 
-__version__ = "1.9.2"
+from iterate_harness.iterate.decision_log import DecisionLogEntry
+
+__version__ = "1.9.3"
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -1414,10 +1417,17 @@ def _typer_int(value: object) -> int:
     if isinstance(value, OptionInfo):
         v = value.default
         return int(v) if v is not None else 0
-    return int(value) if value is not None else 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
 
 
-def _write_html_report(html_report: object, entries: list, html_out: str) -> None:
+def _write_html_report(html_report: ModuleType, entries: list[DecisionLogEntry], html_out: str) -> None:
     """Render and write the single-file HTML report for this project."""
     page = html_report.build_html_report(entries)
     if page is None:
@@ -1429,7 +1439,7 @@ def _write_html_report(html_report: object, entries: list, html_out: str) -> Non
     print(f"HTML report written: {target}")
 
 
-def _write_html_replay(html_report: object, entries: list) -> None:
+def _write_html_replay(html_report: ModuleType, entries: list[DecisionLogEntry]) -> None:
     """Render and write the interactive round-replay page (--serve companion)."""
     page = html_report.build_replay_page(entries)
     if page is None:

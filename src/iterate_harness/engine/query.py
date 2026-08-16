@@ -40,7 +40,7 @@ from iterate_harness.engine.stream_events import (
     ToolExecutionStarted,
 )
 from iterate_harness.hooks import HookEvent, HookExecutor
-from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY, IterateLoopPolicy
 from iterate_harness.permissions.checker import PermissionChecker, PermissionDecision
 from iterate_harness.services.tool_outputs import tool_output_inline_chars, tool_output_preview_chars
 from iterate_harness.tools.base import ToolExecutionContext
@@ -164,7 +164,7 @@ class QueryContext:
     # Iterate loop policy (design §11.4.1 kernel fix #1): when set, the
     # engine consults it after every turn's tool results to enforce
     # deterministic review convergence. ``None`` keeps upstream behavior.
-    iterate_policy: object | None = None
+    iterate_policy: IterateLoopPolicy | None = None
 
 
 def _append_capped_unique(bucket: list[Any], value: Any, *, limit: int) -> None:

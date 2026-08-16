@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iterate-harness"
-version = "1.9.2"
+version = "1.9.3"
 description = "iterate-skill powered fork of OpenHarness - dedicated agent harness for the iterate review/fix loop"
 readme = "README.md"
 license = "MIT"
@@ -25,7 +25,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "httpx>=0.27.0",
     "websockets>=12.0",
-    "mcp>=1.0.0",
+    "mcp>=1.0.0,<2.0.0",
     "pyperclip>=1.9.0",
     "pyyaml>=6.0",
     "questionary>=2.0.1",
