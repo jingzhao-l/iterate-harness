@@ -772,6 +772,7 @@ provider_app = typer.Typer(name="provider", help="Manage provider profiles")
 cron_app = typer.Typer(name="cron", help="Manage cron scheduler and jobs")
 autopilot_app = typer.Typer(name="autopilot", help="Manage repo autopilot")
 iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/report)")
+web_app = typer.Typer(name="web", help="WebUI management console (design §17)")
 
 app.add_typer(mcp_app)
 app.add_typer(plugin_app)
@@ -780,6 +781,7 @@ app.add_typer(provider_app)
 app.add_typer(cron_app)
 app.add_typer(autopilot_app)
 app.add_typer(iterate_app)
+app.add_typer(web_app)
 
 
 # ---- mcp subcommands ----
@@ -1612,6 +1614,53 @@ def _write_html_replay(html_report: ModuleType, entries: list[DecisionLogEntry])
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(page, encoding="utf-8")
     print(f"Replay page written: {target}")
+
+
+# ---- web subcommands ----
+
+@web_app.command("serve")
+def web_serve(
+    project_root: str = typer.Option(
+        "",
+        "--project",
+        help="Iterate project root (default: current working directory)",
+    ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Bind host (default: loopback only — do not expose publicly)",
+    ),
+    port: int = typer.Option(
+        0,
+        "--port",
+        help="Port (default: OS-assigned ephemeral port)",
+    ),
+    no_browser: bool = typer.Option(
+        False,
+        "--no-browser",
+        help="Do not open the browser automatically",
+    ),
+) -> None:
+    """Start the WebUI management console (FastAPI + React frontend).
+
+    Serves the dashboard, runs timeline, checkpoints, budget, config, and
+    reports on a local loopback address and opens the browser. The backend
+    binds to 127.0.0.1 by default and never exposes itself externally.
+    """
+    from iterate_harness.web.api import serve as web_serve_backend
+
+    root = project_root or str(Path.cwd())
+    root_path = Path(root).resolve()
+    if not root_path.is_dir():
+        print(f"Project root not found: {root_path}", file=sys.stderr)
+        raise typer.Exit(code=1)
+
+    web_serve_backend(
+        project_root=root_path,
+        host=host,
+        port=port,
+        open_browser=not _typer_flag(no_browser),
+    )
 
 
 # ---- plugin subcommands ----

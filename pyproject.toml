@@ -31,6 +31,8 @@ dependencies = [
     "questionary>=2.0.1",
     "watchfiles>=0.20.0",
     "croniter>=2.0.0",
+    "fastapi==0.115.12",
+    "uvicorn==0.52.3",
 ]
 
 [project.optional-dependencies]
@@ -67,6 +69,7 @@ exclude = [
 "frontend/terminal/package.json" = "iterate_harness/_frontend/package.json"
 "frontend/terminal/tsconfig.json" = "iterate_harness/_frontend/tsconfig.json"
 "frontend/terminal/src" = "iterate_harness/_frontend/src"
+"frontend/web/dist" = "iterate_harness/_frontend_web"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

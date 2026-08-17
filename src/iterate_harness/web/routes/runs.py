@@ -1,0 +1,165 @@
+"""Decision-log routes: runs overview, per-run timeline, findings (design §17.3 P2).
+
+Serves the trajectory-style replay: every decision-log entry as a timeline
+item, grouped by round, plus a findings table with optional diff expansion.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query
+
+from ...iterate.ci_report import ReportSummary, latest_report_entry
+from ...iterate.decision_log import DecisionLogEntry, read_entries
+from ...iterate.html_report import REPLAY_ENTRY_TYPES
+from ..schemas import RunSummary, TimelineEntry
+
+router = APIRouter(tags=["runs"])
+
+#: Default pagination page size for the runs overview.
+DEFAULT_PAGE_SIZE = 50
+
+#: Upper bound on a single findings page returned by the timeline endpoint.
+MAX_FINDINGS_PAGE = 500
+
+
+def _resolve_project(project_root: str) -> Path:
+    root = Path(project_root) if project_root else Path.cwd()
+    if not root.is_dir():
+        raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
+    return root
+
+
+def _entry_to_summary(index: int, entry: DecisionLogEntry) -> RunSummary:
+    return RunSummary(
+        index=index,
+        timestamp=entry.timestamp,
+        round=entry.round,
+        type=entry.type,
+        data=dict(entry.data),
+    )
+
+
+@router.get("/runs", response_model=list[RunSummary])
+def list_runs(
+    project_root: str = "",
+    offset: int = Query(0, ge=0, description="Entry offset"),
+    limit: int = Query(
+        DEFAULT_PAGE_SIZE, ge=1, le=500, description="Max entries returned"
+    ),
+) -> list[RunSummary]:
+    """Paged decision-log overview (oldest first)."""
+    entries = read_entries(_resolve_project(project_root))
+    page = entries[offset : offset + limit]
+    return [_entry_to_summary(offset + idx, entry) for idx, entry in enumerate(page)]
+
+
+@router.get("/runs/timeline", response_model=list[TimelineEntry])
+def get_run_timeline(
+    project_root: str = "",
+    round: int = Query(-1, description="Filter to one round (-1 = all)"),
+    type: str = Query("", description="Filter to one entry type (empty = all)"),
+    limit: int = Query(
+        200, ge=1, le=2000, description="Max timeline entries returned"
+    ),
+) -> list[TimelineEntry]:
+    """Trajectory-style timeline of decision-log entries.
+
+    Optional filters: ``round`` (an integer round number) and ``type`` (one
+    of the replay entry types). Entries are returned oldest-first.
+    """
+    entries = read_entries(_resolve_project(project_root))
+    allowed_types = set(REPLAY_ENTRY_TYPES)
+    filtered = entries
+    if round >= 0:
+        filtered = [e for e in filtered if e.round == round]
+    if type:
+        if type not in allowed_types:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown entry type: {type} (allowed: {', '.join(sorted(allowed_types))})",
+            )
+        filtered = [e for e in filtered if e.type == type]
+    page = filtered[-limit:] if limit else filtered
+    return [
+        TimelineEntry(
+            index=idx,
+            timestamp=entry.timestamp,
+            round=entry.round,
+            type=entry.type,
+            data=dict(entry.data),
+        )
+        for idx, entry in enumerate(page)
+    ]
+
+
+@router.get("/runs/findings", response_model=dict[str, Any])
+def get_findings(
+    project_root: str = "",
+    round: int = Query(-1, description="Restrict findings to one round (-1 = all)"),
+    severity: str = Query("", description="Filter by severity (empty = all)"),
+    dimension: str = Query("", description="Filter by dimension (empty = all)"),
+    limit: int = Query(
+        MAX_FINDINGS_PAGE, ge=1, le=MAX_FINDINGS_PAGE, description="Max findings"
+    ),
+) -> dict[str, Any]:
+    """Findings table: gathered from review_result + report entries.
+
+    Returns ``{"findings": [...], "total": n, "page": m}``. Filters on
+    ``severity`` / ``dimension`` are exact-match on the finding fields.
+    """
+    entries = read_entries(_resolve_project(project_root))
+    findings: list[dict[str, Any]] = []
+    seen_keys: set[tuple[Any, ...]] = set()
+    for entry in entries:
+        if entry.type not in ("review_result", "report"):
+            continue
+        if round >= 0 and entry.round != round:
+            continue
+        raw = entry.data.get("findings") if isinstance(entry.data, dict) else None
+        if not isinstance(raw, list):
+            continue
+        for finding in raw:
+            if not isinstance(finding, dict):
+                continue
+            # Deduplicate by (file, line, dimension) across entries so the
+            # same finding reported in later rounds appears once.
+            dedup_key = (
+                finding.get("file"),
+                finding.get("line"),
+                finding.get("dimension"),
+            )
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+            if severity and str(finding.get("severity") or "").lower() != severity.lower():
+                continue
+            if dimension and str(finding.get("dimension") or "") != dimension:
+                continue
+            findings.append(dict(finding))
+
+    total = len(findings)
+    page = findings[:limit]
+    return {"findings": page, "total": total, "page": len(page)}
+
+
+@router.get("/runs/report", response_model=dict[str, Any])
+def get_latest_report(
+    project_root: str = "",
+) -> dict[str, Any]:
+    """The latest report entry as a plain payload (verdict, mode, summary)."""
+    entries = read_entries(_resolve_project(project_root))
+    report = latest_report_entry(entries)
+    if report is None:
+        raise HTTPException(status_code=404, detail="No report entry in the decision log")
+    summary = ReportSummary.from_entry(report)
+    return {
+        "timestamp": report.timestamp,
+        "round": report.round,
+        "mode": summary.mode,
+        "verdict": summary.verdict,
+        "totalFindings": summary.total_findings,
+        "data": dict(report.data) if isinstance(report.data, dict) else {},
+    }
