@@ -69,6 +69,58 @@ class TestParsePermission:
 
 
 # ---------------------------------------------------------------------------
+# Tool event stream (design §18: live tool-timeline cards)
+# ---------------------------------------------------------------------------
+
+
+class TestToolEvents:
+    async def test_tool_events_publish_truthful_markers(
+        self, manager: RunManager
+    ):
+        """Tool start / success publish the ▶/✔ markers the frontend parses into
+        tool-timeline cards. A failing tool (is_error) must publish the ✖ marker
+        so the live timeline never shows a successful check for a failed call."""
+        from iterate_harness.engine.stream_events import (
+            ToolExecutionCompleted,
+            ToolExecutionStarted,
+        )
+        from iterate_harness.web.hub import hub
+
+        queue = await hub.subscribe()
+        try:
+            await manager._render_event(
+                ToolExecutionStarted(tool_name="iterate_review", tool_input={})
+            )
+            await manager._render_event(
+                ToolExecutionCompleted(
+                    tool_name="iterate_review",
+                    output="  ok:\n  0 findings  ",
+                    is_error=False,
+                )
+            )
+            await manager._render_event(
+                ToolExecutionCompleted(
+                    tool_name="iterate_fix", output="boom", is_error=True
+                )
+            )
+        finally:
+            await hub.unsubscribe(queue)
+
+        contents = []
+        while not queue.empty():
+            event = queue.get_nowait()
+            if event.type == "chat-message" and event.data.get("kind") == "tool":
+                contents.append(event.data["content"])
+
+        assert any(c.startswith("▶ 调用工具 iterate_review") for c in contents)
+        # Output is normalized (whitespace collapsed + truncated).
+        assert any(c == "✔ iterate_review：ok: 0 findings" for c in contents)
+        assert any(c == "✖ iterate_fix：boom" for c in contents)
+        # No false success marker for the failed call.
+        assert not any(c.startswith("✔ iterate_fix") for c in contents)
+
+
+# ---------------------------------------------------------------------------
 # Status snapshot
 # ---------------------------------------------------------------------------
 

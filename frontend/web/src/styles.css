@@ -1155,6 +1155,7 @@ tr.triage-reject td {
 
 .tool-card.tool-start { border-left-color: var(--accent); }
 .tool-card.tool-done { border-left-color: #16a34a; }
+.tool-card.tool-failed { border-left-color: #dc2626; }
 .tool-card.tool-idle { border-left-color: var(--border-strong); }
 
 .tool-card-head {
@@ -1178,6 +1179,10 @@ tr.triage-reject td {
 
 .tool-card.tool-done .tool-card-dot {
   background: #16a34a;
+}
+
+.tool-card.tool-failed .tool-card-dot {
+  background: #dc2626;
 }
 
 .tool-card-name {

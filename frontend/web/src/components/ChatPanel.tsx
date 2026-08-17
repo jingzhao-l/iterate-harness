@@ -330,7 +330,7 @@ function ChatBubble({ message }: { message: ChatMessage }): React.JSX.Element {
 // Parse a tool line like "▶ 调用工具 iterate_review" or "✔ iterate_review：preview"
 // into (status, toolName, detail). Unknown shapes degrade to a generic card.
 interface ParsedToolLine {
-  status: "start" | "done" | "idle";
+  status: "start" | "done" | "failed" | "idle";
   toolName: string;
   detail: string;
 }
@@ -344,8 +344,22 @@ function parseToolLine(content: string): ParsedToolLine {
   const match = text.match(/^[✔✓✖✗]\s*([^：:]+)[：:]\s*(.*)$/s);
   if (match) {
     const mark = text[0];
+    if (mark === "✔" || mark === "✓") {
+      return {
+        status: "done",
+        toolName: match[1].trim(),
+        detail: match[2].trim(),
+      };
+    }
+    if (mark === "✖" || mark === "✗") {
+      return {
+        status: "failed",
+        toolName: match[1].trim(),
+        detail: match[2].trim(),
+      };
+    }
     return {
-      status: mark === "✔" || mark === "✓" ? "done" : "idle",
+      status: "idle",
       toolName: match[1].trim(),
       detail: match[2].trim(),
     };
@@ -355,10 +369,13 @@ function parseToolLine(content: string): ParsedToolLine {
 
 function ToolCallCard({ content, timestamp }: { content: string; timestamp: string }): React.JSX.Element {
   const parsed = parseToolLine(content);
-  const statusLabel =
-    parsed.status === "start" ? "执行中" : parsed.status === "done" ? "完成" : "工具";
-  const statusClass =
-    parsed.status === "start" ? "tool-start" : parsed.status === "done" ? "tool-done" : "tool-idle";
+  const statusMeta: Record<ParsedToolLine["status"], { label: string; className: string }> = {
+    start: { label: "执行中", className: "tool-start" },
+    done: { label: "完成", className: "tool-done" },
+    failed: { label: "失败", className: "tool-failed" },
+    idle: { label: "工具", className: "tool-idle" },
+  };
+  const { label: statusLabel, className: statusClass } = statusMeta[parsed.status];
 
   return (
     <div className={`tool-card ${statusClass}`}>

@@ -4,6 +4,16 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.11.1] - 2026-08-17
+
+WebUI review fix: truthful tool-failure markers in the human-in-the-loop chat timeline.
+
+### Fixed
+
+- **Tool failure shown as success** (`web/run_manager.py`): `ToolExecutionCompleted` carries an `is_error` flag but the chat stream ignored it, so a failing tool call still rendered a green `✔` checkmark in the live tool timeline — misleading during model laziness / fault diagnosis. The manager now publishes `✖ {tool}：{preview}` for failing calls, keeping the tool timeline truthful.
+- **Frontend tool-card failure state** (`components/ChatPanel.tsx`, `styles.css`): the tool-line parser now distinguishes `✔/✖` into done / failed states; failed cards render with a red accent and a "失败" label (the nested status ternary was also refactored into a lookup table).
+- **Version sync**: `npm/package.json` was left at `1.10.1` after the 1.11.0 release — bumped to `1.11.1` to restore the release-required lock-step (`npm == harness == tag`).
+
 ## [1.11.0] - 2026-08-17
 
 WebUI iteration wave: workspaces management, findings triage, tool-call visualization, and UX robustness for the management console (design §17.3 P2/P4, §18). Focus stays on the *run* — the new surfaces complement the dashboard/timeline/checkpoints and the human-in-the-loop chat panel.

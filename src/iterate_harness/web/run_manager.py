@@ -384,7 +384,10 @@ class RunManager:
         elif isinstance(event, ToolExecutionCompleted):
             preview = event.output if isinstance(event.output, str) else str(event.output or "")
             preview = " ".join(preview.strip().split())[:120]
-            await self._publish_tool(f"✔ {event.tool_name}：{preview}")
+            if event.is_error:
+                await self._publish_tool(f"✖ {event.tool_name}：{preview}")
+            else:
+                await self._publish_tool(f"✔ {event.tool_name}：{preview}")
 
     # ------------------------------------------------------------------
     # Engine interaction channels (human-in-the-loop)
