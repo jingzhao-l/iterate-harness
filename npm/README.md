@@ -1,5 +1,10 @@
 # iterate-harness (npm distribution wrapper)
 
+<p align="center">
+  <a href="README.md"><strong>English</strong></a> ·
+  <a href="README.zh-CN.md"><strong>简体中文</strong></a>
+</p>
+
 npm one-liner install for [iterate-harness](https://github.com/jingzhao-l/iterate-harness) —
 the dedicated agent harness for the iterate review/fix loop (`ih` CLI, React TUI,
 six `iterate_*` tools, engine-enforced convergence).
