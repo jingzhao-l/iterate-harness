@@ -14,6 +14,8 @@ import type {
   StartRequest,
   StatusResponse,
   TimelineEntry,
+  TriageDecision,
+  WorkspaceView,
 } from "./types";
 
 const API_BASE = "/api/v1";
@@ -30,7 +32,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
@@ -184,6 +186,45 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ action }),
     }),
+
+  // ---- Workspaces (design §17.3 P4) ----
+  workspaces: (projectRoot?: string): Promise<WorkspaceView[]> =>
+    request<WorkspaceView[]>(`/workspaces${buildQuery(projectRoot)}`),
+
+  removeWorkspace: (
+    slug: string,
+    projectRoot?: string,
+  ): Promise<OperationResult> =>
+    request<OperationResult>(
+      `/workspaces/remove${buildQuery(projectRoot, { confirm: "true" })}`,
+      { method: "POST", body: JSON.stringify({ slug }) },
+    ),
+
+  // ---- Findings triage (design §17.3 P2) ----
+  triageDecisions: (projectRoot?: string): Promise<TriageDecision[]> =>
+    request<TriageDecision[]>(`/runs/findings/triage${buildQuery(projectRoot)}`),
+
+  triageFinding: (
+    file: string,
+    line: number | null,
+    dimension: string,
+    decision: "approve" | "reject",
+    note?: string,
+    projectRoot?: string,
+  ): Promise<OperationResult> =>
+    request<OperationResult>(
+      `/runs/findings/triage${buildQuery(projectRoot, { confirm: "true" })}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ file, line, dimension, decision, note }),
+      },
+    ),
+
+  clearTriage: (projectRoot?: string): Promise<OperationResult> =>
+    request<OperationResult>(
+      `/runs/findings/triage${buildQuery(projectRoot, { confirm: "true" })}`,
+      { method: "DELETE" },
+    ),
 };
 
-export { API_BASE };
+

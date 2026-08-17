@@ -408,6 +408,121 @@ class TestEvents:
         assert first.startswith("event: status\n")
 
 
+class TestFindingsTriage:
+    def test_list_empty(self, client: TestClient, tmp_path: Path):
+        body = client.get("/api/v1/runs/findings/triage", params={"project_root": str(tmp_path)}).json()
+        assert body == []
+
+    def test_record_requires_confirm(self, client: TestClient, tmp_path: Path):
+        response = client.post(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path)},
+            json={"file": "a.py", "line": 3, "dimension": "security", "decision": "approve"},
+        )
+        assert response.status_code == 422
+        assert "triage requires confirm=true" in response.json()["detail"]
+
+    def test_record_ok_and_audited(self, client: TestClient, tmp_path: Path):
+        body = client.post(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"file": "a.py", "line": 3, "dimension": "security", "decision": "approve", "note": "this is correct"},
+        ).json()
+        assert body["status"] == "ok"
+        assert "已记录审批" in body["message"]
+        assert "approve" in body["message"]
+        assert body["detail"]["record"]["file"] == "a.py"
+        assert body["detail"]["record"]["line"] == 3
+        assert body["detail"]["record"]["decision"] == "approve"
+        assert (tmp_path / ".iterate" / "findings-triage.jsonl").exists()
+        audit = (tmp_path / ".iterate" / "web-audit.jsonl").read_text(encoding="utf-8")
+        assert "findings.triage" in audit
+
+    def test_list_after_record(self, client: TestClient, tmp_path: Path):
+        # Add two decisions
+        client.post(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"file": "a.py", "line": 3, "dimension": "security", "decision": "approve"},
+        )
+        client.post(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"file": "b.py", "line": 1, "dimension": "code_review", "decision": "reject"},
+        )
+        body = client.get("/api/v1/runs/findings/triage", params={"project_root": str(tmp_path)}).json()
+        assert len(body) == 2
+        # Most recent first — second was added later, so first in list
+        assert body[0]["file"] == "b.py"
+        assert body[1]["file"] == "a.py"
+
+    def test_clear_requires_confirm(self, client: TestClient, tmp_path: Path):
+        response = client.delete(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path)},
+        )
+        assert response.status_code == 422
+
+    def test_clear_clears_all(self, client: TestClient, tmp_path: Path):
+        # Add two
+        client.post(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"file": "a.py", "line": 3, "dimension": "security", "decision": "approve"},
+        )
+        client.post(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"file": "b.py", "line": 1, "dimension": "code_review", "decision": "reject"},
+        )
+        assert len(client.get("/api/v1/runs/findings/triage", params={"project_root": str(tmp_path)}).json()) == 2
+
+        body = client.delete(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+        ).json()
+        assert body["status"] == "ok"
+        assert body["detail"]["removed"] == 2
+        assert len(client.get("/api/v1/runs/findings/triage", params={"project_root": str(tmp_path)}).json()) == 0
+
+
+class TestWorkspaces:
+    def test_list_includes_primary(self, client: TestClient, tmp_path: Path):
+        # tmp_path is an empty directory — should still return the primary workspace
+        body = client.get("/api/v1/workspaces", params={"project_root": str(tmp_path)}).json()
+        assert len(body) >= 1  # at least primary
+        primary = next(w for w in body if w["detail"]["slug"] == "main")
+        assert primary["kind"] == "primary"
+        assert primary["active"] is True
+        assert "entryCount" in primary["detail"]
+
+    def test_remove_requires_confirm(self, client: TestClient, tmp_path: Path):
+        response = client.post(
+            "/api/v1/workspaces/remove",
+            params={"project_root": str(tmp_path)},
+            json={"slug": "test-round-1"},
+        )
+        assert response.status_code == 422
+        assert "requires confirm=true" in response.json()["detail"]
+
+    def test_remove_rejects_traversal_slug(self, client: TestClient, tmp_path: Path):
+        response = client.post(
+            "/api/v1/workspaces/remove",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"slug": "../etc/passwd"},
+        )
+        assert response.status_code == 422
+        assert "must not contain" in response.json()["detail"]
+
+    def test_remove_404_on_missing(self, client: TestClient, tmp_path: Path):
+        response = client.post(
+            "/api/v1/workspaces/remove",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"slug": "nonexistent-round-99"},
+        )
+        assert response.status_code == 404
+
+
 class TestFrontendMount:
     """Verify the static-bundle resolution order (api._frontend_dir)."""
 

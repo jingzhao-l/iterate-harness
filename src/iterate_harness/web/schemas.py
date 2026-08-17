@@ -116,6 +116,27 @@ class WorkspaceView(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkspaceRemoveRequest(BaseModel):
+    """Request body for removing a stale isolate worktree (design §17.3 P4)."""
+
+    slug: str = Field(..., min_length=1, max_length=64)
+
+
+class FindingsTriageRequest(BaseModel):
+    """Request body for triaging one finding (design §17.3 P2).
+
+    ``decision`` is ``approve`` (accept the finding / its suggested fix) or
+    ``reject`` (false positive — skip). The (file, line, dimension) triple
+    is the dedup key mirroring ``runs.get_findings``.
+    """
+
+    file: str = Field(..., min_length=1)
+    line: int | None = None
+    dimension: str = ""
+    decision: Literal["approve", "reject"]
+    note: str | None = Field(default=None, max_length=1000)
+
+
 # ---------------------------------------------------------------------------
 # Chat / human-in-the-loop models (design §18.3)
 # ---------------------------------------------------------------------------
@@ -193,6 +214,7 @@ __all__ = [
     "ConfigView",
     "ControlRequest",
     "ErrorResponse",
+    "FindingsTriageRequest",
     "OperationResult",
     "ReportView",
     "RunState",
@@ -203,5 +225,6 @@ __all__ = [
     "StatusResponse",
     "TimelineEntry",
     "WaitingKind",
+    "WorkspaceRemoveRequest",
     "WorkspaceView",
 ]

@@ -14,7 +14,9 @@ from fastapi import APIRouter, HTTPException, Query
 from ...iterate.ci_report import ReportSummary, latest_report_entry
 from ...iterate.decision_log import DecisionLogEntry, read_entries
 from ...iterate.html_report import REPLAY_ENTRY_TYPES
-from ..schemas import RunSummary, TimelineEntry
+from .. import findings_triage
+from ..schemas import FindingsTriageRequest, OperationResult, RunSummary, TimelineEntry
+from ..security import AuditLog
 
 router = APIRouter(tags=["runs"])
 
@@ -178,3 +180,82 @@ def get_latest_report(
         "totalFindings": summary.total_findings,
         "data": dict(report.data) if isinstance(report.data, dict) else {},
     }
+
+
+@router.get("/runs/findings/triage", response_model=list[dict[str, Any]])
+def list_findings_triage(
+    project_root: str = "",
+) -> list[dict[str, Any]]:
+    """All persisted findings-triage decisions, most recent first (design §17.3 P2).
+
+    These are the human "approve / reject" records written from the Runs page
+    findings table. The latest decision for a ``(file, line, dimension)`` key
+    wins; re-triaging appends a new line instead of rewriting history.
+    """
+    return findings_triage.list_decisions(_resolve_project(project_root))
+
+
+@router.post("/runs/findings/triage", response_model=OperationResult)
+def record_findings_triage(
+    body: FindingsTriageRequest,
+    project_root: str = "",
+    confirm: bool = False,
+) -> OperationResult:
+    """Record one findings-triage decision (approve / reject), audited.
+
+    Requires ``confirm=true`` (the frontend always sends it). Appends to the
+    append-only journal; returns the stored record in ``detail``.
+    """
+    root = _resolve_project(project_root)
+    if not confirm:
+        raise HTTPException(
+            status_code=422,
+            detail="triage requires confirm=true (secondary confirmation)",
+        )
+    record = findings_triage.record_decision(
+        root,
+        file=body.file,
+        line=body.line,
+        dimension=body.dimension,
+        decision=body.decision,
+        note=body.note,
+    )
+    AuditLog(root).record(
+        "findings.triage",
+        body.decision,
+        summary={
+            "file": body.file,
+            "line": body.line,
+            "dimension": body.dimension,
+        },
+    )
+    return OperationResult(
+        status="ok",
+        message=f"已记录审批：{body.decision}",
+        target=body.file,
+        detail={"record": record},
+    )
+
+
+@router.delete("/runs/findings/triage", response_model=OperationResult)
+def clear_findings_triage(
+    project_root: str = "",
+    confirm: bool = False,
+) -> OperationResult:
+    """Clear every persisted triage decision (compaction), audited.
+
+    Requires ``confirm=true``. Returns how many decisions were removed.
+    """
+    root = _resolve_project(project_root)
+    if not confirm:
+        raise HTTPException(
+            status_code=422,
+            detail="clear triage requires confirm=true (secondary confirmation)",
+        )
+    removed = findings_triage.clear_all(root)
+    AuditLog(root).record("findings.triage.clear", "all", summary={"removed": removed})
+    return OperationResult(
+        status="ok",
+        message=f"已清除 {removed} 条审批记录",
+        detail={"removed": removed},
+    )

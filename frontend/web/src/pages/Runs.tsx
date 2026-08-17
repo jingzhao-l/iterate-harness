@@ -2,9 +2,14 @@
 // decision log plus a findings table with severity/dimension filters and
 // expandable diff blocks.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { Finding, TimelineEntry } from "../types";
+import type { Finding, TimelineEntry, TriageDecision } from "../types";
+
+// Compose the triage dedup key exactly like the backend (file:::line:::dimension).
+function triageKey(finding: Finding): string {
+  return `${finding.file ?? ""}:::${finding.line ?? ""}:::${finding.dimension ?? ""}`;
+}
 
 const ENTRY_TYPE_LABELS: Record<string, string> = {
   round_start: "轮次开始",
@@ -148,6 +153,79 @@ export default function Runs(): React.JSX.Element {
   const [dimensionFilter, setDimensionFilter] = useState("");
 
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  // Findings triage (design §17.3 P2): persisted approve/reject decisions.
+  const [triage, setTriage] = useState<Record<string, TriageDecision>>({});
+  const [triageBusyKey, setTriageBusyKey] = useState<string | null>(null);
+  const [triageError, setTriageError] = useState<string | null>(null);
+  const [showTriaged, setShowTriaged] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  // Load persisted triage decisions once.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const decisions = await api.triageDecisions();
+        if (!cancelled) {
+          const byKey: Record<string, TriageDecision> = {};
+          for (const decision of decisions) byKey[decision.key] = decision;
+          setTriage(byKey);
+        }
+      } catch {
+        // Triaging is optional; a failed read just leaves all findings untriaged.
+        if (!cancelled) setTriageError("无法读取审批记录");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const triageFinding = useCallback(
+    (finding: Finding, decision: "approve" | "reject"): void => {
+      const key = triageKey(finding);
+      setTriageBusyKey(key);
+      setTriageError(null);
+      api
+        .triageFinding(
+          finding.file ?? "",
+          finding.line ?? null,
+          finding.dimension ?? "",
+          decision,
+        )
+        .then((result) => {
+          const record = result.detail?.record as TriageDecision | undefined;
+          setTriage((prev) => ({ ...prev, [key]: record ?? {
+            key,
+            file: finding.file ?? "",
+            line: finding.line ?? null,
+            dimension: finding.dimension ?? "",
+            decision,
+            note: null,
+            timestamp: new Date().toISOString(),
+          }}));
+        })
+        .catch((error) => {
+          setTriageError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => setTriageBusyKey(null));
+    },
+    [],
+  );
+
+  const clearTriage = useCallback((): void => {
+    setTriageError(null);
+    api
+      .clearTriage()
+      .then(() => setTriage({}))
+      .catch((error) => {
+        setTriageError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setConfirmClear(false));
+  }, []);
+
+  const triagedCount = Object.keys(triage).length;
 
   const dimensions = useMemo(() => {
     const seen = new Set<string>();
@@ -330,8 +408,22 @@ export default function Runs(): React.JSX.Element {
             ))}
           </select>
         </label>
-        <span className="muted">共 {findingsTotal} 个（去重）</span>
+        <label>
+          审批状态：
+          <select
+            value={showTriaged ? "triaged" : "all"}
+            onChange={(event) => setShowTriaged(event.target.value === "triaged")}
+          >
+            <option value="all">全部</option>
+            <option value="triaged">仅已审批</option>
+          </select>
+        </label>
+        <span className="muted">
+          共 {findingsTotal} 个（去重） · 已审批 {triagedCount} 个
+        </span>
       </div>
+
+      {triageError && <p className="form-error">{triageError}</p>}
 
       <section className="panel">
         <h2>Findings</h2>
@@ -350,27 +442,99 @@ export default function Runs(): React.JSX.Element {
                 <th>维度</th>
                 <th>摘要</th>
                 <th>修复建议</th>
+                <th>审批</th>
               </tr>
             </thead>
             <tbody>
-              {findings.map((finding, index) => (
-                <tr key={index}>
-                  <td>
-                    <span className={`badge ${severityColor(asString(finding.severity).toLowerCase())}`}>
-                      {SEVERITY_LABELS[asString(finding.severity).toLowerCase()] ??
-                        asString(finding.severity)}
-                    </span>
-                  </td>
-                  <td className="mono">{asString(finding.file)}</td>
-                  <td>{asString(finding.dimension)}</td>
-                  <td>{asString(finding.summary)}</td>
-                  <td className="muted">{asString(finding.suggested_fix)}</td>
-                </tr>
-              ))}
+              {findings
+                .filter((finding) => {
+                  if (!showTriaged) return true;
+                  return triage[triageKey(finding)] !== undefined;
+                })
+                .map((finding, index) => {
+                  const key = triageKey(finding);
+                  const decision = triage[key];
+                  const busy = triageBusyKey === key;
+                  return (
+                    <tr key={index} className={decision ? `triage-${decision.decision}` : undefined}>
+                      <td>
+                        <span className={`badge ${severityColor(asString(finding.severity).toLowerCase())}`}>
+                          {SEVERITY_LABELS[asString(finding.severity).toLowerCase()] ??
+                            asString(finding.severity)}
+                        </span>
+                      </td>
+                      <td className="mono">{asString(finding.file)}</td>
+                      <td>{asString(finding.dimension)}</td>
+                      <td>{asString(finding.summary)}</td>
+                      <td className="muted">{asString(finding.suggested_fix)}</td>
+                      <td>
+                        <div className="triage-actions">
+                          {decision ? (
+                            <span
+                              className={`badge ${decision.decision === "approve" ? "green" : "neutral"}`}
+                              title={`${decision.decision === "approve" ? "已批准" : "已拒绝"} · ${decision.timestamp}`}
+                            >
+                              {decision.decision === "approve" ? "已批准" : "已拒绝"}
+                            </span>
+                          ) : (
+                            <>
+                              <button
+                                className="btn"
+                                style={{ padding: "3px 10px", fontSize: 12 }}
+                                disabled={busy}
+                                onClick={() => triageFinding(finding, "approve")}
+                                title="同意该 finding / 接受其修复建议"
+                              >
+                                批准
+                              </button>
+                              <button
+                                className="btn"
+                                style={{ padding: "3px 10px", fontSize: 12 }}
+                                disabled={busy}
+                                onClick={() => triageFinding(finding, "reject")}
+                                title="标记为误报 / 跳过其修复"
+                              >
+                                拒绝
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         )}
+        {triagedCount > 0 && (
+          <div className="pager" style={{ justifyContent: "flex-end" }}>
+            <button
+              className="btn"
+              style={{ padding: "4px 10px", fontSize: 12 }}
+              onClick={() => setConfirmClear(true)}
+            >
+              清除全部审批记录
+            </button>
+          </div>
+        )}
       </section>
+
+      {confirmClear && (
+        <div className="modal-backdrop" onClick={() => setConfirmClear(false)}>
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <h3>清除审批记录</h3>
+            <p>将删除全部 {triagedCount} 条 findings 审批记录，此操作不可撤销。</p>
+            <div className="actions">
+              <button className="btn" onClick={() => setConfirmClear(false)}>
+                取消
+              </button>
+              <button className="btn danger" onClick={clearTriage}>
+                确认清除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

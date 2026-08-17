@@ -4,6 +4,23 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.11.0] - 2026-08-17
+
+WebUI iteration wave: workspaces management, findings triage, tool-call visualization, and UX robustness for the management console (design §17.3 P2/P4, §18). Focus stays on the *run* — the new surfaces complement the dashboard/timeline/checkpoints and the human-in-the-loop chat panel.
+
+### Added
+
+- **Findings triage journal** (`web/findings_triage.py`, `web/routes/runs.py` `GET/POST/DELETE /runs/findings/triage`): persistent approve/reject decisions in `.iterate/findings-triage.jsonl` (append-only, latest decision wins), dedup keyed on `(file, line, dimension)`, all mutations require `confirm=true` and are audit-logged. The Runs page (`pages/Runs.tsx`) adds approve / reject buttons per finding, a triaged-state filter, and a "clear all decisions" action with a secondary confirmation dialog.
+- **Workspaces management** (`web/routes/workspaces.py`, `pages/Workspaces.tsx`): `/workspaces` lists the primary checkout plus every isolate worktree whose `original_path` matches the project (git metadata, config isolation flag, entry count); `/workspaces/remove` removes a stale worktree — slug validated against path traversal, `confirm=true` required, audited. New `/workspaces` route wired into `App.tsx`.
+- **Tool-call visualization** (`components/ChatPanel.tsx`): tool-execution messages render as status cards (executing / done / idle) with tool name and detail, so the chat panel makes the model's tool activity legible at a glance.
+- **UX robustness layer** (`components/ErrorBoundary.tsx`, `components/Skeleton.tsx`): page-level error boundary with retry / reload, skeleton loaders for tables and cards.
+- **Keyboard shortcuts + store hardening** (`App.tsx`, `store.ts`): `g <key>` page jumps, `/` or `Cmd/Ctrl+K` toggles the chat panel; SSE disconnect triggers polling fallback, connection-state toasts, and browser notifications when the run waits on a human decision.
+
+### Fixed
+
+- **Frontend type-check regressions** (`src/api.ts`, `pages/Runs.tsx`): removed a duplicate `request` export and a `triage` identifier collision between the triage state map and the callback — `npm run typecheck` is clean again.
+- **Version sync**: `frontend/web/package.json` bumped to `1.11.0` to match the Python harness (was stuck at `1.10.0`).
+
 ## [1.10.1] - 2026-08-17
 
 Code-quality / release-hygiene pass from a full implementation audit:

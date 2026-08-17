@@ -49,6 +49,13 @@ export default function ChatPanel(): React.JSX.Element {
     void refreshChatStatus();
   }, []);
 
+  // Global shortcut ("/" or Cmd/Ctrl+K) dispatches an event to toggle the panel.
+  useEffect(() => {
+    const onToggle = (): void => setOpen((prev) => !prev);
+    window.addEventListener("iterate:toggle-chat", onToggle);
+    return () => window.removeEventListener("iterate:toggle-chat", onToggle);
+  }, []);
+
   // Auto-scroll to bottom on new messages.
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -274,6 +281,12 @@ export default function ChatPanel(): React.JSX.Element {
 
 // ChatBubble — one message rendered in the chat stream.
 function ChatBubble({ message }: { message: ChatMessage }): React.JSX.Element {
+  // Tool messages (kind === "tool") render as compact activity cards so the
+  // live tool-call stream reads as a timeline instead of raw text (design §18).
+  if (message.kind === "tool") {
+    return <ToolCallCard content={message.content} timestamp={message.timestamp} />;
+  }
+
   const roleClass = message.role === "user" ? "bubble-user" : message.role === "assistant" ? "bubble-assistant" : "bubble-system";
   const kindTag = message.kind !== "text" ? message.kind : "";
 
@@ -284,6 +297,52 @@ function ChatBubble({ message }: { message: ChatMessage }): React.JSX.Element {
       <span className="bubble-time">
         {message.timestamp.slice(11, 19)}
       </span>
+    </div>
+  );
+}
+
+// Parse a tool line like "▶ 调用工具 iterate_review" or "✔ iterate_review：preview"
+// into (status, toolName, detail). Unknown shapes degrade to a generic card.
+interface ParsedToolLine {
+  status: "start" | "done" | "idle";
+  toolName: string;
+  detail: string;
+}
+
+function parseToolLine(content: string): ParsedToolLine {
+  const text = content.trim();
+  if (text.startsWith("▶")) {
+    const rest = text.replace(/^▶\s*/, "").replace(/^调用工具\s*/, "");
+    return { status: "start", toolName: rest, detail: "" };
+  }
+  const match = text.match(/^[✔✓✖✗]\s*([^：:]+)[：:]\s*(.*)$/s);
+  if (match) {
+    const mark = text[0];
+    return {
+      status: mark === "✔" || mark === "✓" ? "done" : "idle",
+      toolName: match[1].trim(),
+      detail: match[2].trim(),
+    };
+  }
+  return { status: "idle", toolName: text, detail: "" };
+}
+
+function ToolCallCard({ content, timestamp }: { content: string; timestamp: string }): React.JSX.Element {
+  const parsed = parseToolLine(content);
+  const statusLabel =
+    parsed.status === "start" ? "执行中" : parsed.status === "done" ? "完成" : "工具";
+  const statusClass =
+    parsed.status === "start" ? "tool-start" : parsed.status === "done" ? "tool-done" : "tool-idle";
+
+  return (
+    <div className={`tool-card ${statusClass}`}>
+      <div className="tool-card-head">
+        <span className="tool-card-dot" aria-hidden="true" />
+        <span className="tool-card-name mono">{parsed.toolName}</span>
+        <span className="tool-card-status">{statusLabel}</span>
+        <span className="tool-card-time">{timestamp.slice(11, 19)}</span>
+      </div>
+      {parsed.detail && <div className="tool-card-detail">{parsed.detail}</div>}
     </div>
   );
 }

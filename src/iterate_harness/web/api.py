@@ -88,6 +88,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
     app.include_router(route_modules.checkpoints.router, prefix=API_PREFIX)
     app.include_router(route_modules.config.router, prefix=API_PREFIX)
     app.include_router(route_modules.reports.router, prefix=API_PREFIX)
+    app.include_router(route_modules.workspaces.router, prefix=API_PREFIX)
     app.include_router(route_modules.chat.router, prefix=API_PREFIX)
     app.include_router(events_module.router, prefix=API_PREFIX)
 

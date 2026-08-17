@@ -171,6 +171,12 @@ function applyProgressEvent(payload: ProgressUpdateEvent): Partial<ChatRunStatus
 
 // Hook to wire the SSE stream into the store. Called once from App.
 export function subscribeToStatus(projectRoot: string): () => void {
+  // Track the last waiting state so we can fire a browser notification once
+  // per transition into a human-in-the-loop request (design §18.4).
+  let lastWaitingFor: string | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let notificationGranted = false;
+
   const onStatus = (payload: unknown): void => {
     const delta = payload as SseStatusPayload;
     const current = useWebUi.getState().status;
@@ -198,6 +204,66 @@ export function subscribeToStatus(projectRoot: string): () => void {
     }
   };
 
+  // Fallback polling keeps the dashboard + chat state fresh whenever the SSE
+  // stream is down (design §17 UX resilience). Started on error, stopped on
+  // reconnect success, so we never double-poll while the stream is healthy.
+  const startPolling = (): void => {
+    if (pollTimer) return;
+    pollTimer = setInterval(() => {
+      void useWebUi.getState().refreshStatus();
+      void useWebUi.getState().refreshChatStatus();
+    }, 5000);
+  };
+
+  const stopPolling = (): void => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+
+  // Fire a Notification when the harness needs human input while the tab is
+  // hidden (or when the user has granted permission explicitly).
+  const maybeNotifyWaiting = (waitingFor: string): void => {
+    const isHumanRequest =
+      waitingFor === "permission" ||
+      waitingFor === "user_select" ||
+      waitingFor === "user_prompt";
+    if (!isHumanRequest || waitingFor === lastWaitingFor) return;
+    lastWaitingFor = waitingFor;
+
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "granted") {
+      notificationGranted = true;
+    } else if (Notification.permission === "default") {
+      void Notification.requestPermission().then((permission) => {
+        if (permission === "granted") notificationGranted = true;
+      });
+    }
+    if (!notificationGranted && Notification.permission !== "granted") return;
+
+    const labels: Record<string, string> = {
+      permission: "iterate 需要你的授权",
+      user_select: "iterate 需要你的选择",
+      user_prompt: "iterate 需要补充信息",
+    };
+    const status = useWebUi.getState().chatStatus;
+    const question = status?.question;
+    try {
+      const notification = new Notification(labels[waitingFor] ?? "iterate 需要输入", {
+        body: question || "请打开对话面板处理迭代请求。",
+        tag: "iterate-waiting",
+      });
+      notification.onclick = (): void => {
+        window.focus();
+        window.dispatchEvent(new CustomEvent("iterate:toggle-chat"));
+        notification.close();
+      };
+    } catch {
+      // Notification constructor can throw on some platforms; degrade silently.
+    }
+  };
+
   let source: EventSource | null = null;
   let closed = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -222,9 +288,11 @@ export function subscribeToStatus(projectRoot: string): () => void {
     source.addEventListener("run-state", (event) => {
       const payload = parseJson(event);
       if (payload !== undefined) {
-        useWebUi
-          .getState()
-          .patchChatStatus(applyRunStateEvent(payload as RunStateEvent));
+        const runEvent = payload as RunStateEvent;
+        useWebUi.getState().patchChatStatus(applyRunStateEvent(runEvent));
+        if (runEvent.waitingFor !== undefined) {
+          maybeNotifyWaiting(runEvent.waitingFor);
+        }
       }
     });
     source.addEventListener("progress-update", (event) => {
@@ -236,13 +304,20 @@ export function subscribeToStatus(projectRoot: string): () => void {
       }
     });
     source.onopen = (): void => {
-      if (!closed) useWebUi.getState().setConnectionState("connected");
+      if (closed) return;
+      // Reconnect succeeded: stop fallback polling, reset notification memory,
+      // and tell the user the live stream is back.
+      stopPolling();
+      lastWaitingFor = null;
+      useWebUi.getState().setConnectionState("connected");
+      useWebUi.getState().pushToast("success", "实时流已连接");
     };
     source.onerror = (): void => {
       // EventSource auto-reconnects; schedule a poll fallback as well.
       source?.close();
       if (closed) return;
       useWebUi.getState().setConnectionState("reconnecting");
+      startPolling();
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connect, 3000);
     };
@@ -251,6 +326,7 @@ export function subscribeToStatus(projectRoot: string): () => void {
   connect();
   return () => {
     closed = true;
+    stopPolling();
     if (reconnectTimer) clearTimeout(reconnectTimer);
     source?.close();
     useWebUi.getState().setConnectionState("disconnected");

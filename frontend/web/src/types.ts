@@ -123,6 +123,38 @@ export interface ReportPreview {
   size: number;
 }
 
+// Workspaces (design §17.3 P4)
+export interface WorkspaceView {
+  name: string;
+  path: string;
+  kind: "primary" | "worktree";
+  active: boolean;
+  detail: {
+    slug?: string;
+    branch?: string;
+    head?: string;
+    dirty?: boolean;
+    gitRoot?: string | null;
+    isolationEnabled?: boolean;
+    entryCount?: number;
+    configExists?: boolean;
+    agent_id?: string;
+    created_at?: number;
+    round?: number;
+  };
+}
+
+// A persisted findings-triage decision (design §17.3 P2).
+export interface TriageDecision {
+  key: string;
+  file: string;
+  line: number | null;
+  dimension: string;
+  decision: "approve" | "reject";
+  note: string | null;
+  timestamp: string;
+}
+
 // Compact delta pushed over the SSE stream (events.py `_build_status_payload`).
 // Kept separate from StatusResponse because the SSE payload uses camelCase.
 export interface SseStatusPayload {
