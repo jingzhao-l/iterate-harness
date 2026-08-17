@@ -841,9 +841,87 @@ def mcp_remove(
 
 # ---- iterate subcommands ----
 
+#: Timeout for the ``--branch`` git operations (checkout / worktree add).
+_BRANCH_GIT_TIMEOUT_SECONDS = 60
 
 
-def _run_headless(kickoff: str) -> None:
+def _current_git_branch(cwd: str | Path) -> str | None:
+    """Return the current branch name, or ``None`` outside a repo / detached."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=_BRANCH_GIT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    branch = proc.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
+def _ensure_review_branch(branch: str) -> str | None:
+    """Switch to ``branch`` before a review/run when it differs from the current one.
+
+    Prefers a plain ``git checkout``; when the working tree is dirty (checkout
+    fails) it falls back to an isolated ``git worktree add`` and chdirs into
+    it. Returns the previous working directory when the cwd changed (caller
+    must restore it in ``finally``), otherwise ``None``.
+    """
+    import os
+    import subprocess
+    import tempfile
+
+    if not branch:
+        return None
+    cwd = Path.cwd()
+    current = _current_git_branch(cwd)
+    if current and current == branch:
+        print(f"Already on target branch {branch} — continuing.")
+        return None
+
+    checkout = subprocess.run(
+        ["git", "checkout", branch],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        timeout=_BRANCH_GIT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if checkout.returncode == 0:
+        print(f"Switched to branch {branch} (was {current or 'HEAD'}) for this run.")
+        return None
+
+    # Plain checkout failed (dirty tree, local changes, ...) — review from an
+    # isolated linked worktree instead, then restore the cwd afterwards.
+    worktree_path = Path(tempfile.mkdtemp(prefix="iterate-branch-")) / "worktree"
+    worktree_add = subprocess.run(
+        ["git", "worktree", "add", str(worktree_path), branch],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        timeout=_BRANCH_GIT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if worktree_add.returncode != 0:
+        print(
+            f"Could not switch to branch {branch} (both `git checkout` and "
+            f"`git worktree add` failed): {worktree_add.stderr.strip()}",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+    os.chdir(worktree_path)
+    print(f"Created isolated worktree for branch {branch} at {worktree_path} — reviewing there.")
+    return str(cwd)
+
+
+def _run_headless(kickoff: str, branch: str | None = None) -> None:
     """Run one canonical iterate prompt through the kernel print pipeline."""
     import asyncio
 
@@ -853,6 +931,11 @@ def _run_headless(kickoff: str) -> None:
     )
     from iterate_harness.ui.app import run_print_mode
 
+    if branch:
+        kickoff = (
+            f"{kickoff}\n\nTarget branch: `{branch}` — review the repository "
+            "as checked out on this branch."
+        )
     ensure_onboarding_fingerprints(Path.cwd())
     warn_if_drifted(Path.cwd())
     asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
@@ -1037,16 +1120,24 @@ def iterate_review(
     clean_ok: bool = typer.Option(
         False, "--clean-ok", help="Exit 0 when there are no changes (scheduled runs)"
     ),
+    branch: str = typer.Option("", "--branch", help="Target branch for the review (creates worktree if different from current)"),
 ) -> None:
     """Dry-run pure review: multi-round convergence, read-only, audited report."""
     from iterate_harness.iterate import prompts as iterate_prompts
     from iterate_harness.iterate.config_loader import load_effective_config
 
-    effective_goal = load_effective_config(str(Path.cwd())).config.goal
-    changed_files = _resolve_changed_files(changed, ref, clean_ok)
-    _run_headless(
-        iterate_prompts.dry_run_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd()))
-    )
+    prev_cwd = _ensure_review_branch(branch) if branch else None
+    try:
+        effective_goal = load_effective_config(str(Path.cwd())).config.goal
+        changed_files = _resolve_changed_files(changed, ref, clean_ok)
+        _run_headless(
+            iterate_prompts.dry_run_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd())),
+            branch=branch or None,
+        )
+    finally:
+        if prev_cwd is not None:
+            import os
+            os.chdir(prev_cwd)
 
 
 @iterate_app.command("run")
@@ -1059,16 +1150,24 @@ def iterate_run(
     clean_ok: bool = typer.Option(
         False, "--clean-ok", help="Exit 0 when there are no changes (scheduled runs)"
     ),
+    branch: str = typer.Option("", "--branch", help="Target branch for the review (creates worktree if different from current)"),
 ) -> None:
     """Autonomous loop: review -> fix atomic findings -> validate -> repeat."""
     from iterate_harness.iterate import prompts as iterate_prompts
     from iterate_harness.iterate.config_loader import load_effective_config
 
-    effective_goal = load_effective_config(str(Path.cwd())).config.goal
-    changed_files = _resolve_changed_files(changed, ref, clean_ok)
-    _run_headless(
-        iterate_prompts.normal_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd()))
-    )
+    prev_cwd = _ensure_review_branch(branch) if branch else None
+    try:
+        effective_goal = load_effective_config(str(Path.cwd())).config.goal
+        changed_files = _resolve_changed_files(changed, ref, clean_ok)
+        _run_headless(
+            iterate_prompts.normal_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd())),
+            branch=branch or None,
+        )
+    finally:
+        if prev_cwd is not None:
+            import os
+            os.chdir(prev_cwd)
 
 
 schedule_app = typer.Typer(help="Manage the scheduled changed-only quick review (cron)")
@@ -1335,6 +1434,21 @@ def iterate_report(
         "--fail-on",
         help="Severity gate for the exit code: none|low|medium|high|critical",
     ),
+    webhook_url: str = typer.Option(
+        "",
+        "--webhook",
+        help="Post report to a Slack/Feishu webhook URL",
+    ),
+    lang: str = typer.Option(
+        "",
+        "--lang",
+        help="Report language: en|zh (default: config.language or 'en'; --lang overrides config)",
+    ),
+    csv_out: str = typer.Option(
+        "",
+        "--csv",
+        help="Write findings as CSV (path or '-' for .iterate/report.csv)",
+    ),
 ) -> None:
     """Render the final iterate report from the decision log (CI mode).
 
@@ -1348,9 +1462,28 @@ def iterate_report(
     serve = _typer_flag(serve)
     persist = _typer_flag(persist)
     serve_port = _typer_int(serve_port)
+    webhook_url = _typer_str(webhook_url)
+    lang = _typer_str(lang)
+    csv_out = _typer_str(csv_out)
 
     from iterate_harness.iterate import ci_report, html_report, pr_comment, report_server
     from iterate_harness.iterate import decision_log as iter_log
+
+    # Resolve the effective report language: explicit --lang wins over the
+    # project config's `language` field; both fall back to English.
+    language = lang
+    if language == "":
+        try:
+            from iterate_harness.iterate.config_loader import load_effective_config
+
+            effective = load_effective_config(str(Path.cwd()))
+            language = effective.config.language
+        except Exception:
+            language = ""
+    language = (language or "en").strip().lower()
+    if language not in ci_report.SUPPORTED_LANGUAGES:
+        allowed = "|".join(ci_report.SUPPORTED_LANGUAGES)
+        raise typer.BadParameter(f"must be one of: {allowed} (got '{lang}')")
 
     threshold = fail_on.strip().lower()
     if threshold not in ci_report.SEVERITY_ORDER:
@@ -1385,8 +1518,26 @@ def iterate_report(
         body = pr_comment.render_markdown(summary, gate)
         result = pr_comment.post_pr_comment(body, str(Path.cwd()))
         print(f"PR comment: {result}", file=sys.stderr)
+    if webhook_url:
+        from iterate_harness.iterate import webhook as webhook_mod
+
+        webhook_result = webhook_mod.notify_report(webhook_url, summary, gate)
+        if webhook_result.success:
+            print(
+                f"Webhook notification sent (HTTP {webhook_result.status_code}).",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Webhook notification failed: {webhook_result.error}",
+                file=sys.stderr,
+            )
     if not github and not pr:
-        print(ci_report.render_text(summary, gate))
+        print(ci_report.render_text(summary, gate, language=language))
+    if csv_out:
+        csv_path = csv_out if csv_out != "-" else str(Path.cwd() / ".iterate" / "report.csv")
+        result = ci_report.render_csv(summary, csv_path)
+        print(f"CSV report: {result}", file=sys.stderr)
     exit_code = max(
         ci_report.severity_gate(summary, threshold),
         ci_report.threshold_exit_code(gate),
@@ -1425,6 +1576,18 @@ def _typer_int(value: object) -> int:
         except ValueError:
             return 0
     return 0
+
+
+def _typer_str(value: object) -> str:
+    """Normalize a typer OptionInfo default to a plain str."""
+    from typer.models import OptionInfo
+
+    if isinstance(value, OptionInfo):
+        v = value.default
+        return str(v) if v is not None else ""
+    if isinstance(value, str):
+        return value
+    return str(value) if value is not None else ""
 
 
 def _write_html_report(html_report: ModuleType, entries: list[DecisionLogEntry], html_out: str) -> None:
@@ -1851,6 +2014,8 @@ _PROVIDER_LABELS: dict[str, str] = {
     "gemini": "Google Gemini",
     "minimax": "MiniMax",
     "modelscope": "ModelScope",
+    "local": "Local (openai-compatible)",
+    "ollama": "Ollama (local)",
 }
 
 _AUTH_SOURCE_LABELS: dict[str, str] = {
@@ -1866,6 +2031,7 @@ _AUTH_SOURCE_LABELS: dict[str, str] = {
     "gemini_api_key": "Gemini API key",
     "minimax_api_key": "MiniMax API key",
     "modelscope_api_key": "ModelScope API key",
+    "local": "Local endpoint (no API key)",
 }
 
 
@@ -2230,6 +2396,9 @@ def _ensure_profile_auth(manager, profile_name: str) -> None:
     from iterate_harness.config.settings import auth_source_provider_name, auth_source_uses_api_key
 
     profile = manager.list_profiles()[profile_name]
+    if profile.auth_source == "local":
+        print(f"{profile.label} uses a local endpoint; no API key required.", flush=True)
+        return
     if not auth_source_uses_api_key(profile.auth_source):
         _login_provider(auth_source_provider_name(profile.auth_source))
         return
@@ -2333,6 +2502,10 @@ def _login_provider(provider: str) -> None:
 
     if provider in ("openai_codex", "anthropic_claude"):
         _bind_external_provider(provider)
+        return
+
+    if provider in ("local", "ollama"):
+        print(f"{provider} is a local endpoint; no API key required.", flush=True)
         return
 
     if provider in ("anthropic", "openai", "dashscope", "bedrock", "vertex", "moonshot", "gemini", "minimax", "modelscope"):

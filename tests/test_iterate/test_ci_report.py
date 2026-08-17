@@ -336,3 +336,178 @@ class TestIterateReportSlashCommand:
     async def test_friendly_when_no_report(self, tmp_path):
         result = await self._run("report", tmp_path)
         assert "No report entry" in (result.message or "")
+
+
+class TestRenderTextL10N:
+    """Multi-language support for render_text (issue #11)."""
+
+    def test_english_is_default_and_identical(self):
+        """Default language='en' must produce the same output as before."""
+        text = ci_report.render_text(ci_report.ReportSummary.from_entry(
+            report_entry(findings=[{"severity": "high", "file": "a.py", "line": 3, "summary": "x", "dimension": "s"}])
+        ))
+        expected = ci_report.render_text(ci_report.ReportSummary.from_entry(
+            report_entry(findings=[{"severity": "high", "file": "a.py", "line": 3, "summary": "x", "dimension": "s"}])
+        ), language="en")
+        assert text == expected
+
+    def test_header_zh(self):
+        summary = ci_report.ReportSummary.from_entry(
+            report_entry(findings=[{"severity": "low", "summary": "t", "dimension": "style"}], mode="normal", total=1)
+        )
+        text = ci_report.render_text(summary, language="zh")
+        lines = text.splitlines()
+        assert "iterate 报告（normal）：1 个问题，判定=converged" in lines[0]
+
+    def test_gate_zh_text(self):
+        summary = ci_report.ReportSummary.from_entry(report_entry())
+        gate = {"passed": False, "violations": [{"scope": "global", "metric": "critical", "limit": 0, "actual": 2}]}
+        text = ci_report.render_text(summary, gate, language="zh")
+        assert "阈值门禁：未通过" in text
+
+    def test_gate_passed_zh(self):
+        summary = ci_report.ReportSummary.from_entry(report_entry())
+        text = ci_report.render_text(summary, {"passed": True, "violations": []}, language="zh")
+        assert "阈值门禁：通过" in text
+
+    def test_unknown_language_falls_back_to_en(self):
+        summary = ci_report.ReportSummary.from_entry(
+            report_entry(findings=[{"severity": "low", "summary": "t", "dimension": "s"}])
+        )
+        text_en = ci_report.render_text(summary, language="en")
+        text_xx = ci_report.render_text(summary, language="xx")
+        assert text_en == text_xx
+
+    def test_finding_rows_remain_english_in_zh_mode(self):
+        """Per-finding rows stay in English even when the header is Chinese."""
+        findings = [{"severity": "high", "file": "src/a.py", "line": 7, "summary": "sql injection", "dimension": "security"}]
+        summary = ci_report.ReportSummary.from_entry(report_entry(findings=findings, mode="normal"))
+        text = ci_report.render_text(summary, language="zh")
+        assert "[high] src/a.py:7 security: sql injection" in text
+
+
+class TestRenderCsv:
+    """CSV export (issue #15)."""
+
+    def test_writes_header_and_rows(self, tmp_path):
+        findings = [
+            {"severity": "high", "dimension": "security", "file": "a.py", "line": 3, "summary": "x", "failure_scenario": "y", "suggested_fix": "z"},
+            {"severity": "low", "dimension": "style", "file": "b.py", "line": 5, "summary": "s", "failure_scenario": "", "suggested_fix": ""},
+        ]
+        summary = ci_report.ReportSummary.from_entry(report_entry(findings=findings))
+        out = tmp_path / "out.csv"
+        result = ci_report.render_csv(summary, str(out))
+        assert result == str(out)
+        assert out.exists()
+        content = out.read_bytes()
+        # UTF-8 BOM
+        assert content[:3] == b"\xef\xbb\xbf"
+        lines = out.read_text(encoding="utf-8-sig").splitlines()
+        assert len(lines) == 3  # header + 2 rows
+        assert lines[0] == "severity,dimension,file,line,summary,failure_scenario,suggested_fix"
+        assert lines[1] == "high,security,a.py,3,x,y,z"
+        assert lines[2] == "low,style,b.py,5,s,,"
+
+    def test_empty_findings_produces_header_only(self, tmp_path):
+        summary = ci_report.ReportSummary.from_entry(report_entry())
+        out = tmp_path / "empty.csv"
+        result = ci_report.render_csv(summary, str(out))
+        assert result == str(out)
+        content = out.read_text(encoding="utf-8-sig")
+        assert content == "severity,dimension,file,line,summary,failure_scenario,suggested_fix\n"
+
+    def test_creates_parent_directories(self, tmp_path):
+        summary = ci_report.ReportSummary.from_entry(
+            report_entry(findings=[{"severity": "low", "dimension": "s", "summary": "t"}])
+        )
+        out = tmp_path / "sub" / "nested" / "report.csv"
+        result = ci_report.render_csv(summary, str(out))
+        assert result == str(out)
+        assert out.exists()
+
+    def test_os_error_returns_error_string(self):
+        summary = ci_report.ReportSummary.from_entry(
+            report_entry(findings=[{"severity": "low", "dimension": "s", "summary": "t"}])
+        )
+        result = ci_report.render_csv(summary, "/nonexistent-dir-xyz/abc/def.csv")
+        assert result.startswith("error:")
+
+    def test_csv_uses_utf8_sig_bom(self, tmp_path):
+        """Verify Excel-compatible UTF-8 BOM encoding."""
+        summary = ci_report.ReportSummary.from_entry(
+            report_entry(findings=[{"severity": "medium", "dimension": "perf", "summary": "slow", "file": "x.py"}])
+        )
+        out = tmp_path / "bom.csv"
+        ci_report.render_csv(summary, str(out))
+        raw = out.read_bytes()
+        assert raw[:3] == b"\xef\xbb\xbf"
+        assert raw[3:].startswith(b"severity,dimension")
+
+
+class TestIterateReportCliL10NCsv:
+    """CLI integration for --lang and --csv."""
+
+    def test_lang_zh_output(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        append_entry(
+            tmp_path,
+            report_entry(findings=[{"severity": "low", "file": "a.py", "line": 1, "summary": "s", "dimension": "style"}]),
+        )
+        result = CliRunner().invoke(cli.app, ["iterate", "report", "--lang", "zh"])
+        assert result.exit_code == 0
+        assert "iterate 报告" in result.output
+
+    def test_config_language_fallback(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "iterate.config.yaml").write_text("language: zh\n", encoding="utf-8")
+        append_entry(
+            tmp_path,
+            report_entry(findings=[{"severity": "low", "file": "a.py", "line": 1, "summary": "s", "dimension": "style"}]),
+        )
+        result = CliRunner().invoke(cli.app, ["iterate", "report"])
+        assert result.exit_code == 0
+        assert "iterate 报告" in result.output
+
+    def test_lang_overrides_config_language(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "iterate.config.yaml").write_text("language: zh\n", encoding="utf-8")
+        append_entry(
+            tmp_path,
+            report_entry(findings=[{"severity": "low", "file": "a.py", "line": 1, "summary": "s", "dimension": "style"}]),
+        )
+        result = CliRunner().invoke(cli.app, ["iterate", "report", "--lang", "en"])
+        assert result.exit_code == 0
+        assert "iterate report (dry-run): 1 finding(s)" in result.output
+
+    def test_csv_flag_creates_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        append_entry(
+            tmp_path,
+            report_entry(findings=[{"severity": "high", "file": "a.py", "line": 3, "summary": "x", "dimension": "security"}]),
+        )
+        csv_path = tmp_path / "report.csv"
+        result = CliRunner().invoke(cli.app, ["iterate", "report", "--csv", str(csv_path)])
+        # severity high → fail_on default (high) → exit code 1
+        assert result.exit_code == 1
+        assert csv_path.exists()
+        content = csv_path.read_text(encoding="utf-8-sig")
+        assert "severity,dimension,file,line" in content
+        assert "high,security,a.py" in content
+
+    def test_csv_shortcut_dash(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        append_entry(
+            tmp_path,
+            report_entry(findings=[{"severity": "low", "file": "b.py", "line": 5, "summary": "s", "dimension": "style"}]),
+        )
+        result = CliRunner().invoke(cli.app, ["iterate", "report", "--csv", "-"])
+        assert result.exit_code == 0
+        csv_path = tmp_path / ".iterate" / "report.csv"
+        assert csv_path.exists()
+        assert "low,style,b.py" in csv_path.read_text(encoding="utf-8-sig")
+
+    def test_invalid_lang_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(cli.app, ["iterate", "report", "--lang", "fr"])
+        assert result.exit_code == 2  # typer.BadParameter
+        assert "must be one of" in result.output

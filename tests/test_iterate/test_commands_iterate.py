@@ -86,3 +86,57 @@ async def test_validate_rejects_unknown_command(tmp_path):
 async def test_unknown_subcommand_shows_usage(tmp_path):
     result = await iterate_command_handler("bogus", make_context(tmp_path))
     assert "Usage:" in (result.message or "")
+
+
+# -- /iterate dimensions -----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dimensions_lists_configured_with_resources(tmp_path):
+    (tmp_path / "iterate.config.yaml").write_text(
+        "goal: g\n"
+        "dimensions: [security, style-tests]\n"
+        "dimension_resources:\n"
+        "  security:\n"
+        "    model: claude-opus-4\n"
+        "    concurrency: 2\n"
+        "    token_budget: 80000\n"
+        "  style-tests:\n"
+        "    model: claude-haiku\n",
+        encoding="utf-8",
+    )
+    result = await iterate_command_handler("dimensions", make_context(tmp_path))
+    message = result.message or ""
+    assert "Configured dimensions:" in message
+    assert "- security (model=claude-opus-4, concurrency=2, token_budget=80000)" in message
+    assert "- style-tests (model=claude-haiku)" in message
+
+
+@pytest.mark.asyncio
+async def test_dimensions_default_listing_without_resources(tmp_path):
+    result = await iterate_command_handler("dimensions", make_context(tmp_path))
+    message = result.message or ""
+    assert "Configured dimensions:" in message
+    # Default dimensions include the nine base categories, listed bare.
+    assert "- correctness" in message
+    assert "- security" in message
+    assert "- ui-ux" in message
+
+
+@pytest.mark.asyncio
+async def test_dimensions_survives_partial_resources(tmp_path):
+    # A resource key for a dimension not in the enabled list must not break
+    # the listing of the enabled dimensions.
+    (tmp_path / "iterate.config.yaml").write_text(
+        "goal: g\n"
+        "dimensions: [security]\n"
+        "dimension_resources:\n"
+        "  unrelated:\n"
+        "    model: claude-haiku\n",
+        encoding="utf-8",
+    )
+    result = await iterate_command_handler("dimensions", make_context(tmp_path))
+    message = result.message or ""
+    assert "Configured dimensions:" in message
+    assert "- security" in message
+    assert "unrelated" not in message.splitlines()[0:3]

@@ -22,11 +22,16 @@ import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import yaml
+
 from .types import KnownIntentional
 
 log = logging.getLogger(__name__)
 
 PERSONALIZATION_FILENAME = "personalization.json"
+
+#: Config file name for the project-level iterate.config.yaml.
+CONFIG_FILENAME = "iterate.config.yaml"
 
 #: The 9 category keys (7 structured + 2 free text).
 STRUCTURED_CATEGORIES = (
@@ -141,3 +146,128 @@ def load(base_dir: str | Path | None, project_root: str | Path) -> Personalizati
 def known_intentional_of(base_dir: str | Path | None, project_root: str | Path) -> list[KnownIntentional]:
     """Convenience: just the known_intentional list for review filtering."""
     return load(base_dir, project_root).known_intentional
+
+
+# ---------------------------------------------------------------------------
+# Config bridge (#8: known_intentional "apply this round")
+# ---------------------------------------------------------------------------
+
+#: Marker written into iterate.config.yaml when the bridge auto-merges the
+#: triage results, so a human can tell machine-added entries from their own.
+CONFIG_BRIDGE_MARKER = "managed-by-iterate-triage"
+
+
+def _known_key(entry: KnownIntentional) -> tuple[str, str, int | None]:
+    """Stable dedupe key for a known_intentional entry."""
+    return (entry.file, entry.dimension, entry.line)
+
+
+def _known_to_dict(entry: KnownIntentional) -> dict[str, object]:
+    """Serialize one known_intentional entry to its config shape."""
+    out: dict[str, object] = {
+        "file": entry.file,
+        "dimension": entry.dimension,
+        "reason": entry.reason,
+    }
+    if entry.line is not None:
+        out["line"] = entry.line
+    return out
+
+
+def _parse_config_known(raw: object) -> list[KnownIntentional]:
+    """Defensive parse of config ``personalization.known_intentional``."""
+    entries: list[KnownIntentional] = []
+    if not isinstance(raw, list):
+        return entries
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        line = item.get("line")
+        entries.append(
+            KnownIntentional(
+                file=str(item.get("file", "")),
+                dimension=str(item.get("dimension", "")),
+                reason=str(item.get("reason", "")),
+                line=line if isinstance(line, int) else None,
+            )
+        )
+    return entries
+
+
+def sync_known_intentional_to_config(
+    project_root: str | Path,
+    entries: list[KnownIntentional],
+) -> dict[str, object]:
+    """Merge new known_intentional entries into ``iterate.config.yaml``.
+
+    The triage tool persists ignores to the per-project ``personalization.json``
+    (:func:`save`), which the review loop already reads in real time — so the
+    filter takes effect from the very next round. What is missing without this
+    bridge is project visibility: entries stay in the harness's private JSON
+    and never land in the checked-in ``iterate.config.yaml``. This function
+    merges the given entries into ``personalization.known_intentional`` of the
+    project config (deduped, preserving any hand-written entries), writes the
+    file back atomically, and reports what changed.
+
+    Never raises: a missing/unreadable config or a broken yaml leaves the
+    file untouched and returns a report explaining why.
+
+    Returns a report dict:
+    ``{"added": [...], "already": n, "config": path-or-None, "reason": str?}``
+    """
+    report: dict[str, object] = {"added": [], "already": 0, "config": None}
+    config_path = Path(project_root) / CONFIG_FILENAME
+    if not entries:
+        report["already"] = 0
+        return report
+
+    try:
+        raw = config_path.read_text(encoding="utf-8")
+        data = yaml.safe_load(raw)
+    except OSError:
+        report["reason"] = "no iterate.config.yaml (create one to persist)"
+        return report
+    except Exception as exc:  # yaml.YAMLError and friends
+        report["reason"] = f"config not readable: {exc}"
+        return report
+    if not isinstance(data, dict):
+        report["reason"] = "config root is not a mapping"
+        return report
+
+    personalization = data.get("personalization")
+    if personalization is None:
+        personalization = {}
+    if not isinstance(personalization, dict):
+        report["reason"] = "config personalization is not a mapping"
+        return report
+
+    existing = _parse_config_known(personalization.get("known_intentional"))
+    seen = {_known_key(k) for k in existing}
+    added: list[KnownIntentional] = []
+    for entry in entries:
+        if _known_key(entry) in seen:
+            continue
+        existing.append(entry)
+        seen.add(_known_key(entry))
+        added.append(entry)
+
+    if not added:
+        report["already"] = len(existing)
+        return report
+
+    personalization["known_intentional"] = [_known_to_dict(k) for k in existing]
+    data["personalization"] = personalization
+    try:
+        content = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        tmp = config_path.with_suffix(".yaml.tmp")
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(config_path)
+    except Exception as exc:
+        report["reason"] = f"failed to write config: {exc}"
+        report["added"] = []
+        return report
+
+    report["added"] = [_known_to_dict(k) for k in added]
+    report["already"] = len(existing) - len(added)
+    report["config"] = str(config_path)
+    return report

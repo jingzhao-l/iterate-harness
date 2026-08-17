@@ -12,6 +12,54 @@ from __future__ import annotations
 
 import json
 
+#: Name of the default kickoff template preset (keeps current behavior).
+DEFAULT_TEMPLATE = "standard"
+
+#: Registered kickoff template presets. Each preset carries the suffix text
+#: appended to dry-run / normal kickoffs plus a human-readable description.
+TEMPLATE_PRESETS: dict[str, dict[str, str]] = {
+    "standard": {
+        "dry_run_suffix": "",
+        "normal_suffix": "",
+        "description": "Balanced depth — default behavior",
+    },
+    "strict": {
+        "dry_run_suffix": " Be thorough: for every finding, verify the failure scenario is concrete and reproducible. Flag any finding where the suggested fix introduces a new risk. Prefer false positives over missed issues.",
+        "normal_suffix": " Be conservative: prefer minimal, targeted fixes. After every fix, consider whether it could introduce a regression. Do not fix architecture-level issues — only atomic findings.",
+        "description": "Conservative — emphasizes safety and thoroughness",
+    },
+    "quick": {
+        "dry_run_suffix": " Focus on the most impactful findings only. Skip low-severity issues unless they compound. Respond quickly.",
+        "normal_suffix": " Fix the most impactful findings first. Skip low-severity auto-fixes. Goal is a fast pass, not exhaustive coverage.",
+        "description": "Fast — impacts only, minimal depth",
+    },
+}
+
+
+def template_suffix(template: str, mode: str) -> str:
+    """Return the preset's kickoff suffix for ``mode`` (``"dry-run"``/``"normal"``).
+
+    The mode value is normalized ("dry-run" -> "dry_run") to match the
+    ``{mode}_suffix`` keys in :data:`TEMPLATE_PRESETS`. Unknown templates
+    degrade gracefully to the standard preset (empty suffix), so a typo or
+    a stale caller never changes behavior.
+    """
+    key_mode = mode.replace("-", "_")
+    presets = TEMPLATE_PRESETS.get(template) or TEMPLATE_PRESETS[DEFAULT_TEMPLATE]
+    return str(presets.get(f"{key_mode}_suffix") or "")
+
+
+def list_templates() -> list[dict[str, str]]:
+    """Return metadata for every available template preset (menus/CLI use)."""
+    return [
+        {
+            "name": name,
+            "description": str(data.get("description") or ""),
+        }
+        for name, data in TEMPLATE_PRESETS.items()
+    ]
+
+
 ITERATE_SKILL_PROMPT = """## Iterate Workflow (autonomous code iteration)
 
 You have the iterate harness installed, which registers these tools:
@@ -269,6 +317,7 @@ def dry_run_kickoff(
     max_rounds: int,
     changed_files: list[str] | None = None,
     cwd: str | None = None,
+    template: str = DEFAULT_TEMPLATE,
 ) -> str:
     """First-turn prompt that boots the canonical dry-run loop."""
     return (
@@ -280,6 +329,7 @@ def dry_run_kickoff(
         "deterministic aggregate each round, stop on convergence (0 new "
         "findings) or the round cap, then meta-review the final report and "
         "append one report entry to the decision log. Do NOT modify any file."
+        + template_suffix(template, "dry-run")
     )
 
 
@@ -288,6 +338,7 @@ def normal_kickoff(
     max_rounds: int,
     changed_files: list[str] | None = None,
     cwd: str | None = None,
+    template: str = DEFAULT_TEMPLATE,
 ) -> str:
     """First-turn prompt that boots the canonical normal-mode loop."""
     return (
@@ -300,10 +351,16 @@ def normal_kickoff(
         "minimal changes, validate every round via iterate_validate, roll "
         "back failed rounds, log every round, stop when nothing remains to "
         "fix or the round cap is reached."
+        + template_suffix(template, "normal")
     )
 
 
-def resume_kickoff(goal: str, max_rounds: int, last_summary: dict) -> str:
+def resume_kickoff(
+    goal: str,
+    max_rounds: int,
+    last_summary: dict,
+    template: str = DEFAULT_TEMPLATE,
+) -> str:
     """First-turn prompt that resumes the last iterate run (breakpoint resume).
 
     ``last_summary`` is the payload from
@@ -326,6 +383,8 @@ def resume_kickoff(goal: str, max_rounds: int, last_summary: dict) -> str:
             )
         )
     preview = "\n".join(preview_lines) or "- (no finding previews recorded)"
+    mode = str(last_summary.get("mode") or "normal")
+    resume_suffix = template_suffix(template, mode)
     if interrupted:
         return (
             f"Resume the interrupted iterate run on this project. Goal: {goal}. "
@@ -341,6 +400,7 @@ def resume_kickoff(goal: str, max_rounds: int, last_summary: dict) -> str:
             f"{max_rounds} rounds. Previously reported findings:\n{preview}\n"
             "Do NOT re-report findings that no longer reproduce; log the "
             "resume as a decision entry before the first new round."
+            + resume_suffix
         )
     return (
         f"Resume the last iterate run on this project. Goal: {goal}. "
@@ -354,6 +414,7 @@ def resume_kickoff(goal: str, max_rounds: int, last_summary: dict) -> str:
         f"{preview}\n"
         "Do NOT re-report findings that no longer reproduce; log the resume "
         "as a decision entry before the first new round."
+        + resume_suffix
     )
 
 

@@ -41,7 +41,7 @@ def check_auth_configured() -> str | None:
 
         settings = load_settings()
         resolved = settings.materialize_active_profile().resolve_auth()
-        if resolved.value:
+        if resolved.value or resolved.auth_kind == "none":
             return None
     except Exception:
         pass

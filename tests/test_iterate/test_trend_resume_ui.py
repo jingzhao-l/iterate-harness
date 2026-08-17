@@ -151,6 +151,114 @@ def test_render_summary_without_stubborn_is_friendly(tmp_path):
     assert "no stubborn findings" in rendered
 
 
+# -- diff_runs / render_diff -------------------------------------------------
+
+
+def _diff_finding(file: str = "src/a.py", line: int = 10) -> dict:
+    return {
+        "file": file,
+        "line": line,
+        "dimension": "security",
+        "severity": "high",
+        "summary": "sql injection risk",
+    }
+
+
+def test_diff_runs_classifies_new_fixed_unchanged():
+    run_a = [_diff_finding("a.py", 1), _diff_finding("b.py", 2)]
+    run_b = [_diff_finding("b.py", 2), _diff_finding("c.py", 3)]
+    diff = trend_store.diff_runs(run_a, run_b)
+    assert len(diff.new) == 1 and diff.new[0]["file"] == "c.py"
+    assert len(diff.fixed) == 1 and diff.fixed[0]["file"] == "a.py"
+    assert len(diff.unchanged) == 1 and diff.unchanged[0]["file"] == "b.py"
+    assert diff.regressed == []
+
+
+def test_diff_runs_regressed_from_previously_fixed():
+    # A finding that was fixed in an earlier run and reappears is classified
+    # as regressed (not new / unchanged) when its fixed snapshot is supplied.
+    previous = [_diff_finding("a.py", 1), _diff_finding("b.py", 2)]
+    current = [_diff_finding("a.py", 1), _diff_finding("b.py", 2)]
+    diff = trend_store.diff_runs(
+        previous, current, previously_fixed=[_diff_finding("b.py", 2)]
+    )
+    assert len(diff.regressed) == 1 and diff.regressed[0]["file"] == "b.py"
+    assert len(diff.unchanged) == 1 and diff.unchanged[0]["file"] == "a.py"
+    assert diff.new == []
+    assert diff.fixed == []
+
+
+def test_diff_runs_skips_untrackable_findings():
+    untrackable = {"file": "", "dimension": ""}
+    trackable = _diff_finding("a.py", 1)
+    diff = trend_store.diff_runs([untrackable], [untrackable, trackable])
+    assert len(diff.new) == 1 and diff.new[0]["file"] == "a.py"
+    assert diff.fixed == []
+    assert diff.unchanged == []
+    assert diff.regressed == []
+
+
+def test_diff_runs_empty_runs():
+    assert trend_store.diff_runs([], []) == trend_store.RunDiff([], [], [], [])
+    diff = trend_store.diff_runs([], [_diff_finding("a.py", 1)])
+    assert len(diff.new) == 1
+    diff2 = trend_store.diff_runs([_diff_finding("a.py", 1)], [])
+    assert len(diff2.fixed) == 1
+
+
+def test_diff_runs_consecutive_runs_have_no_regressions():
+    # Without a previously-fixed snapshot, a consecutive-run comparison never
+    # reports regressions: the fixed set A - B cannot reappear in B.
+    diff = trend_store.diff_runs([_diff_finding("a.py", 1)], [_diff_finding("a.py", 1)])
+    assert diff.regressed == []
+    assert len(diff.unchanged) == 1
+    assert diff.new == []
+    assert diff.fixed == []
+
+
+def test_diff_runs_line_sensitive_classification():
+    run_a = [_diff_finding("a.py", 10)]
+    run_b = [_diff_finding("a.py", 11)]
+    diff = trend_store.diff_runs(run_a, run_b)
+    assert len(diff.fixed) == 1  # line 10 disappeared
+    assert len(diff.new) == 1  # line 11 appeared
+    assert diff.unchanged == []
+    assert diff.regressed == []
+
+
+def test_diff_runs_regressed_removed_from_new():
+    # A regressed finding must never also be classified as new.
+    previous = [_diff_finding("b.py", 2)]
+    current = [_diff_finding("b.py", 2), _diff_finding("c.py", 3)]
+    diff = trend_store.diff_runs(
+        previous, current, previously_fixed=[_diff_finding("b.py", 2)]
+    )
+    assert len(diff.regressed) == 1 and diff.regressed[0]["file"] == "b.py"
+    assert len(diff.new) == 1 and diff.new[0]["file"] == "c.py"
+    assert diff.fixed == []
+    assert diff.unchanged == []
+
+
+def test_render_diff_shows_counts_and_sections():
+    diff = trend_store.RunDiff(
+        new=[_diff_finding("c.py", 3)],
+        fixed=[_diff_finding("a.py", 1)],
+        regressed=[_diff_finding("b.py", 2)],
+        unchanged=[_diff_finding("d.py", 4)],
+    )
+    rendered = trend_store.render_diff(diff)
+    assert "1 new, 1 fixed, 1 regressed, 1 unchanged" in rendered
+    assert "New findings (1):" in rendered
+    assert "Fixed (1):" in rendered
+    assert "Regressed (1):" in rendered
+    assert "c.py" in rendered and "a.py" in rendered and "b.py" in rendered
+
+
+def test_render_diff_empty_diff():
+    rendered = trend_store.render_diff(trend_store.RunDiff([], [], [], []))
+    assert "0 new, 0 fixed, 0 regressed, 0 unchanged" in rendered
+
+
 # -- last_state ---------------------------------------------------------------
 
 

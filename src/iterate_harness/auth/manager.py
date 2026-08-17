@@ -297,7 +297,11 @@ class AuthManager:
             source_status = auth_sources.get(profile.auth_source, {})
             configured = bool(source_status.get("configured"))
             auth_state = str(source_status.get("state", "missing"))
-            if auth_source_uses_api_key(profile.auth_source):
+            if profile.auth_source == "local":
+                # Local endpoints require no credential, so they are always ready.
+                configured = True
+                auth_state = "configured"
+            elif auth_source_uses_api_key(profile.auth_source):
                 storage_provider = credential_storage_provider_name(name, profile)
                 configured = bool(load_credential(storage_provider, "api_key")) or configured
                 if not configured and name == active and getattr(self.settings, "api_key", ""):

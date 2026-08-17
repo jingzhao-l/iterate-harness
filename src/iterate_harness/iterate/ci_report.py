@@ -7,6 +7,7 @@ machine-readable entry into CI-friendly outputs:
 - :func:`render_github` — GitHub Actions workflow commands (``::error ...``)
   so findings land as PR annotations;
 - :func:`render_text` — a human summary for local/other-CI use;
+- :func:`render_csv` — a CSV export (UTF-8 BOM) of the findings for Excel;
 - :func:`severity_gate` — an exit-code policy (``--fail-on high`` etc.).
 
 All functions are pure and defensive: a malformed or missing report degrades
@@ -16,6 +17,7 @@ to "no findings recorded" instead of crashing the pipeline.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .decision_log import DecisionLogEntry
@@ -32,6 +34,44 @@ GITHUB_ANNOTATION_LEVELS: dict[str, str] = {
 SEVERITY_ORDER = ("none", "low", "medium", "high", "critical")
 
 DEFAULT_FAIL_ON = "high"
+
+#: Localized text blocks for report rendering.
+L10N_TEXTS: dict[str, dict[str, str]] = {
+    "en": {
+        "report_header": "iterate report ({mode}): {total} finding(s), verdict={verdict}",
+        "threshold_gate_pass": "threshold gate: PASS",
+        "threshold_gate_fail": "threshold gate: FAIL",
+        "no_findings": "No findings recorded.",
+    },
+    "zh": {
+        "report_header": "iterate 报告（{mode}）：{total} 个问题，判定={verdict}",
+        "threshold_gate_pass": "阈值门禁：通过",
+        "threshold_gate_fail": "阈值门禁：未通过",
+        "no_findings": "无发现问题记录。",
+    },
+}
+
+#: Supported report languages (every alias maps to its canonical code).
+SUPPORTED_LANGUAGES = ("en", "zh")
+
+#: CSV export header row (stable column order).
+CSV_COLUMNS = (
+    "severity",
+    "dimension",
+    "file",
+    "line",
+    "summary",
+    "failure_scenario",
+    "suggested_fix",
+)
+
+
+def _language_texts(language: str) -> dict[str, str]:
+    """Return the localized text block for a language (falls back to en)."""
+    key = (language or "").strip().lower()
+    if key not in L10N_TEXTS:
+        key = "en"
+    return L10N_TEXTS[key]
 
 
 @dataclass
@@ -117,20 +157,26 @@ def render_github(summary: ReportSummary) -> str:
     return "\n".join(lines)
 
 
-def render_text(summary: ReportSummary, gate: dict[str, Any] | None = None) -> str:
+def render_text(summary: ReportSummary, gate: dict[str, Any] | None = None, language: str = "en") -> str:
     """Render the report as a plain-text summary.
 
     ``gate`` is the optional ``thresholdGate`` block from the report entry:
     when present its status line (and violations) are appended so CI logs
     explain WHY the exit code failed the threshold gate.
+
+    ``language`` selects the localized header/summary text block (``en`` or
+    ``zh``); the per-finding rows stay machine-readable English. Unknown
+    languages fall back to English so the default output never changes.
     """
-    head = (
-        f"iterate report ({summary.mode}): {summary.total_findings} finding(s), "
-        f"verdict={summary.verdict}"
+    texts = _language_texts(language)
+    head = texts["report_header"].format(
+        mode=summary.mode,
+        total=summary.total_findings,
+        verdict=summary.verdict,
     )
     lines = [head]
     if gate is not None:
-        lines.append(_render_gate_lines(gate))
+        lines.append(_render_gate_lines(gate, language))
     if not summary.findings:
         return "\n".join(lines)
     rows = []
@@ -146,20 +192,49 @@ def render_text(summary: ReportSummary, gate: dict[str, Any] | None = None) -> s
     return "\n".join([*lines, *rows])
 
 
-def _render_gate_lines(gate: dict[str, Any]) -> str:
+def _render_gate_lines(gate: dict[str, Any], language: str = "en") -> str:
     """One-line threshold-gate status (violations inlined, capped at 5)."""
     passed = bool(gate.get("passed", True))
-    status = "PASS" if passed else "FAIL"
+    texts = _language_texts(language)
+    status = texts["threshold_gate_pass"] if passed else texts["threshold_gate_fail"]
     violations_raw = gate.get("violations")
     violations = [v for v in violations_raw if isinstance(v, dict)] if isinstance(violations_raw, list) else []
     if not violations:
-        return f"threshold gate: {status}"
+        return status
     rendered = [
         f"{v.get('scope')}:{v.get('metric')} {v.get('actual')}>{v.get('limit')}"
         for v in violations[:5]
     ]
     more = f" (+{len(violations) - 5} more)" if len(violations) > 5 else ""
-    return f"threshold gate: {status} — {'; '.join(rendered)}{more}"
+    return f"{status} — {'; '.join(rendered)}{more}"
+
+
+def render_csv(summary: ReportSummary, output_path: str) -> str:
+    """Write the report findings as a CSV file (UTF-8 BOM for Excel compatibility).
+
+    Returns the path written to, or an ``error: ...`` message on failure.
+    """
+    import csv
+
+    path = Path(output_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(list(CSV_COLUMNS))
+            for finding in summary.findings:
+                writer.writerow([
+                    finding.get("severity", ""),
+                    finding.get("dimension", ""),
+                    finding.get("file", ""),
+                    finding.get("line", ""),
+                    finding.get("summary", ""),
+                    finding.get("failure_scenario", ""),
+                    finding.get("suggested_fix", ""),
+                ])
+        return str(path)
+    except OSError as exc:
+        return f"error: {exc}"
 
 
 def threshold_gate(entry: DecisionLogEntry | None) -> dict[str, Any] | None:
@@ -195,9 +270,12 @@ def severity_gate(summary: ReportSummary, fail_on: str = DEFAULT_FAIL_ON) -> int
 __all__ = [
     "DEFAULT_FAIL_ON",
     "GITHUB_ANNOTATION_LEVELS",
+    "L10N_TEXTS",
     "SEVERITY_ORDER",
+    "SUPPORTED_LANGUAGES",
     "ReportSummary",
     "latest_report_entry",
+    "render_csv",
     "render_github",
     "render_text",
     "severity_gate",

@@ -268,6 +268,22 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             default_model="deepseek-ai/DeepSeek-V4-Flash",
             base_url="https://api-inference.modelscope.cn/v1",
         ),
+        "local": ProviderProfile(
+            label="Local (openai-compatible)",
+            provider="local",
+            api_format="openai",
+            auth_source="local",
+            base_url="http://localhost:11434/v1",
+            default_model="local-model",
+        ),
+        "ollama": ProviderProfile(
+            label="Ollama (local)",
+            provider="ollama",
+            api_format="openai",
+            auth_source="local",
+            base_url="http://localhost:11434/v1",
+            default_model="llama3.2",
+        ),
     }
 
 
@@ -358,6 +374,7 @@ def auth_source_provider_name(auth_source: str) -> str:
         "minimax_api_key": "minimax",
         "nvidia_api_key": "nvidia",
         "modelscope_api_key": "modelscope",
+        "local": "local",
     }
     return mapping.get(auth_source, auth_source)
 
@@ -403,6 +420,8 @@ def default_auth_source_for_provider(provider: str, api_format: str | None = Non
         return "nvidia_api_key"
     if provider == "modelscope":
         return "modelscope_api_key"
+    if provider in {"local", "ollama"}:
+        return "local"
     if provider == "openai" or api_format == "openai":
         return "openai_api_key"
     return "anthropic_api_key"
@@ -722,6 +741,17 @@ class Settings(BaseModel):
                 auth_kind="oauth_device",
                 value="copilot-managed",
                 source="copilot",
+                state="configured",
+            )
+
+        if auth_source == "local":
+            # Local openai-compatible endpoints (llama.cpp, lmstudio, vllm,
+            # ollama) do not require API-key authentication.
+            return ResolvedAuth(
+                provider=provider or "local",
+                auth_kind="none",
+                value="",
+                source="local",
                 state="configured",
             )
 

@@ -183,3 +183,46 @@ MIT — same as upstream. iterate-harness is a fork of
 upstream receives full credit for the agent kernel, TUI and extension system.
 The iterate semantic layer originates from the
 [iterate-skill](https://github.com/jingzhao-l/iterate-skill) project.
+
+## Troubleshooting / 常见失败自愈指南
+
+### TLS / SSL Certificate Errors
+**Symptom**: `SSL: CERTIFICATE_VERIFY_FAILED` or `certificate verify failed` during API calls.
+
+**Causes & fixes**:
+1. **System CA bundle outdated** — Run `pip install --upgrade certifi` or update your OS certificates.
+2. **Corporate proxy / MITM** — Set the `REQUESTS_CA_BUNDLE` or `SSL_CERT_FILE` env var to your enterprise CA cert.
+3. **Self-signed local endpoint** — If using a local model server (ollama, lmstudio), set `auth_source: local` in the provider profile (which disables cert verification for localhost).
+
+### Authentication / API Key Errors
+**Symptom**: `401 Unauthorized` or `403 Forbidden` during model API calls.
+
+**Causes & fixes**:
+1. **Missing or expired key** — Run `ih provider use <profile>` and follow the interactive prompt to re-enter the key.
+2. **Wrong auth source** — Verify the provider profile's `auth_source` matches your credential slot. Use `ih provider list` to check, then `ih provider edit <name>` to correct.
+3. **Rate limited** — See "Rate Limiting / Quota" below.
+
+### Rate Limiting / Quota Exceeded
+**Symptom**: `429 Too Many Requests` or quota exhaustion errors.
+
+**Causes & fixes**:
+1. **Too many requests per minute** — Set `max_turns_per_minute` in the harness settings or `iterate.config.yaml` to throttle the loop.
+2. **Token budget exceeded** — Set `token_budget` or `budget_usd` in `iterate.config.yaml` to cap per-run spend.
+3. **Provider account quota** — Check your provider's usage dashboard and upgrade the plan if needed.
+
+### Checkpoint / Resume Failures
+**Symptom**: `Resume` cannot find the last checkpoint, or the checkpoint is stale.
+
+**Causes & fixes**:
+1. **Checkpoint cleared** — A checkpoint is cleared after a successful run. Only incomplete/interrupted runs have valid checkpoints.
+2. **Stale worktree** — If `worktree_isolation: true`, a previous abnormal exit may leave stale worktrees. Run `git worktree prune` to clean them up.
+3. **Manual intervention** — If you modified files inside the worktree, the checkpoint may be invalid. Start a fresh run instead.
+
+### Provider / Model Not Found
+**Symptom**: `model not found` or `unknown provider` errors.
+
+**Causes & fixes**:
+1. **Typo in model name** — Run `ih provider list` to see available providers and their default models.
+2. **Custom provider misconfigured** — Run `ih provider edit <name>` to verify the `base_url`, `api_format`, and `default_model` fields.
+3. **Local endpoint not running** — For local/ollama providers, verify the server is running: `curl http://localhost:11434/api/tags`.
+

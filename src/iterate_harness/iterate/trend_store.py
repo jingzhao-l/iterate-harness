@@ -112,6 +112,25 @@ class TrendDelta:
         }
 
 
+@dataclass
+class RunDiff:
+    """Diff between two runs.
+
+    ``run_a`` is the earlier run, ``run_b`` the later one:
+    - **new** — fingerprint present in run B but not run A;
+    - **fixed** — fingerprint present in run A but not run B;
+    - **regressed** — a previously-fixed fingerprint that reappears in run B
+      (only populated when the caller passes a ``previously_fixed`` snapshot
+      to :func:`diff_runs`);
+    - **unchanged** — fingerprint present in both runs and not regressed.
+    """
+
+    new: list[dict[str, Any]]  # in run B but not A
+    fixed: list[dict[str, Any]]  # in run A but not B
+    regressed: list[dict[str, Any]]  # previously fixed, reappeared in B
+    unchanged: list[dict[str, Any]]  # in both, not regressed
+
+
 def library_path(project_root: str | Path) -> Path:
     return Path(project_root) / ".iterate" / TREND_LIBRARY_FILENAME
 
@@ -287,15 +306,93 @@ def render_trend_summary(summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def diff_runs(
+    run_a_findings: list[dict[str, Any]],
+    run_b_findings: list[dict[str, Any]],
+    previously_fixed: list[dict[str, Any]] | None = None,
+) -> RunDiff:
+    """Compare two runs by finding fingerprint and classify each finding.
+
+    ``run_a`` is the earlier run, ``run_b`` the later one:
+    - **new** — fingerprint present in run B but not run A (and not regressed);
+    - **fixed** — fingerprint present in run A but not run B;
+    - **regressed** — a fingerprint that reappears in run B after being in
+      the ``previously_fixed`` snapshot. When comparing two consecutive runs
+      without that snapshot the fixed set is ``A - B``, whose fingerprints
+      cannot reappear in B, so regressed is empty; pass the previously-resolved
+      findings via ``previously_fixed`` (e.g. the trend library's fixed
+      records) to surface real regressions;
+    - **unchanged** — fingerprint present in both runs and not regressed.
+    """
+    # Findings without a usable fingerprint (missing file or dimension) cannot
+    # be classified meaningfully — drop them from both runs up front so they
+    # never leak into new/fixed.
+    run_a = [f for f in run_a_findings if finding_fingerprint(f)]
+    run_b = [f for f in run_b_findings if finding_fingerprint(f)]
+    fixed_snapshot = {
+        finding_fingerprint(f) for f in (previously_fixed or []) if finding_fingerprint(f)
+    }
+
+    fps_a = {finding_fingerprint(f) for f in run_a}
+    fps_b = {finding_fingerprint(f) for f in run_b}
+
+    new = [f for f in run_b if finding_fingerprint(f) not in fps_a]
+    fixed = [f for f in run_a if finding_fingerprint(f) not in fps_b]
+    regressed = [f for f in run_b if finding_fingerprint(f) in fixed_snapshot]
+    # Regressed findings are also in new, remove them from new
+    regressed_fps = {finding_fingerprint(f) for f in regressed}
+    new = [f for f in new if finding_fingerprint(f) not in regressed_fps]
+    unchanged = [
+        f
+        for f in run_b
+        if finding_fingerprint(f) in fps_a and finding_fingerprint(f) not in regressed_fps
+    ]
+
+    return RunDiff(new=new, fixed=fixed, regressed=regressed, unchanged=unchanged)
+
+
+def render_diff(diff: RunDiff) -> str:
+    """Render a human-readable diff summary."""
+    lines = [
+        f"Run diff: {len(diff.new)} new, {len(diff.fixed)} fixed, "
+        f"{len(diff.regressed)} regressed, {len(diff.unchanged)} unchanged",
+    ]
+    if diff.new:
+        lines.append(f"\nNew findings ({len(diff.new)}):")
+        for f in diff.new[:10]:
+            lines.append(
+                f"  [{f.get('severity','?')}] {f.get('file','?')}:{f.get('line','?')} "
+                f"— {f.get('summary','')}"
+            )
+    if diff.regressed:
+        lines.append(f"\nRegressed ({len(diff.regressed)}):")
+        for f in diff.regressed[:5]:
+            lines.append(
+                f"  [{f.get('severity','?')}] {f.get('file','?')}:{f.get('line','?')} "
+                f"— {f.get('summary','')}"
+            )
+    if diff.fixed:
+        lines.append(f"\nFixed ({len(diff.fixed)}):")
+        for f in diff.fixed[:10]:
+            lines.append(
+                f"  [{f.get('severity','?')}] {f.get('file','?')}:{f.get('line','?')} "
+                f"— {f.get('summary','')}"
+            )
+    return "\n".join(lines)
+
+
 __all__ = [
     "MAX_TRACKED_FINDINGS",
     "STATUS_FIXED",
     "STATUS_OPEN",
     "STUBBORN_MIN_RUNS",
     "TREND_LIBRARY_FILENAME",
+    "RunDiff",
     "TrendDelta",
     "TrendRecord",
+    "diff_runs",
     "finding_fingerprint",
+    "render_diff",
     "library_path",
     "load_library",
     "record_run",

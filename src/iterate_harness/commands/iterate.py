@@ -14,6 +14,7 @@ Subcommands:
 - ``/iterate report`` — render the final report entry from the decision log
 - ``/iterate config`` — show the effective config
 - ``/iterate doctor`` — skill↔harness dimension-system consistency check
+- ``/iterate dimensions`` — list configured dimensions and per-dimension resource allocation
 - ``/iterate validate <command>`` — run one preconfigured validation command
 
 ``--changed`` switches review/run into a changed-only quick review pinned to
@@ -117,12 +118,22 @@ def _resolve_rounds(cwd: str) -> int:
     return effective_review_rounds(kernel, project_config(cwd))
 
 
+
+def _report_language(cwd: str) -> str:
+    """Effective report language from the project config (default 'en')."""
+    try:
+        return config_loader.load_effective_config(cwd).config.language
+    except Exception:
+        return "en"
+
+
 def _format_config(cwd: str) -> str:
     effective = config_loader.load_effective_config(cwd)
     cfg = effective.config
     lines = [
         f"config source: {effective.source}",
         f"goal: {cfg.goal}",
+        f"language: {cfg.language}",
         f"dimensions: {', '.join(cfg.dimensions)}",
         f"max rounds: {_resolve_rounds(cwd)} (project max_rounds={cfg.max_rounds})",
         f"validation commands: {len(config_loader.flatten_commands(cfg.validation.commands))} configured",
@@ -391,11 +402,17 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             return _result(
                 message=(
                     f"HTML report written: {target}\n"
-                    + ci_report.render_text(ci_report.ReportSummary.from_entry(report_entry))
+                    + ci_report.render_text(
+                        ci_report.ReportSummary.from_entry(report_entry),
+                        language=_report_language(cwd),
+                    )
                 )
             )
         return _result(
-            message=ci_report.render_text(ci_report.ReportSummary.from_entry(report_entry))
+            message=ci_report.render_text(
+                ci_report.ReportSummary.from_entry(report_entry),
+                language=_report_language(cwd),
+            )
         )
 
     if sub == "init":
@@ -443,6 +460,26 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
         report = run_dimension_doctor(cwd)
         return _result(message=render_doctor_report(report))
 
+    if sub == "dimensions":
+        effective = config_loader.load_effective_config(cwd)
+        dims = effective.config.dimensions
+        resources = effective.config.dimension_resources
+        lines = ["Configured dimensions:"]
+        for d in dims:
+            res = resources.get(d)
+            if res and not res.is_empty():
+                parts = []
+                if res.model:
+                    parts.append(f"model={res.model}")
+                if res.concurrency:
+                    parts.append(f"concurrency={res.concurrency}")
+                if res.token_budget:
+                    parts.append(f"token_budget={res.token_budget}")
+                lines.append(f"  - {d} ({', '.join(parts)})")
+            else:
+                lines.append(f"  - {d}")
+        return _result(message="\n".join(lines))
+
     if sub == "validate":
         if not rest:
             allowed = config_loader.flatten_commands(
@@ -463,7 +500,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
 
     return _result(
         message=(
-            "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|report|init|doctor|validate]\n"
+            "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|report|init|doctor|dimensions|validate]\n"
             "- status|config: effective config summary\n"
             "- onboard [goal]: model-driven project scan that writes ITERATE.md\n"
             "- personalize: directional-key 9-category wizard (or terminal: `ih iterate personalize`)\n"
@@ -478,6 +515,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             "  and starts a local HTTP server that opens in the browser\n"
             "- init [--write]: detect the stack and suggest an iterate.config.yaml\n"
             "- doctor: skill↔harness dimension-system consistency check\n"
+            "- dimensions: list configured dimensions and their per-dimension resource allocation\n"
             "- validate <command>: run a preconfigured validation command"
         )
     )

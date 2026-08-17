@@ -20,6 +20,7 @@ raising.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,6 +31,8 @@ from ..iterate import types as itypes
 from ..iterate import validate as validate_mod
 from ..iterate.loop_policy import ITERATE_STATE_KEY
 from .base import BaseTool, ToolExecutionContext, ToolResult
+
+log = logging.getLogger(__name__)
 
 SKILL_FILENAME = "SKILL.md"
 PROJECT_KNOWLEDGE_FILENAME = "ITERATE.md"
@@ -707,6 +710,17 @@ class IterateTriageTool(BaseTool):
             added += 1
         if added:
             personalization.save(None, context.cwd, data)
+            # Config bridge (#8): sync triaged entries into iterate.config.yaml
+            sync_result = personalization.sync_known_intentional_to_config(
+                context.cwd, data.known_intentional
+            )
+            config_note = sync_result.get("config") or sync_result.get("reason", "?")
+            if sync_result.get("added"):
+                log.info(
+                    "config-bridge: %d new known_intentional entries synced to %s",
+                    len(sync_result["added"]),
+                    config_note,
+                )
         return added
 
 

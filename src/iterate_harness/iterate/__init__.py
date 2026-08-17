@@ -18,6 +18,7 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
 - :mod:`.dimension_check` — skill↔harness dimension-system consistency doctor
 - :mod:`.prompts` — canonical workflow prompt templates
 - :mod:`.trend_store` — finding fingerprint trend library (new/fixed/stubborn)
+- :mod:`.webhook` — Slack / Lark/Feishu / generic webhook notifications
 - :mod:`.worktree_flow` — fix-round git isolation orchestration
 
 This ``__init__`` uses PEP 562 lazy attribute resolution: the kernel's
@@ -78,8 +79,10 @@ _EXPORTS: dict[str, str] = {
     "render_markdown": ".pr_comment",
     # prompts
     "ITERATE_SKILL_PROMPT": ".prompts",
+    "TEMPLATE_PRESETS": ".prompts",
     "convergence_stop_notice": ".prompts",
     "dry_run_kickoff": ".prompts",
+    "list_templates": ".prompts",
     "next_round_instruction": ".prompts",
     "normal_kickoff": ".prompts",
     "personalization_constraints": ".prompts",
@@ -104,11 +107,14 @@ _EXPORTS: dict[str, str] = {
     "effective_review_rounds": ".settings",
     "project_config": ".settings",
     # trend_store
+    "RunDiff": ".trend_store",
     "TrendDelta": ".trend_store",
     "TrendRecord": ".trend_store",
     "finding_fingerprint": ".trend_store",
     "load_library": ".trend_store",
+    "diff_runs": ".trend_store",
     "record_run": ".trend_store",
+    "render_diff": ".trend_store",
     "render_trend_summary": ".trend_store",
     "summarize": ".trend_store",
     # types
@@ -118,6 +124,11 @@ _EXPORTS: dict[str, str] = {
     "ReviewReport": ".types",
     "ReviewRound": ".types",
     "ValidationResult": ".types",
+    # webhook
+    "WebhookResult": ".webhook",
+    "detect_webhook_type": ".webhook",
+    "notify_report": ".webhook",
+    "send_webhook": ".webhook",
     # validate
     "run_command": ".validate",
     "run_validation": ".validate",
@@ -126,6 +137,7 @@ _EXPORTS: dict[str, str] = {
 __all__ = [
     "ITERATE_SKILL_PROMPT",
     "ITERATE_STATE_KEY",
+    "TEMPLATE_PRESETS",
     "META_REVIEW_CHECKS",
     "PR_COMMENT_MARKER",
     "SEVERITY_RANK",
@@ -143,6 +155,7 @@ __all__ = [
     "ReviewFinding",
     "ReviewReport",
     "ReviewRound",
+    "RunDiff",
     "TrendDelta",
     "TrendRecord",
     "ValidationResult",
@@ -156,6 +169,7 @@ __all__ = [
     "convergence_stop_notice",
     "dedupe_findings",
     "default_config",
+    "diff_runs",
     "dry_run_kickoff",
     "effective_review_rounds",
     "filter_known_intentional",
@@ -167,6 +181,7 @@ __all__ = [
     "load_canonical_dimensions",
     "load_config",
     "load_effective_config",
+    "list_templates",
     "load_library",
     "log_path",
     "load_checkpoint",
@@ -185,6 +200,7 @@ __all__ = [
     "read_entries",
     "record_run",
     "render_doctor_report",
+    "render_diff",
     "render_markdown",
     "render_trend_summary",
     "report_from_dict",
@@ -192,6 +208,10 @@ __all__ = [
     "reviewer_task_prompt",
     "run_command",
     "run_dimension_doctor",
+    "WebhookResult",
+    "detect_webhook_type",
+    "notify_report",
+    "send_webhook",
     "run_tui_personalize",
     "run_validation",
     "save_checkpoint",
