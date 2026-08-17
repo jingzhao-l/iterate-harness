@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import routes as route_modules
 from . import events as events_module
+from iterate_harness import __version__
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
     app = FastAPI(
         title="iterate-harness WebUI",
         description="Local management console for iterate-harness (design §17).",
-        version="1.10.0",
+        version=__version__,
     )
 
     # Expose the resolved project root to routes via app state.

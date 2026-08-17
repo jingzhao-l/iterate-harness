@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iterate-harness"
-version = "1.10.0"
+dynamic = ["version"]
 description = "iterate-skill powered fork of OpenHarness - dedicated agent harness for the iterate review/fix loop"
 readme = "README.md"
 license = "MIT"
@@ -48,6 +48,10 @@ dev = [
 [project.scripts]
 ih = "iterate_harness.cli:app"
 iterate-harness = "iterate_harness.cli:app"
+
+[tool.hatch.version]
+# Single source of truth: read the version from the package __init__.__version__.
+path = "src/iterate_harness/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/iterate_harness"]

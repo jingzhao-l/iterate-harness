@@ -22,12 +22,15 @@ is always serialized by harness code via ``yaml.safe_dump``.
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 from pathlib import Path
 
 import yaml
 
 from . import init_wizard, onboarding, prompts
+
+logger = logging.getLogger(__name__)
 
 
 def _print_flush(message: str) -> None:
@@ -44,7 +47,7 @@ def check_auth_configured() -> str | None:
         if resolved.value or resolved.auth_kind == "none":
             return None
     except Exception:
-        pass
+        logger.debug("Auth pre-check failed; falling back to no-ai guidance", exc_info=True)
     return (
         "No model credential configured.\n"
         "  Run `ih auth login` first (or `ih setup`), then re-run onboarding.\n"

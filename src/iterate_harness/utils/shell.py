@@ -82,7 +82,7 @@ async def create_shell_subprocess(
 
             raise SandboxUnavailableError("Docker sandbox session is not running")
 
-    # Existing srt path
+    # Non-docker path: run via the local shell.
     argv = resolve_shell_command(command, prefer_pty=prefer_pty)
     argv, cleanup_path = wrap_command_for_sandbox(argv, settings=resolved_settings)
 

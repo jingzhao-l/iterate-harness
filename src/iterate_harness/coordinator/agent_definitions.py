@@ -886,7 +886,7 @@ def load_agents_dir(directory: Path) -> list[AgentDefinition]:
                 )
             )
         except Exception:
-            logger.debug("Failed to parse agent from %s", path, exc_info=True)
+            logger.warning("Failed to parse agent from %s", path, exc_info=True)
             continue
 
     return agents

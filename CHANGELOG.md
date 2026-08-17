@@ -4,6 +4,25 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.10.1] - 2026-08-17
+
+Code-quality / release-hygiene pass from a full implementation audit:
+
+### Fixed
+- **Single source of truth for the version**: `src/iterate_harness/__init__.py` now
+  exposes `__version__` and `pyproject.toml` reads it at build time
+  (`[tool.hatch.version].path`). The CLI (`cli.py`) and the WebUI FastAPI app
+  (`web/api.py`) report `__version__` instead of duplicating the literal, so a
+  version bump can never drift across files.
+- **npm wrapper version drift**: `npm/package.json` was stuck at `1.9.4` while the
+  Python harness moved to `1.9.5`/`1.10.x`. Bumped to `1.10.1` to restore the
+  release-required lock-step (`npm == harness == tag`).
+- **Observability of swallowed errors**: `coordinator/agent_definitions.py` now logs
+  malformed agent-file parse failures at WARNING (was DEBUG) so config mistakes
+  surface; `iterate/onboard_cmd.py` logs the auth pre-check fallback at DEBUG
+  instead of an opaque `pass`.
+- **Comment fix** in `utils/shell.py` (clarified the non-Docker code path label).
+
 ## [1.10.0] - 2026-08-17
 
 Ships the full WebUI management console (design §17) with the iterate-specific conversational control panel (design §18). The WebUI is now the primary operating surface: users start, monitor, pause and resume iterate loops from the browser, and confirm decisions / nudge a stalled loop through a side chat panel. Per design §18, the harness center stays the *run*, not the conversation — the chat panel is a human-in-the-loop instrument for decision confirmation, status updates, and urging the model when it stalls mid-round.
