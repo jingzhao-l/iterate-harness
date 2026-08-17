@@ -53,6 +53,20 @@ class TestParsePermission:
         mgr = RunManager()
         assert mgr._parse_permission("  yes  ") is True
 
+    def test_natural_language_approval(self):
+        mgr = RunManager()
+        assert mgr._parse_permission("我同意执行这个操作") is True
+        assert mgr._parse_permission("当然可以，继续吧") is True
+        assert mgr._parse_permission("yes please") is True
+        assert mgr._parse_permission("please go ahead") is True
+
+    def test_natural_language_denial(self):
+        mgr = RunManager()
+        assert mgr._parse_permission("不同意，先别执行") is False
+        assert mgr._parse_permission("不批准") is False
+        assert mgr._parse_permission("not yet, please hold") is False
+        assert mgr._parse_permission("不行") is False
+
 
 # ---------------------------------------------------------------------------
 # Status snapshot
@@ -186,6 +200,21 @@ class TestSendMessage:
 
         await manager.send_message("approve")
         assert await asyncio.wait_for(future, timeout=0.5) is True
+
+    async def test_stale_resolved_future_skipped(self, manager: RunManager):
+        """A stop request cancelling the run leaves a *done* future in the
+        registry; sending a message afterwards must not call set_result on it
+        (that would raise InvalidStateError -> HTTP 500)."""
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        future.set_result("stop")  # already resolved by the stop path
+        manager.state = "paused"
+        manager.waiting_for = "user_select"
+        manager._request_registry["stale"] = future
+
+        with pytest.raises(RunManagerError):
+            await manager.send_message("你好")
+        # The stale entry stays untouched (still holds its result).
+        assert future.result() == "stop"
 
 
 # ---------------------------------------------------------------------------

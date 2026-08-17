@@ -41,15 +41,49 @@ _PERMISSION_TIMEOUT = 300.0
 #: Max chat history entries returned by the REST endpoint.
 _HISTORY_LIMIT = 500
 
-#: Values treated as approval when answering a permission request.
+#: Upper bound on the streaming assistant-text buffer per turn (chars).
+#: Guards against unbounded memory growth if a turn never emits
+#: ``AssistantTurnComplete``.
+_ASSISTANT_BUFFER_LIMIT = 200_000
+
+#: Exact single-token answers treated as approval of a permission request.
+#: The input is normalized (stripped + lowercased) before this exact check.
 _APPROVE_WORDS = frozenset(
-    {"1", "true", "yes", "y", "approve", "allow", "ok", "批准", "同意", "确认", "允许"}
+    {
+        "1", "true", "yes", "y", "approve", "allow", "ok",
+        "批准", "同意", "确认", "允许", "可以", "好",
+    }
 )
 
-#: Values treated as denial when answering a permission request.
+#: Exact single-token answers treated as denial of a permission request.
 _DENY_WORDS = frozenset(
-    {"0", "false", "no", "n", "deny", "reject", "拒绝", "不同意", "不允许"}
+    {
+        "0", "false", "no", "n", "deny", "reject", "refuse",
+        "拒绝", "不同意", "不允许", "不要", "否",
+    }
 )
+
+#: Substrings that signal denial inside a longer free-text answer. Checked
+#: before approval markers so a negated phrase ("不同意") always wins.
+_DENY_MARKERS = frozenset(
+    {
+        "deny", "denied", "reject", "rejected", "refuse", "refused", "false",
+        "never", "block", "blocked", "no", "not",
+        "拒绝", "不同意", "不允许", "不要", "否", "不行",
+    }
+)
+
+#: Substrings that signal approval inside a longer free-text answer.
+_APPROVE_MARKERS = frozenset(
+    {
+        "approve", "allowed", "accepted", "confirm", "granted", "yes",
+        "please", "go ahead", "continue",
+        "好的", "同意", "批准", "确认", "允许", "可以", "好", "行", "对",
+    }
+)
+
+#: Chinese negation prefixes that flip an approval-looking free-text answer.
+_NEGATION_PREFIXES = ("不", "别", "没", "无", "非", "未")
 
 
 class RunManagerError(Exception):
@@ -119,7 +153,10 @@ class RunManager:
         if not content:
             raise RunManagerError("消息内容不能为空")
         async with self._lock:
-            pending = list(self._request_registry.values())
+            # Skip futures that are already resolved (e.g. a stop request
+            # cancelled the run task before we got here): setting a result on
+            # a done/cancelled future would raise InvalidStateError -> 500.
+            pending = [f for f in self._request_registry.values() if not f.done()]
             waiting = self.waiting_for
         if pending:
             future = pending[0]
@@ -218,6 +255,10 @@ class RunManager:
         self, project_root: str, mode: str, changed: bool, ref: str, run_id: str
     ) -> None:
         bundle: Any = None
+        # Capture the task this coroutine runs under so the finally block only
+        # clears references that still point at *this* run. A fresh run started
+        # immediately after this one ends must not have its handle clobbered.
+        task_handle = asyncio.current_task()
         try:
             kickoff, rounds = self._build_kickoff(project_root, mode, changed, ref)
             try:
@@ -277,8 +318,12 @@ class RunManager:
                 except Exception as exc:  # noqa: BLE001 - best-effort close
                     log.warning("iterate runtime close failed: %s", exc)
             async with self._lock:
-                self._bundle = None
-                self._task = None
+                # Only clear references that still belong to *this* run; a new
+                # run may already own the manager by the time we get here.
+                if self._bundle is bundle:
+                    self._bundle = None
+                if self._task is task_handle:
+                    self._task = None
                 self._stopping = False
 
     async def _render_event(self, event: Any) -> None:
@@ -319,7 +364,9 @@ class RunManager:
                 },
             )
         elif isinstance(event, AssistantTextDelta):
-            self._assistant_buffer += event.text
+            remaining = _ASSISTANT_BUFFER_LIMIT - len(self._assistant_buffer)
+            if remaining > 0:
+                self._assistant_buffer += event.text[:remaining]
         elif isinstance(event, AssistantTurnComplete):
             text = self._assistant_buffer.strip()
             self._assistant_buffer = ""
@@ -524,11 +571,46 @@ class RunManager:
         return getattr(bundle.engine, "iterate_policy", None)
 
     def _parse_permission(self, content: str) -> bool:
+        """Parse permission approval from user input.
+
+        Strategy:
+        1) Exact match: single token matches one of the predefined single-word
+           yes/no lists → return immediately.
+        2) Free text: check for denial markers first (negations always win),
+           then check for approval markers, defaulting to False if neither is
+           clearly present.
+        3) Chinese negation prefixes (不/别/没…) flip a yes into no.
+        """
         normalized = content.strip().lower()
+        # 1. Exact single-word match (fast + handles the quick-button case)
         if normalized in _APPROVE_WORDS:
             return True
         if normalized in _DENY_WORDS:
             return False
+
+        # 2. Check for denial markers first — a single explicit negation wins
+        # over any approval mention.
+        has_deny = any(marker in normalized for marker in _DENY_MARKERS)
+        if has_deny:
+            return False
+
+        # 3. Check for Chinese negation prefixes at word start.
+        # Cases like "不同意" → even though it contains "同意", the "不"
+        # at the start flips it to denial.
+        words = normalized.split()
+        for word in words:
+            for neg_prefix in _NEGATION_PREFIXES:
+                if word.startswith(neg_prefix):
+                    # If the remainder looks like approval, this is a negated
+                    # approval → still deny.
+                    return False
+
+        # 4. Check for any approval marker.
+        has_approve = any(marker in normalized for marker in _APPROVE_MARKERS)
+        if has_approve:
+            return True
+
+        # 5. Default: no clear signal → safer to deny.
         return False
 
     def _build_kickoff(

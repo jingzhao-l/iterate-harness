@@ -170,6 +170,12 @@ def _rewrite(project_root: str | Path, decisions: dict[str, dict[str, Any]]) -> 
         temp_path.replace(path)
     except OSError as exc:
         log.warning("web findings-triage rewrite failed: %s", exc)
+    finally:
+        # Never leave a stale temp file behind after a failed compaction.
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("web findings-triage temp cleanup failed: %s", exc)
 
 
 def triage_state_for(

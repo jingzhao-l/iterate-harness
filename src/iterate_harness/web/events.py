@@ -78,14 +78,21 @@ def _build_status_payload(project_root: Path) -> dict[str, Any]:
 def _decision_log_tail(log_path: Path, cursor: int) -> tuple[list[dict[str, Any]], int]:
     """Read new decision-log lines since ``cursor``; returns (entries, new_cursor).
 
-    On any read error (rotation / deletion) the cursor resets to the current
-    file size so the next poll re-syncs cleanly.
+    On any read error (rotation / deletion) the cursor resets so the next poll
+    re-syncs cleanly. A *truncated* journal (new size below the old cursor) is
+    treated as a rotation: the cursor re-anchors at the start of the new file,
+    so the whole replacement is streamed and the new EOF is picked up instead
+    of being permanently skipped past a stale EOF cursor.
     """
     if not log_path.exists():
         return [], 0
     try:
         current_size = log_path.stat().st_size
-        if current_size <= cursor:
+        if current_size < cursor:
+            # Journal was truncated/rotated to a smaller size: re-anchor at the
+            # start of the new file (fall through to read the replacement).
+            cursor = 0
+        if current_size == cursor:
             return [], cursor
         with log_path.open("r", encoding="utf-8") as handle:
             handle.seek(cursor)
