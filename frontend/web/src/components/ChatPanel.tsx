@@ -25,6 +25,7 @@ export default function ChatPanel(): React.JSX.Element {
   const chatStatus = useWebUi((state) => state.chatStatus);
   const chatLoading = useWebUi((state) => state.chatLoading);
   const chatSending = useWebUi((state) => state.chatSending);
+  const chatError = useWebUi((state) => state.chatError);
   const pushToast = useWebUi((state) => state.pushToast);
   const setChatError = useWebUi((state) => state.setChatError);
   const setChatSending = useWebUi((state) => state.setChatSending);
@@ -64,11 +65,12 @@ export default function ChatPanel(): React.JSX.Element {
   const handleSend = async (): Promise<void> => {
     const text = input.trim();
     if (!text || chatSending) return;
-    setInput("");
     setChatSending(true);
     try {
+      setInput("");
       await api.chatSend(text);
     } catch (error) {
+      setInput(text);
       const message = error instanceof Error ? error.message : String(error);
       setChatError(message);
       pushToast("error", `发送失败：${message}`);
@@ -225,6 +227,30 @@ export default function ChatPanel(): React.JSX.Element {
 
             {/* Message list */}
             <div className="chat-messages">
+              {chatError && (
+                <div className="chat-error-banner" role="alert">
+                  <span>{chatError}</span>
+                  <button
+                    className="chat-error-dismiss"
+                    type="button"
+                    aria-label="关闭错误提示"
+                    onClick={() => setChatError(null)}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
               {chatMessages.length === 0 && (
                 <p className="muted" style={{ textAlign: "center", padding: 24 }}>
                   暂无对话记录。启动迭代后，系统消息和决策请求将显示在此处。

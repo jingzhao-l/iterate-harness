@@ -853,6 +853,34 @@ table.data tr.row-active td {
   color: var(--text-muted);
 }
 
+/* error banner inside chat panel */
+.chat-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--critical) 12%, transparent);
+  border: 1px solid var(--critical);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--critical);
+  line-height: 1.4;
+}
+.chat-error-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--critical);
+  cursor: pointer;
+  padding: 2px;
+  margin: -2px;
+  border-radius: 4px;
+  line-height: 0;
+}
+.chat-error-dismiss:hover {
+  background: color-mix(in srgb, var(--critical) 20%, transparent);
+}
+
 /* message list + bubbles */
 .chat-messages {
   display: flex;

@@ -3,7 +3,7 @@
 // rollback + secondary confirmation). YAML is edited client-side via js-yaml
 // and submitted as a JSON object to PUT /api/v1/config.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { load as yamlLoad, dump as yamlDump } from "js-yaml";
 import { api, ApiError } from "../api";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -19,6 +19,7 @@ function renderValue(value: unknown): string {
 export default function ConfigPage(): React.JSX.Element {
   const [view, setView] = useState<ConfigView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [dirty, setDirty] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -26,27 +27,24 @@ export default function ConfigPage(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const pushToast = useWebUi((state) => state.pushToast);
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(async (): Promise<void> => {
     setLoading(true);
-    void (async () => {
-      try {
-        const config = await api.config();
-        if (cancelled) return;
-        setView(config);
-        setDraft(yamlDump(config.raw, { noRefs: true, lineWidth: 120 }));
-      } catch (error) {
-        if (!cancelled) {
-          pushToast("error", error instanceof Error ? error.message : String(error));
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    setLoadError(null);
+    try {
+      const config = await api.config();
+      setView(config);
+      setDraft(yamlDump(config.raw, { noRefs: true, lineWidth: 120 }));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      pushToast("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
   }, [pushToast]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const onDraftChange = (value: string): void => {
     setDraft(value);
@@ -115,7 +113,10 @@ export default function ConfigPage(): React.JSX.Element {
         </div>
       ) : !view ? (
         <section className="panel">
-          <p className="empty">无法加载配置</p>
+          <p className="muted">无法加载配置{loadError ? `：${loadError}` : ""}</p>
+          <button className="btn primary" onClick={() => void load()}>
+            重试
+          </button>
         </section>
       ) : (
         <>

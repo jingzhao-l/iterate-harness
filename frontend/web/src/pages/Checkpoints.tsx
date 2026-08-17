@@ -37,6 +37,7 @@ function renderCheckpoint(checkpoint: Record<string, unknown>): Array<[string, s
 export default function Checkpoints(): React.JSX.Element {
   const [view, setView] = useState<CheckpointView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -44,9 +45,11 @@ export default function Checkpoints(): React.JSX.Element {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       setView(await api.checkpoints());
     } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
       pushToast("error", error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
@@ -89,7 +92,10 @@ export default function Checkpoints(): React.JSX.Element {
         </div>
       ) : !view ? (
         <section className="panel">
-          <p className="empty">无法加载检查点状态</p>
+          <p className="muted">无法加载检查点状态{loadError ? `：${loadError}` : ""}</p>
+          <button className="btn primary" onClick={() => void load()}>
+            重试
+          </button>
         </section>
       ) : (
         <>
