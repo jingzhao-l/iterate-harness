@@ -140,11 +140,18 @@ async def list_workspaces(
     except Exception as exc:  # noqa: BLE001 - listing is best-effort
         raise HTTPException(status_code=500, detail=f"Failed to list worktrees: {exc}") from exc
 
+    # Only worktrees that belong to this project are shown; a worktree is
+    # "stale" (removable) when a newer round of the same project exists, so
+    # the latest active round's sandbox is never deleted mid-run.
+    project_worktrees: list[WorkspaceView] = []
     for info in worktrees:
         view = _worktree_view(info, root)
-        if not view.active:
-            continue
-        views.append(view)
+        if view.active:
+            project_worktrees.append(view)
+    max_round = max((w.detail.get("round") or 0) for w in project_worktrees) if project_worktrees else 0
+    for view in project_worktrees:
+        view.detail["stale"] = (view.detail.get("round") or 0) < max_round
+    views.extend(project_worktrees)
     return views
 
 

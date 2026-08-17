@@ -37,8 +37,13 @@ VALID_DECISIONS = frozenset({"approve", "reject"})
 
 
 def _key(*, file: Any, line: Any, dimension: Any) -> str:
-    """Build the dedup key for a finding (mirrors runs.py findings dedup)."""
-    return f"{file}{KEY_SEPARATOR}{line}{KEY_SEPARATOR}{dimension}"
+    """Build the dedup key for a finding (mirrors runs.py findings dedup).
+
+    ``None`` line numbers are canonicalized to the empty string so the key
+    matches the frontend ``triageKey`` (which renders a missing line as ``""``).
+    """
+    line_part = "" if line is None else str(line)
+    return f"{file}{KEY_SEPARATOR}{line_part}{KEY_SEPARATOR}{dimension}"
 
 
 def journal_path(project_root: str | Path) -> Path:
@@ -151,12 +156,18 @@ def clear_all(project_root: str | Path) -> int:
 
 
 def _rewrite(project_root: str | Path, decisions: dict[str, dict[str, Any]]) -> None:
-    """Best-effort rewrite of the journal from the given key->record map."""
+    """Best-effort atomic rewrite of the journal from the given key->record map.
+
+    Writes to a temp file first, then atomically replaces the journal, so an
+    interrupted compaction never leaves a truncated/corrupt journal behind.
+    """
     path = journal_path(project_root)
+    temp_path = path.with_name(f"{path.name}.tmp")
     try:
-        with path.open("w", encoding="utf-8") as handle:
+        with temp_path.open("w", encoding="utf-8") as handle:
             for record in decisions.values():
                 handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        temp_path.replace(path)
     except OSError as exc:
         log.warning("web findings-triage rewrite failed: %s", exc)
 

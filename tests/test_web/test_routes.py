@@ -456,6 +456,32 @@ class TestFindingsTriage:
         assert body[0]["file"] == "b.py"
         assert body[1]["file"] == "a.py"
 
+    def test_null_line_key_canonicalized(self, client: TestClient, tmp_path: Path):
+        """A finding without a line number must use a key matching the frontend.
+
+        Regression: the backend key previously rendered ``None`` as the literal
+        string "None" while the frontend rendered a missing line as "", so the
+        persisted decision never matched the row after a reload.
+        """
+        body = client.post(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"file": "arch.py", "dimension": "architecture", "decision": "approve"},
+        ).json()
+        record = body["detail"]["record"]
+        assert record["line"] is None
+        # file + "" + dimension → "arch.py::::::architecture"
+        assert record["key"] == "arch.py::::::architecture"
+
+        # Re-triaging the same (file, None, dimension) must reuse the same key.
+        body2 = client.post(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"file": "arch.py", "dimension": "architecture", "decision": "reject"},
+        ).json()
+        assert body2["detail"]["record"]["key"] == "arch.py::::::architecture"
+        assert len(client.get("/api/v1/runs/findings/triage", params={"project_root": str(tmp_path)}).json()) == 1
+
     def test_clear_requires_confirm(self, client: TestClient, tmp_path: Path):
         response = client.delete(
             "/api/v1/runs/findings/triage",

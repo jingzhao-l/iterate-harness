@@ -141,6 +141,7 @@ export interface WorkspaceView {
     agent_id?: string;
     created_at?: number;
     round?: number;
+    stale?: boolean;
   };
 }
 

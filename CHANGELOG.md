@@ -19,6 +19,9 @@ WebUI iteration wave: workspaces management, findings triage, tool-call visualiz
 ### Fixed
 
 - **Frontend type-check regressions** (`src/api.ts`, `pages/Runs.tsx`): removed a duplicate `request` export and a `triage` identifier collision between the triage state map and the callback — `npm run typecheck` is clean again.
+- **Workspaces remove button unreachable** (`web/routes/workspaces.py`, `pages/Workspaces.tsx`): the list filtered to project-owned worktrees while the frontend required `!active` to show the delete action, making deletion dead UI. Worktrees are now flagged `detail.stale` (round older than the project's latest round) and only stale ones expose the remove action, so the active round's sandbox is never deleted mid-run.
+- **Triage key mismatch for findings without a line number** (`web/findings_triage.py`): the backend dedup key rendered a missing line as the literal `"None"` while the frontend rendered it as `""`, so persisted approve/reject decisions never matched their row after a reload and re-triaging duplicated records. `_key` now canonicalizes `None` → `""` to match the frontend exactly.
+- **Non-atomic triage journal rewrite** (`web/findings_triage.py`): `_rewrite` now writes a temp file and atomically replaces the journal so an interrupted clear-all never truncates the journal.
 - **Version sync**: `frontend/web/package.json` bumped to `1.11.0` to match the Python harness (was stuck at `1.10.0`).
 
 ## [1.10.1] - 2026-08-17

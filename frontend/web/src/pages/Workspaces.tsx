@@ -122,14 +122,14 @@ export default function Workspaces(): React.JSX.Element {
                   </td>
                   <td>
                     {ws.detail.dirty && <span className="badge amber" style={{ marginRight: 4 }}>未提交</span>}
-                    {!ws.active && <span className="badge gray">已过期</span>}
+                    {ws.detail.stale && <span className="badge gray">已过期</span>}
                     {ws.detail.isolationEnabled && <span className="badge neutral">隔离</span>}
                     {ws.detail.round !== undefined && ws.detail.round > 0 && (
                       <span className="badge green">R{ws.detail.round}</span>
                     )}
                   </td>
                   <td>
-                    {ws.kind === "worktree" && !ws.active && (
+                    {ws.kind === "worktree" && ws.detail.stale && (
                       <button
                         className="btn danger"
                         style={{ padding: "4px 10px", fontSize: 12 }}
