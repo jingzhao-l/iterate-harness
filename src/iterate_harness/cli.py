@@ -18,7 +18,7 @@ import typer
 
 from iterate_harness.iterate.decision_log import DecisionLogEntry
 
-__version__ = "1.9.4"
+__version__ = "1.10.0"
 
 _PREVIEW_STOPWORDS = {
     "a",

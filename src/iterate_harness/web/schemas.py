@@ -147,6 +147,19 @@ class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=8000)
 
 
+class SelectOption(BaseModel):
+    """One selectable option in a pause menu (mirrors the engine's shape).
+
+    Field names match :func:`iterate_harness.iterate.prompts.pause_menu_options`
+    (``value`` / ``label`` / ``description``), which the frontend renders as
+    quick-action buttons in the chat panel (design §18.4).
+    """
+
+    value: str
+    label: str
+    description: str | None = None
+
+
 class ControlRequest(BaseModel):
     """Request body for a run control command (pause/resume/stop)."""
 
@@ -167,7 +180,7 @@ class ChatRunStatus(BaseModel):
     converged: bool = False
     waiting_for: WaitingKind = "none"
     question: str | None = None
-    options: list[dict[str, Any]] | None = None
+    options: list[SelectOption] | None = None
     permission: dict[str, Any] | None = None
     error: str | None = None
     message: str = ""
@@ -185,6 +198,7 @@ __all__ = [
     "RunState",
     "RunSummary",
     "SendMessageRequest",
+    "SelectOption",
     "StartRequest",
     "StatusResponse",
     "TimelineEntry",

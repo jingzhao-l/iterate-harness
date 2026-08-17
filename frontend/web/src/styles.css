@@ -693,6 +693,16 @@ table.data tr.row-active td {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
+.chat-toggle-icon {
+  display: block;
+}
+
+.chat-toggle-badge {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .chat-panel {
   position: fixed;
   right: 16px;

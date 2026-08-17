@@ -64,7 +64,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
     app = FastAPI(
         title="iterate-harness WebUI",
         description="Local management console for iterate-harness (design §17).",
-        version="1.9.4",
+        version="1.10.0",
     )
 
     # Expose the resolved project root to routes via app state.
