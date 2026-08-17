@@ -7,9 +7,20 @@
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
 </p>
 
-**iterate-harness** 是面向 iterate 评审/修复闭环的专用 agent harness：
+**iterate** 是一个让 AI 编程助手具备多轮自主代码审查与修复能力的开源项目。它解决很具体的痛点：
+
+> AI 助手往往"说得多、做得浅"：一次对话只改几行、看过一个文件就不再管全局，也很少回头复核自己改坏的东西。iterate 把这些收尾工作——逐项审查、分维度排查、修复、验证、再迭代——自动化，让 AI 真正像资深工程师一样把改动做完、做对。
+
+在该生态内，**iterate-harness** 是面向 iterate 评审/修复闭环的专用 agent harness：
 多维度代码评审反复执行直到发现**收敛**，确定性聚合，每轮验证的原子修复，
-以及全程可审计的 append-only 决策日志。
+以及全程可审计的 append-only 决策日志。它是**三个可互换组件**之一，三者共用同一套
+`iterate.config.yaml` 与维度体系：
+
+| 组件 | 形态 | 面向场景 |
+| --- | --- | --- |
+| **Core Skill + CLI** | 可移植 AI 技能 `/iterate` + `iterate` CLI | 在 Trae / Claude Code / Cursor / Copilot / Codex 等 25+ 助手的对话式界面里迭代 |
+| **iterate-harness** | 独立无头引擎（`ih`，npm: `iterate-harness`） | **本仓库** —— 在终端 / CI / Git 钩子里运行同一闭环，无需对话式助手 |
+| **iterate-plugin** | dsh 桌面客户端插件 | 把 iterate 的收敛仪表盘 / review 进度带进 dsh 界面 |
 
 它是 [OpenHarness](https://github.com/HKUDS/OpenHarness)（v0.1.9，MIT）的
 聚焦型 fork：内核 agent loop、React TUI、工具/技能/插件体系与权限层全部

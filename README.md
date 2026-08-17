@@ -7,10 +7,28 @@
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
 </p>
 
-**iterate-harness** is a dedicated agent harness for the iterate review/fix
-loop: repeated multi-dimension code review until findings **converge**,
-deterministic aggregation, atomic fixes validated every round, and an
-append-only decision log that makes every iteration auditable.
+**iterate** is an open-source project that gives AI coding assistants the
+ability to **repeatedly review and fix code in multi-round autonomous loops**.
+It targets a concrete pain point:
+
+> AI assistants tend to "talk a lot but do little": a single conversation only
+> touches a few lines, stops caring about the rest of the repo after glancing
+> at one file, and rarely double-checks what they broke. iterate automates
+> these closing chores — itemized review, per-dimension triage, fix, validate,
+> and iterate again — so AI actually finishes changes and gets them right.
+
+Within that ecosystem, **iterate-harness** is a dedicated agent harness for the
+iterate review/fix loop: repeated multi-dimension code review until findings
+**converge**, deterministic aggregation, atomic fixes validated every round,
+and an append-only decision log that makes every iteration auditable. It is
+one of **three interchangeable components** that share the same
+`iterate.config.yaml` and dimension system:
+
+| Component | Form | Targets |
+| --- | --- | --- |
+| **Core Skill + CLI** | A portable AI skill `/iterate` + `iterate` CLI | Conversation-driven multi-round iteration inside Trae / Claude Code / Cursor / Copilot / Codex and 25+ assistants |
+| **iterate-harness** | A standalone headless engine (`ih`, npm: `iterate-harness`) | **This repo** — runs the same loop in terminal / CI / git hooks, no conversational assistant needed |
+| **iterate-plugin** | A dsh desktop-client plugin | Surface the iterate dashboard / review progress inside the dsh UI |
 
 It is a focused fork of [OpenHarness](https://github.com/HKUDS/OpenHarness)
 (v0.1.9, MIT): the kernel agent loop, React TUI, tool/skill/plugin systems
