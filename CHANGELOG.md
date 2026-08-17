@@ -4,6 +4,26 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.9.4] - 2026-08-17
+
+Implements the remaining 28-item review backlog left open by the 1.9.3 feature wave (design §15.4): triage results now persist into `iterate.config.yaml`, prompt template presets, multilingual + CSV reports, offline model providers, run-to-run diffing, branch-targeted review, and webhook push notifications.
+
+### Added
+
+- **Triage → config bridge** (`iterate/personalization.py` `sync_known_intentional_to_config`, wired in `tools/iterate_tools.py` `_persist_ignores`): entries marked "always ignore" during `iterate_triage` now merge into `personalization.known_intentional` of the project `iterate.config.yaml` (deduped, preserving hand-written entries, atomic write, `managed-by-iterate-triage` marker) so the whole project — not just the harness's private JSON — sees the filters from the next round.
+- **Prompt template presets** (`iterate/prompts.py`): `TEMPLATE_PRESETS` registry with `standard` (default), `strict` (conservative, safety-first) and `quick` (impact-only) presets; `template_suffix()` normalizes mode (`dry-run` → `dry_run`); CLI `iterate review|run --template <preset>`.
+- **Multilingual reports** (`iterate/ci_report.py`): `L10N_TEXTS` (en/zh) with header / gate / no-findings strings; `render_text(..., language=)`; CLI `--lang en|zh` (default `en`).
+- **CSV export** (`iterate/ci_report.py` `render_csv`): findings written as UTF-8-BOM CSV (severity/dimension/file/line/summary/failure_scenario/suggested_fix) for direct Excel opening; CLI `iterate report --csv <path>` (`-` → `.iterate/report.csv`).
+- **Offline model providers** (`config/settings.py`): `local` (openai-compatible localhost, e.g. llama.cpp / LM Studio / vLLM) and `ollama` provider profiles with `auth_source: local`; unblock BYOK-style workflows against local endpoints.
+- **Run-to-run diff** (`iterate/trend_store.py`): `diff_runs()` + `RunDiff` classify findings as new / fixed / regressed / unchanged by fingerprint (regressions identified via `previously_fixed_findings`); `render_diff()` human-readable summary.
+- **Branch-targeted review** (`cli.py` `iterate review|run --branch`): review/loop runs against a target branch via worktree isolation; `commands/iterate.py` `/iterate dimensions` shows configured dimensions and their resource allocations (model / concurrency / token_budget).
+- **Webhook notifications** (`iterate/webhook.py`): universal notifier auto-detecting Slack Incoming Webhook, Lark/Feishu custom bot and generic JSON endpoints; rich Slack Blocks / Feishu interactive card payloads with severity emoji; CLI `iterate report --webhook <url>`.
+- **Common-failure self-healing guide** (`README.md` "Troubleshooting / 常见失败自愈指南"): TLS / auth / rate-limit / checkpoint / provider-not-found scenarios with concrete fixes.
+
+### Fixed
+
+- **`test_bash_tool` partial-output assertion** remains a known environment limitation (macOS PTY without the `script` wrapper cannot stream partial output through `create_shell_subprocess`); unrelated to this release and left for a follow-up cross-platform pass.
+
 ## [1.9.3] - 2026-08-16
 
 Six high-value capability gaps identified in the post-1.9.2 UX review (design §15.3) are now implemented end to end: BYOK custom model providers, convergence dashboard in the TUI, failure recovery via checkpoints, session workspace isolation, budget enforcement / rate limiting, and an HTML report service with round replay.
