@@ -175,3 +175,45 @@ MIT——与上游一致。iterate-harness 是
 [jingzhao-l/iterate-harness](https://github.com/jingzhao-l/iterate-harness)；
 agent 内核、TUI 与扩展体系的全部功劳归于上游。iterate 语义层源自
 [iterate-skill](https://github.com/jingzhao-l/iterate-skill) 项目。
+
+## 故障排查 / 常见失败自愈指南
+
+### TLS / SSL 证书错误
+**症状**：调用模型 API 时出现 `SSL: CERTIFICATE_VERIFY_FAILED` 或 `certificate verify failed`。
+
+**成因与修复**：
+1. **系统 CA 证书过旧**——运行 `pip install --upgrade certifi`，或更新操作系统证书。
+2. **企业代理 / 中间人**——把 `REQUESTS_CA_BUNDLE` 或 `SSL_CERT_FILE` 环境变量设为你企业的 CA 证书。
+3. **本地自签名端点**——若使用本地模型服务（ollama、lmstudio），在 provider profile 里设置 `auth_source: local`（对 localhost 关闭证书校验）。
+
+### 认证 / API Key 错误
+**症状**：调用模型 API 时出现 `401 Unauthorized` 或 `403 Forbidden`。
+
+**成因与修复**：
+1. **Key 缺失或过期**——运行 `ih provider use <profile>` 按交互提示重新输入 Key。
+2. **认证源错误**——确认 provider profile 的 `auth_source` 与你的凭证槽位一致。用 `ih provider list` 检查，再用 `ih provider edit <name>` 更正。
+3. **被限流**——见下方「限流 / 配额」章节。
+
+### 限流 / 配额超限
+**症状**：`429 Too Many Requests` 或配额耗尽错误。
+
+**成因与修复**：
+1. **每分钟请求过多**——在 harness 设置或 `iterate.config.yaml` 里设置 `max_turns_per_minute` 来节流。
+2. **token 预算超限**——在 `iterate.config.yaml` 里设置 `token_budget` 或 `budget_usd` 封顶单轮开销。
+3. **供应商账户配额**——查看供应商用量面板，必要时升级套餐。
+
+### 断点 / 续跑失败
+**症状**：`Resume` 找不到上次检查点，或检查点已过期。
+
+**成因与修复**：
+1. **检查点被清除**——一次成功运行会清除检查点；只有未完成/被打断的运行才持有有效检查点。
+2. **残留 worktree**——若开了 `worktree_isolation: true`，此前异常退出可能残留过期 worktree，运行 `git worktree prune` 清理。
+3. **人工改动**——如果你在 worktree 里手动改过文件，检查点可能失效，请重新开始一次运行。
+
+### 供应商 / 模型不存在
+**症状**：`model not found` 或 `unknown provider` 错误。
+
+**成因与修复**：
+1. **模型名拼写错误**——运行 `ih provider list` 查看可用供应商及其默认模型。
+2. **自定义供应商配置错误**——运行 `ih provider edit <name>` 核对 `base_url`、`api_format`、`default_model` 字段。
+3. **本地端点未启动**——对本地 / ollama 供应商，确认服务在运行：`curl http://localhost:11434/api/tags`。
