@@ -2,9 +2,10 @@
 // latest run summary, report entries and recent audit log. Data comes from
 // the shared store (kept fresh by the SSE stream + periodic refresh).
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ConvergenceChart } from "../components/ConvergenceChart";
+import { StartDialog } from "../components/StartDialog";
 import { useWebUi } from "../store";
 
 const SEVERITY_LABELS: Record<string, string> = {
@@ -31,6 +32,9 @@ export default function Dashboard(): React.JSX.Element {
   const statusLoading = useWebUi((state) => state.statusLoading);
   const lastError = useWebUi((state) => state.lastError);
   const refreshStatus = useWebUi((state) => state.refreshStatus);
+  const chatStatus = useWebUi((state) => state.chatStatus);
+  const pushToast = useWebUi((state) => state.pushToast);
+  const [showStart, setShowStart] = useState(false);
 
   useEffect(() => {
     if (!status && !lastError) void refreshStatus();
@@ -63,11 +67,24 @@ export default function Dashboard(): React.JSX.Element {
 
   const { budget, config } = status;
   const lastRun = status.last_run;
+  const runActive = chatStatus?.state === "running" || chatStatus?.state === "starting" || chatStatus?.state === "paused";
 
   return (
     <>
-      <h1 className="page-title">仪表盘</h1>
-      <p className="page-sub mono">{status.project_root}</p>
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">仪表盘</h1>
+          <p className="page-sub mono">{status.project_root}</p>
+        </div>
+        <button
+          className="btn primary start-run-btn"
+          onClick={() => setShowStart(true)}
+          disabled={runActive}
+          title={runActive ? "已有运行中的 iterate 循环" : "启动一次 iterate 循环"}
+        >
+          {runActive ? "运行中…" : "启动迭代"}
+        </button>
+      </div>
 
       <div className="cards">
         <div className="card">
@@ -210,6 +227,16 @@ export default function Dashboard(): React.JSX.Element {
           )}
         </section>
       </div>
+
+      {showStart && (
+        <StartDialog
+          onClose={() => setShowStart(false)}
+          onStarted={() => {
+            setShowStart(false);
+            pushToast("success", "迭代已启动，可在右下角对话面板查看进度");
+          }}
+        />
+      )}
     </>
   );
 }

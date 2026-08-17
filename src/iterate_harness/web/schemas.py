@@ -15,6 +15,12 @@ from pydantic import BaseModel, Field
 #: Operation outcome values used across mutating endpoints.
 OperationStatus = Literal["ok", "conflict", "error"]
 
+#: Live iterate loop states (design §18.3 run state machine).
+RunState = Literal["idle", "starting", "running", "paused", "stopped"]
+
+#: What kind of user input the loop is currently waiting for.
+WaitingKind = Literal["none", "user_prompt", "user_select", "permission"]
+
 #: HTTP statuses the API may return (mirrors design §17.4 error contract).
 ErrorStatus = Literal[400, 401, 404, 409, 422, 500]
 
@@ -110,14 +116,78 @@ class WorkspaceView(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
+# ---------------------------------------------------------------------------
+# Chat / human-in-the-loop models (design §18.3)
+# ---------------------------------------------------------------------------
+
+
+class ChatMessage(BaseModel):
+    """One chat-panel entry (system status, assistant question, user input)."""
+
+    id: str
+    role: Literal["system", "assistant", "user"]
+    #: Message kind: ``text`` / ``question`` / ``select`` / ``permission`` /
+    #: ``progress`` / ``status`` / ``error`` / ``tool``.
+    kind: str = "text"
+    content: str
+    timestamp: str
+
+
+class StartRequest(BaseModel):
+    """Request body for starting an iterate loop (design §18.3)."""
+
+    mode: Literal["review", "run", "resume"] = "review"
+    changed: bool = False
+    ref: str = "HEAD"
+
+
+class SendMessageRequest(BaseModel):
+    """Request body for sending a chat message (answer or nudge)."""
+
+    content: str = Field(..., min_length=1, max_length=8000)
+
+
+class ControlRequest(BaseModel):
+    """Request body for a run control command (pause/resume/stop)."""
+
+    action: Literal["pause", "resume", "stop"]
+
+
+class ChatRunStatus(BaseModel):
+    """Live run status snapshot for the chat panel (design §18.3)."""
+
+    state: RunState
+    run_id: str = ""
+    mode: str = ""
+    project_root: str = ""
+    round: int = 0
+    new_findings: int = 0
+    total_findings: int = 0
+    cost_usd: float = 0.0
+    converged: bool = False
+    waiting_for: WaitingKind = "none"
+    question: str | None = None
+    options: list[dict[str, Any]] | None = None
+    permission: dict[str, Any] | None = None
+    error: str | None = None
+    message: str = ""
+
+
 __all__ = [
+    "ChatMessage",
+    "ChatRunStatus",
     "CheckpointView",
     "ConfigView",
+    "ControlRequest",
     "ErrorResponse",
     "OperationResult",
     "ReportView",
+    "RunState",
     "RunSummary",
+    "SendMessageRequest",
+    "StartRequest",
     "StatusResponse",
     "TimelineEntry",
+    "WaitingKind",
     "WorkspaceView",
 ]

@@ -2,6 +2,8 @@
 // No UI framework, no axios — plain fetch with JSON handling + error decode.
 
 import type {
+  ChatMessage,
+  ChatRunStatus,
   CheckpointView,
   ConfigView,
   FindingsResponse,
@@ -9,6 +11,7 @@ import type {
   ReportPreview,
   ReportView,
   RunSummary,
+  StartRequest,
   StatusResponse,
   TimelineEntry,
 } from "./types";
@@ -85,12 +88,14 @@ export const api = {
     round?: number,
     type?: string,
     limit = 200,
+    offset = 0,
   ): Promise<TimelineEntry[]> =>
     request<TimelineEntry[]>(
       `/runs/timeline${buildQuery(projectRoot, {
         round: round !== undefined && round >= 0 ? round : undefined,
         type,
         limit,
+        offset,
       })}`,
     ),
 
@@ -147,6 +152,38 @@ export const api = {
     request<ReportPreview>(
       `/reports/preview${buildQuery(projectRoot, { name })}`,
     ),
+
+  // ---- Chat / human-in-the-loop (design §18) ----
+  chatStart: (
+    body: StartRequest,
+    projectRoot?: string,
+  ): Promise<{ runId: string; status: string }> =>
+    request<{ runId: string; status: string }>(
+      `/chat/start${buildQuery(projectRoot)}`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  chatStatus: (): Promise<ChatRunStatus> =>
+    request<ChatRunStatus>(`/chat/status`),
+
+  chatHistory: (): Promise<ChatMessage[]> =>
+    request<ChatMessage[]>(`/chat/history`),
+
+  chatSend: (
+    content: string,
+  ): Promise<{ answered: boolean; waitingFor?: string; nudged?: boolean }> =>
+    request<{ answered: boolean; waitingFor?: string; nudged?: boolean }>(
+      `/chat/message`,
+      { method: "POST", body: JSON.stringify({ content }) },
+    ),
+
+  chatControl: (
+    action: "pause" | "resume" | "stop",
+  ): Promise<{ ok: boolean; message: string }> =>
+    request<{ ok: boolean; message: string }>(`/chat/control`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
 };
 
 export { API_BASE };

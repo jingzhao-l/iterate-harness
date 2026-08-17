@@ -4,6 +4,19 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.10.0] - 2026-08-17
+
+Ships the full WebUI management console (design §17) with the iterate-specific conversational control panel (design §18). The WebUI is now the primary operating surface: users start, monitor, pause and resume iterate loops from the browser, and confirm decisions / nudge a stalled loop through a side chat panel. Per design §18, the harness center stays the *run*, not the conversation — the chat panel is a human-in-the-loop instrument for decision confirmation, status updates, and urging the model when it stalls mid-round.
+
+### Added
+
+- **WebUI management console** (`web/api.py`, `web/routes/{status,runs,checkpoints,config,reports}.py`, `frontend/web`): FastAPI backend + React frontend with Dashboard / Runs timeline / Checkpoints / Budget & rate / Config / Reports pages, dark mode, SSE real-time push, timeline pagination, and a "启动迭代" start entry point.
+- **In-process event hub** (`web/hub.py`): pub/sub fan-out (`ChatHub`) bridging the iterate run loop to every SSE connection; full queues drop the oldest event so the run loop never blocks on a slow client.
+- **Live run manager** (`web/run_manager.py`): owns the single in-server iterate loop, substitutes the engine's three human-interaction channels (`permission_prompt` / `ask_user_prompt` / `ask_user_select`) with Web versions that pause the run and await the answer, and persists a human-interaction-only transcript to `.iterate/web-chat.jsonl`.
+- **Human-in-the-loop nudge injection** (`iterate/loop_policy.py` `IterateLoopPolicy.inject_nudge`): user 督促 messages are queued and prepended to the next-round instruction at the round boundary, so a stalled model is urged to continue even mid-loop.
+- **Conversational control panel** (`web/routes/chat.py`, `frontend/web/src/components/{ChatPanel,RunStatusCard,StartDialog}.tsx`): chat routes (`/chat/start`, `/chat/status`, `/chat/message`, `/chat/control`, `/chat/history`) plus a fixed overlay panel that auto-opens when a decision is pending and supports permission approval, select/prompt answers, pause/resume/stop, and free-text nudges.
+- **Security posture** (`web/security.py`): loopback-only binding by default, strict CORS, path whitelisting against traversal, API-key redaction, and append-only audit log for the WebUI surface.
+
 ## [1.9.4] - 2026-08-17
 
 Implements the remaining 28-item review backlog left open by the 1.9.3 feature wave (design §15.4): triage results now persist into `iterate.config.yaml`, prompt template presets, multilingual + CSV reports, offline model providers, run-to-run diffing, branch-targeted review, and webhook push notifications.

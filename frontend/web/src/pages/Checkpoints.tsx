@@ -10,11 +10,26 @@ import type { CheckpointView, OperationResult } from "../types";
 
 function renderCheckpoint(checkpoint: Record<string, unknown>): Array<[string, string]> {
   const rows: Array<[string, string]> = [];
-  const keys = ["round", "mode", "timestamp", "verdict", "budgetUsedTokens", "totalTokens"];
+  // Keys mirror the real payload persisted by iterate/checkpoint.py
+  // `save_checkpoint` (round / new_findings / total_findings / per_dimension /
+  // converged / input_tokens / output_tokens / cost_usd / mode).
+  const keys = [
+    "round",
+    "mode",
+    "new_findings",
+    "total_findings",
+    "per_dimension",
+    "converged",
+    "input_tokens",
+    "output_tokens",
+    "cost_usd",
+  ];
   for (const key of keys) {
     const value = checkpoint[key];
     if (value === undefined || value === null) continue;
-    rows.push([key, String(value)]);
+    const rendered =
+      typeof value === "object" ? JSON.stringify(value) : String(value);
+    rows.push([key, rendered]);
   }
   return rows;
 }

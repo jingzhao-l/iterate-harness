@@ -182,6 +182,10 @@ class IterateLoopPolicy:
     # Rolling window of turn timestamps for rate limiting (seconds since
     # epoch). Pruned to ``RATE_LIMIT_WINDOW_SECONDS`` on each check.
     _turn_timestamps: list[float] = field(default_factory=list)
+    # Human-in-the-loop nudges queued by the WebUI (design §18.1 "督促注入"):
+    # drained into the next-round instruction at the next round boundary so
+    # a user's urge to keep going is honored even mid-round.
+    _pending_nudges: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.cost_meter is None:
@@ -194,6 +198,18 @@ class IterateLoopPolicy:
     def clear_pause(self) -> None:
         """Drop a pending pause (fresh submit / stale request)."""
         self.pause_requested = False
+
+    def inject_nudge(self, content: str) -> None:
+        """Queue a user nudge to inject at the next round boundary.
+
+        The nudge is prepended to the canonical next-round instruction (design
+        §18.1 "督促注入"), so the model sees the user's request before it
+        continues. Empty content is ignored.
+        """
+        stripped = content.strip()
+        if not stripped:
+            return
+        self._pending_nudges.append(stripped)
 
     def on_turn_end(
         self,
@@ -321,12 +337,22 @@ class IterateLoopPolicy:
                 + ")",
                 progress,
             )
+        inject_message = prompts.next_round_instruction(
+            snapshot.rounds_seen,
+            last_new,
+            exhausted_dimensions=snapshot.exhausted_dimensions or None,
+        )
+        if self._pending_nudges:
+            # Drain human-in-the-loop nudges (design §18.1 督促注入): the user's
+            # request leads the next-round instruction so the model acts on it
+            # before continuing the loop.
+            nudge_block = "\n".join(self._pending_nudges)
+            self._pending_nudges = []
+            inject_message = (
+                f"[用户督促]\n{nudge_block}\n\n---\n\n{inject_message}"
+            )
         decision = LoopDecision(
-            inject_message=prompts.next_round_instruction(
-                snapshot.rounds_seen,
-                last_new,
-                exhausted_dimensions=snapshot.exhausted_dimensions or None,
-            ),
+            inject_message=inject_message,
             progress=progress,
         )
         if self.pause_requested:

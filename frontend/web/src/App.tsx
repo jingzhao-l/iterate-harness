@@ -5,6 +5,8 @@
 import { useEffect } from "react";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { subscribeToStatus, useWebUi } from "./store";
+import ChatPanel from "./components/ChatPanel";
+import ThemeToggle from "./components/ThemeToggle";
 import BudgetRate from "./pages/BudgetRate";
 import Checkpoints from "./pages/Checkpoints";
 import ConfigPage from "./pages/ConfigPage";
@@ -21,10 +23,18 @@ const NAV_ITEMS = [
   { to: "/reports", label: "报告", end: false },
 ];
 
+const CONN_LABELS: Record<string, string> = {
+  connecting: "连接中…",
+  connected: "实时流已连接",
+  reconnecting: "重连中…",
+  disconnected: "已断开",
+};
+
 export default function App(): React.JSX.Element {
   const projectRoot = useWebUi((state) => state.projectRoot);
   const toasts = useWebUi((state) => state.toasts);
   const dismissToast = useWebUi((state) => state.dismissToast);
+  const connectionState = useWebUi((state) => state.connectionState);
 
   useEffect(() => {
     const unsubscribe = subscribeToStatus(projectRoot);
@@ -45,6 +55,13 @@ export default function App(): React.JSX.Element {
             </NavLink>
           ))}
         </nav>
+        <div className="sidebar-foot">
+          <div className="conn-row" title={CONN_LABELS[connectionState]}>
+            <span className={`conn-dot ${connectionState}`} />
+            {CONN_LABELS[connectionState]}
+          </div>
+          <ThemeToggle />
+        </div>
       </aside>
 
       <main className="main">
@@ -71,6 +88,10 @@ export default function App(): React.JSX.Element {
           </div>
         ))}
       </div>
+
+      {/* Human-in-the-loop chat panel (design §18): fixed overlay available
+          on every page; the harness center is the run, chat is a side panel. */}
+      <ChatPanel />
     </div>
   );
 }

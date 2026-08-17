@@ -61,6 +61,9 @@ def get_run_timeline(
     project_root: str = "",
     round: int = Query(-1, description="Filter to one round (-1 = all)"),
     type: str = Query("", description="Filter to one entry type (empty = all)"),
+    offset: int = Query(
+        0, ge=0, description="Page offset from the newest entry (0 = newest page)"
+    ),
     limit: int = Query(
         200, ge=1, le=2000, description="Max timeline entries returned"
     ),
@@ -68,7 +71,11 @@ def get_run_timeline(
     """Trajectory-style timeline of decision-log entries.
 
     Optional filters: ``round`` (an integer round number) and ``type`` (one
-    of the replay entry types). Entries are returned oldest-first.
+    of the replay entry types). Entries are returned oldest-first, paged
+    from the newest: ``offset=0`` returns the newest ``limit`` entries,
+    ``offset=40`` returns the 40 previous ones (and so on). The returned
+    ``index`` is the entry position in the *filtered* log so the frontend
+    can keep diff expansion stable across pages.
     """
     entries = read_entries(_resolve_project(project_root))
     allowed_types = set(REPLAY_ENTRY_TYPES)
@@ -82,10 +89,18 @@ def get_run_timeline(
                 detail=f"unknown entry type: {type} (allowed: {', '.join(sorted(allowed_types))})",
             )
         filtered = [e for e in filtered if e.type == type]
-    page = filtered[-limit:] if limit else filtered
+    if offset <= 0:
+        page = filtered[-limit:] if limit else filtered
+        base = max(0, len(filtered) - len(page))
+    else:
+        # Offset counts backwards from the newest entry.
+        start = max(0, len(filtered) - offset - limit)
+        end = len(filtered) - offset
+        page = filtered[start:end]
+        base = start
     return [
         TimelineEntry(
-            index=idx,
+            index=base + idx,
             timestamp=entry.timestamp,
             round=entry.round,
             type=entry.type,

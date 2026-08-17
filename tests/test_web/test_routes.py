@@ -7,7 +7,6 @@ never touch the real working directory or user config.
 
 from __future__ import annotations
 
-import itertools
 from pathlib import Path
 
 import pytest
@@ -401,10 +400,11 @@ class TestEvents:
         ):
             assert key in payload
 
-    def test_event_generator_yields_status(self, tmp_path: Path, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_event_generator_yields_status(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(events_module, "_POLL_INTERVAL", 0.0)
-        gen = events_module._event_generator(tmp_path)
-        first = next(itertools.islice(gen, 1))
+        gen = events_module._event_generator(tmp_path, stream_all=True)
+        first = await anext(gen)
         assert first.startswith("event: status\n")
 
 

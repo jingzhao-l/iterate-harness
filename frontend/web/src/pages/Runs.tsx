@@ -135,6 +135,12 @@ export default function Runs(): React.JSX.Element {
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState("");
 
+  // Timeline pagination: pages are counted from the newest entry (offset 0).
+  // We request PAGE_SIZE+1 so an over-full response tells us older pages exist.
+  const TIMELINE_PAGE_SIZE = 40;
+  const [timelinePage, setTimelinePage] = useState(0);
+  const [timelineHasMore, setTimelineHasMore] = useState(false);
+
   const [findings, setFindings] = useState<Finding[]>([]);
   const [findingsTotal, setFindingsTotal] = useState(0);
   const [findingsLoading, setFindingsLoading] = useState(true);
@@ -158,11 +164,21 @@ export default function Runs(): React.JSX.Element {
     setTimelineError(null);
     void (async () => {
       try {
-        const entries = await api.timeline(undefined, undefined, typeFilter || undefined);
-        if (!cancelled) setTimeline(entries);
+        const page = await api.timeline(
+          undefined,
+          undefined,
+          typeFilter || undefined,
+          TIMELINE_PAGE_SIZE + 1,
+          timelinePage * TIMELINE_PAGE_SIZE,
+        );
+        if (!cancelled) {
+          setTimelineHasMore(page.length > TIMELINE_PAGE_SIZE);
+          setTimeline(page.slice(0, TIMELINE_PAGE_SIZE));
+        }
       } catch (error) {
         if (!cancelled) {
           setTimeline([]);
+          setTimelineHasMore(false);
           setTimelineError(error instanceof Error ? error.message : String(error));
         }
       } finally {
@@ -172,7 +188,7 @@ export default function Runs(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [typeFilter]);
+  }, [typeFilter, timelinePage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -241,35 +257,54 @@ export default function Runs(): React.JSX.Element {
         ) : timeline.length === 0 ? (
           <p className="empty">暂无 decision log 条目</p>
         ) : (
-          <div className="timeline">
-            {timeline.map((entry) => (
-              <div key={entry.index} className={`timeline-item ${entry.type}`}>
-                <div className="t">
-                  {entry.timestamp} · R{entry.round} ·{" "}
-                  {ENTRY_TYPE_LABELS[entry.type] ?? entry.type}
+          <>
+            <div className="timeline">
+              {timeline.map((entry) => (
+                <div key={entry.index} className={`timeline-item ${entry.type}`}>
+                  <div className="t">
+                    {entry.timestamp} · R{entry.round} ·{" "}
+                    {ENTRY_TYPE_LABELS[entry.type] ?? entry.type}
+                  </div>
+                  <div className="body">
+                    <EntryBody entry={entry} />
+                    {Array.isArray(entry.data?.diff) && entry.data.diff.length > 0 && (
+                      <div>
+                        <button
+                          className="btn"
+                          style={{ marginTop: 6, padding: "4px 10px", fontSize: 12 }}
+                          onClick={() => toggleExpanded(entry.index)}
+                        >
+                          {expanded.has(entry.index) ? "收起 diff" : "展开 diff"}
+                        </button>
+                        {expanded.has(entry.index) && (
+                          <pre className="diff">
+                            {(entry.data.diff as string[]).join("\n")}
+                          </pre>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="body">
-                  <EntryBody entry={entry} />
-                  {Array.isArray(entry.data?.diff) && entry.data.diff.length > 0 && (
-                    <div>
-                      <button
-                        className="btn"
-                        style={{ marginTop: 6, padding: "4px 10px", fontSize: 12 }}
-                        onClick={() => toggleExpanded(entry.index)}
-                      >
-                        {expanded.has(entry.index) ? "收起 diff" : "展开 diff"}
-                      </button>
-                      {expanded.has(entry.index) && (
-                        <pre className="diff">
-                          {(entry.data.diff as string[]).join("\n")}
-                        </pre>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+            <div className="pager">
+              <button
+                className="btn"
+                disabled={timelinePage === 0}
+                onClick={() => setTimelinePage((p) => Math.max(0, p - 1))}
+              >
+                ← 更新的条目
+              </button>
+              <span className="muted">第 {timelinePage + 1} 页</span>
+              <button
+                className="btn"
+                disabled={!timelineHasMore}
+                onClick={() => setTimelinePage((p) => p + 1)}
+              >
+                更早的条目 →
+              </button>
+            </div>
+          </>
         )}
       </section>
 

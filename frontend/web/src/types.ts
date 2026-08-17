@@ -135,3 +135,64 @@ export interface SseStatusPayload {
   converged: boolean | null;
   timestamp: number;
 }
+
+// ---------------------------------------------------------------------------
+// Chat / human-in-the-loop types (design §18)
+// ---------------------------------------------------------------------------
+
+export interface ChatMessage {
+  id: string;
+  role: "system" | "assistant" | "user";
+  // Kind: text / question / select / permission / progress / status / error / tool.
+  kind: string;
+  content: string;
+  timestamp: string;
+}
+
+export type ChatRunState = "idle" | "starting" | "running" | "paused" | "stopped";
+export type WaitingKind = "none" | "user_prompt" | "user_select" | "permission";
+
+// Mirrors the backend ChatRunStatus (GET /chat/status, snake_case).
+export interface ChatRunStatus {
+  state: ChatRunState;
+  run_id: string;
+  mode: string;
+  project_root: string;
+  round: number;
+  new_findings: number;
+  total_findings: number;
+  cost_usd: number;
+  converged: boolean;
+  waiting_for: WaitingKind;
+  question: string | null;
+  options: Array<{ value: string; label: string; description?: string }> | null;
+  permission: { tool?: string; reason?: string } | null;
+  error: string | null;
+  message: string;
+}
+
+export interface StartRequest {
+  mode: "review" | "run" | "resume";
+  changed: boolean;
+  ref: string;
+}
+
+// Partial hub events (camelCase) used to patch the store live.
+export interface RunStateEvent {
+  state?: ChatRunState;
+  waitingFor?: WaitingKind;
+  question?: string | null;
+  options?: Array<{ value: string; label: string; description?: string }> | null;
+  tool?: string;
+  reason?: string;
+  message?: string;
+}
+
+export interface ProgressUpdateEvent {
+  round?: number;
+  newFindings?: number;
+  totalFindings?: number;
+  costUsd?: number;
+  converged?: boolean;
+  mode?: string;
+}
