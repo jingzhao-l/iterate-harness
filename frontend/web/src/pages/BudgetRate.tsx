@@ -23,12 +23,36 @@ function formatTokens(value: number): string {
 export default function BudgetRate(): React.JSX.Element {
   const status = useWebUi((state) => state.status);
   const refreshStatus = useWebUi((state) => state.refreshStatus);
+  const lastError = useWebUi((state) => state.lastError);
+  const clearError = useWebUi((state) => state.clearError);
 
   useEffect(() => {
     if (!status) void refreshStatus();
   }, [status, refreshStatus]);
 
   if (!status) {
+    // Loading failed (e.g. SSE + API both down): show an actionable error
+    // state with a retry button instead of spinning forever.
+    if (lastError) {
+      return (
+        <>
+          <h1 className="page-title">预算与限流</h1>
+          <section className="panel">
+            <p className="muted">加载预算数据失败：{lastError}</p>
+            <button
+              className="btn primary"
+              type="button"
+              onClick={() => {
+                clearError();
+                void refreshStatus();
+              }}
+            >
+              重试
+            </button>
+          </section>
+        </>
+      );
+    }
     return (
       <div className="loading-block">
         <span className="spinner" /> 加载预算数据…

@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { useWebUi } from "../store";
 import type { Finding, TimelineEntry, TriageDecision } from "../types";
 
 // Compose the triage dedup key exactly like the backend (file:::line:::dimension).
@@ -139,6 +140,9 @@ export default function Runs(): React.JSX.Element {
   const [timelineLoading, setTimelineLoading] = useState(true);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState("");
+  // Bumped by the SSE stream whenever new decision-log entries arrive, so the
+  // timeline + findings refetch while a loop is running (design §17 live data).
+  const logRevision = useWebUi((state) => state.logRevision);
 
   // Timeline pagination: pages are counted from the newest entry (offset 0).
   // We request PAGE_SIZE+1 so an over-full response tells us older pages exist.
@@ -266,7 +270,7 @@ export default function Runs(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [typeFilter, timelinePage]);
+  }, [typeFilter, timelinePage, logRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -294,7 +298,7 @@ export default function Runs(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [severityFilter, dimensionFilter]);
+  }, [severityFilter, dimensionFilter, logRevision]);
 
   const toggleExpanded = (index: number): void => {
     setExpanded((previous) => {

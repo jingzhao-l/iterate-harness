@@ -20,13 +20,50 @@ from ...iterate.config_loader import (
     load_effective_config,
     validate_config,
 )
-from ..security import AuditLog, redact_mapping
+from ..security import AuditLog, REDACTION_PREFIX, redact_mapping
 from ..schemas import ConfigView, OperationResult
 
 router = APIRouter(tags=["config"])
 
 #: Backup suffix for the previous config file before a write.
 _BACKUP_SUFFIX = ".bak.webui"
+
+
+def _restore_redacted(
+    incoming: dict[str, Any],
+    existing: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve redaction markers in ``incoming`` against ``existing``.
+
+    ``GET /config`` redacts credential values (``<redacted:...>``, see
+    :func:`~iterate_harness.web.security.redact_secret`) before echoing them
+    to the editor. When the editor saves the (redacted) draft back, every
+    marker is substituted with the current on-disk value so a config save
+    never clobbers real credentials with the placeholder. Non-marker values
+    (including a brand-new secret the user types) are kept untouched.
+    """
+    out: dict[str, Any] = {}
+    for key, value in incoming.items():
+        if isinstance(value, dict):
+            prior = existing.get(key)
+            out[key] = _restore_redacted(value, prior) if isinstance(prior, dict) else value
+        elif isinstance(value, list):
+            prior = existing.get(key)
+            if isinstance(prior, list):
+                out[key] = [
+                    _restore_redacted(item, prev)
+                    if isinstance(item, dict) and isinstance(prev, dict)
+                    else item
+                    for item, prev in zip(value, prior)
+                ]
+            else:
+                out[key] = value
+        elif isinstance(value, str) and value.startswith(REDACTION_PREFIX):
+            prior = existing.get(key)
+            out[key] = prior if isinstance(prior, str) else value
+        else:
+            out[key] = value
+    return out
 
 
 def _resolve_project(project_root: str) -> Path:
@@ -109,6 +146,11 @@ def update_config(
             detail=f"Config validation failed: {', '.join(errors)}",
         )
 
+    # The editor edits the redacted view; resolve every redaction marker back
+    # to the current on-disk value before writing so secrets survive a save.
+    existing = load_config(root) or {}
+    resolved = _restore_redacted(config, existing)
+
     import yaml  # type: ignore[import-untyped]  # pyyaml ships no stubs
 
     config_path = root / CONFIG_FILENAME
@@ -123,7 +165,7 @@ def update_config(
 
     # Write the new config.
     try:
-        yaml_content = yaml.dump(config, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        yaml_content = yaml.dump(resolved, default_flow_style=False, allow_unicode=True, sort_keys=False)
         config_path.write_text(yaml_content, encoding="utf-8")
     except (OSError, yaml.YAMLError) as exc:
         # Restore from backup.

@@ -27,6 +27,10 @@ interface WebUiState {
   statusLoading: boolean;
   toasts: Toast[];
   lastError: string | null;
+  // Monotonic revision bumped whenever the SSE stream reports new decision-log
+  // entries. Pages that render decision-log data (Runs: timeline + findings)
+  // watch this to refetch while a loop is running live.
+  logRevision: number;
   // Live SSE connection state (design §17 UX: visible indicator in the sidebar).
   connectionState: "connecting" | "connected" | "reconnecting" | "disconnected";
   // Chat / human-in-the-loop (design §18).
@@ -41,6 +45,7 @@ interface WebUiState {
   pushToast: (kind: Toast["kind"], message: string) => void;
   dismissToast: (id: number) => void;
   clearError: () => void;
+  bumpLogRevision: () => void;
   setConnectionState: (
     state: "connecting" | "connected" | "reconnecting" | "disconnected",
   ) => void;
@@ -62,6 +67,7 @@ export const useWebUi = create<WebUiState>((set, get) => ({
   statusLoading: false,
   toasts: [],
   lastError: null,
+  logRevision: 0,
   connectionState: "connecting",
   chatMessages: [],
   chatStatus: null,
@@ -93,6 +99,8 @@ export const useWebUi = create<WebUiState>((set, get) => ({
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 
   clearError: () => set({ lastError: null }),
+
+  bumpLogRevision: () => set((state) => ({ logRevision: state.logRevision + 1 })),
 
   setConnectionState: (connectionState) => set({ connectionState }),
 
@@ -266,6 +274,7 @@ export function subscribeToStatus(projectRoot: string): () => void {
 
   let source: EventSource | null = null;
   let closed = false;
+  let everConnected = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   const connect = (): void => {
@@ -278,6 +287,13 @@ export function subscribeToStatus(projectRoot: string): () => void {
     source.addEventListener("status", (event) => {
       const payload = parseJson(event);
       if (payload !== undefined) onStatus(payload);
+    });
+    // New decision-log entries were appended since the last poll: bump the
+    // revision so decision-log pages (Runs) refetch their live data.
+    source.addEventListener("decision-log", (event) => {
+      if (parseJson(event) !== undefined) {
+        useWebUi.getState().bumpLogRevision();
+      }
     });
     source.addEventListener("chat-message", (event) => {
       const payload = parseJson(event);
@@ -305,12 +321,15 @@ export function subscribeToStatus(projectRoot: string): () => void {
     });
     source.onopen = (): void => {
       if (closed) return;
-      // Reconnect succeeded: stop fallback polling, reset notification memory,
-      // and tell the user the live stream is back.
+      // Reconnect succeeded: stop fallback polling, reset notification memory.
       stopPolling();
       lastWaitingFor = null;
       useWebUi.getState().setConnectionState("connected");
-      useWebUi.getState().pushToast("success", "实时流已连接");
+      // Only show a toast on reconnection, not on the initial connect.
+      if (everConnected) {
+        useWebUi.getState().pushToast("success", "实时流已重新连接");
+      }
+      everConnected = true;
     };
     source.onerror = (): void => {
       // EventSource auto-reconnects; schedule a poll fallback as well.

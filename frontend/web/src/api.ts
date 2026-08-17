@@ -77,9 +77,6 @@ export const api = {
   status: (projectRoot?: string): Promise<StatusResponse> =>
     request<StatusResponse>(`/status${buildQuery(projectRoot)}`),
 
-  health: (projectRoot?: string): Promise<{ status: string }> =>
-    request<{ status: string }>(`/health${buildQuery(projectRoot)}`),
-
   listRuns: (projectRoot?: string, offset = 0, limit = 50): Promise<RunSummary[]> =>
     request<RunSummary[]>(
       `/runs${buildQuery(projectRoot, { offset, limit })}`,
@@ -115,9 +112,6 @@ export const api = {
       })}`,
     ),
 
-  latestReport: (projectRoot?: string): Promise<Record<string, unknown>> =>
-    request<Record<string, unknown>>(`/runs/report${buildQuery(projectRoot)}`),
-
   checkpoints: (projectRoot?: string): Promise<CheckpointView> =>
     request<CheckpointView>(`/checkpoints${buildQuery(projectRoot)}`),
 
@@ -141,11 +135,6 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(config),
     }),
-
-  providers: (projectRoot?: string): Promise<{ active: string; profiles: Record<string, unknown> }> =>
-    request<{ active: string; profiles: Record<string, unknown> }>(
-      `/config/providers${buildQuery(projectRoot)}`,
-    ),
 
   reports: (projectRoot?: string): Promise<ReportView[]> =>
     request<ReportView[]>(`/reports${buildQuery(projectRoot)}`),

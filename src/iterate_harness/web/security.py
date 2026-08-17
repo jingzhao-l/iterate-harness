@@ -35,6 +35,11 @@ AUDIT_FILE = "web-audit.jsonl"
 #: Prefixes a value must not carry for it to be considered a secret.
 _SECRET_SUFFIXES = ("key", "token", "secret", "password", "credential")
 
+#: Prefix produced by :func:`redact_secret` for redacted credential values.
+#: The config write-back restores the original value whenever it sees this
+#: marker, so a save from the (redacted) editor never clobbers real secrets.
+REDACTION_PREFIX = "<redacted:"
+
 
 def is_loopback(host: str) -> bool:
     """Return True when ``host`` is a loopback address (IP or name).
@@ -209,6 +214,7 @@ __all__ = [
     "AUDIT_DIR",
     "AUDIT_FILE",
     "AuditLog",
+    "REDACTION_PREFIX",
     "is_loopback",
     "is_loopback_origin",
     "read_audit_entries",

@@ -124,12 +124,7 @@ export default function RunStatusCard({
             继续
           </button>
         )}
-        {status.state === "running" && (
-          <button className="btn danger" onClick={() => onControl("stop")} disabled={busy}>
-            停止
-          </button>
-        )}
-        {status.state === "paused" && status.waiting_for === "user_select" && (
+        {(status.state === "running" || status.state === "paused") && (
           <button className="btn danger" onClick={() => onControl("stop")} disabled={busy}>
             停止
           </button>

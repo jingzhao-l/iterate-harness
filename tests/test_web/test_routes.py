@@ -339,6 +339,52 @@ class TestConfig:
         assert raw["provider"]["api_key"] != "sk-super-secret-123456"
         assert "sk-super-secret" not in str(raw)
 
+    def test_put_config_preserves_redacted_secrets(self, client: TestClient, tmp_path: Path):
+        """Saving the redacted editor draft must not clobber real credentials.
+
+        Regression: GET /config redacts ``api_key`` to ``<redacted:...>`` and the
+        editor submits that redacted draft verbatim; the write-back must restore
+        the original value from the on-disk config.
+        """
+        import yaml
+
+        config = dict(VALID_CONFIG)
+        config["provider"] = {"api_key": "sk-super-secret-123456", "base_url": "https://api.example"}
+        first = client.put(
+            "/api/v1/config",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json=config,
+        )
+        assert first.status_code == 200
+
+        # The editor's view (redacted)…
+        redacted = client.get("/api/v1/config", params={"project_root": str(tmp_path)}).json()["raw"]
+        assert redacted["provider"]["api_key"].startswith("<redacted:")
+        assert "sk-super-secret-123456" not in str(redacted)
+
+        # …is saved back after a non-secret edit.
+        edited = {**redacted, "max_rounds": 7}
+        result = client.put(
+            "/api/v1/config",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json=edited,
+        )
+        assert result.status_code == 200
+
+        on_disk = yaml.safe_load((tmp_path / "iterate.config.yaml").read_text(encoding="utf-8"))
+        assert on_disk["provider"]["api_key"] == "sk-super-secret-123456"
+        assert on_disk["max_rounds"] == 7
+        # A brand-new secret typed by the user is kept as-is (not treated as a marker).
+        fresh = dict(VALID_CONFIG)
+        fresh["provider"] = {"api_key": "sk-fresh-secret-abcdef"}
+        client.put(
+            "/api/v1/config",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json=fresh,
+        )
+        on_disk2 = yaml.safe_load((tmp_path / "iterate.config.yaml").read_text(encoding="utf-8"))
+        assert on_disk2["provider"]["api_key"] == "sk-fresh-secret-abcdef"
+
     def test_providers_route(self, client: TestClient, tmp_path: Path):
         body = client.get(
             "/api/v1/config/providers", params={"project_root": str(tmp_path)}
