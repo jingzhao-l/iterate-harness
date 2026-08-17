@@ -10,10 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "js-yaml": "4.1.0",
+    "js-yaml": "4.3.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "react-router-dom": "6.28.0",
+    "react-router-dom": "7.18.2",
     "zustand": "5.0.2"
   },
   "devDependencies": {
@@ -22,6 +22,6 @@
     "@types/react-dom": "18.3.1",
     "@vitejs/plugin-react": "4.3.4",
     "typescript": "5.7.3",
-    "vite": "6.0.7"
+    "vite": "6.4.3"
   }
 }
