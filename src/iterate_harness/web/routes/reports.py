@@ -94,6 +94,12 @@ def preview_report(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # The path is inside .iterate but must still be one of the known report
+    # artifacts; otherwise a caller could read any file in .iterate (e.g. the
+    # audit/triage journals) by passing its name here.
+    if resolved.name not in REPORT_FILENAMES:
+        raise HTTPException(status_code=404, detail=f"Report file not found: {name}")
+
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail=f"Report file not found: {name}")
 

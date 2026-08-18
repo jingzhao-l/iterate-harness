@@ -96,3 +96,25 @@ def test_save_checkpoint_survives_unwritable_dir(tmp_path: Path):
         # Should not raise
     finally:
         os.chmod(readonly, 0o755)
+
+
+def test_save_checkpoint_returns_none_when_write_fails(tmp_path: Path, monkeypatch):
+    """A failed write returns None (contract: caller must not abort on it)."""
+
+    def boom(*args, **kwargs):
+        raise OSError("write denied")
+
+    monkeypatch.setattr("iterate_harness.iterate.checkpoint.os.replace", boom)
+    ckpt = save_checkpoint(
+        tmp_path,
+        round=1,
+        new_findings=0,
+        total_findings=0,
+        per_dimension={},
+        converged=False,
+        input_tokens=0,
+        output_tokens=0,
+        cost_usd=0.0,
+        mode="dry-run",
+    )
+    assert ckpt is None

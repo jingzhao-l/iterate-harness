@@ -992,4 +992,5 @@ def save_settings(settings: Settings, config_path: Path | None = None) -> None:
         atomic_write_text(
             config_path,
             settings.model_dump_json(indent=2) + "\n",
+            mode=0o600,
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -18,6 +19,8 @@ import typer
 
 from iterate_harness import __version__
 from iterate_harness.iterate.decision_log import DecisionLogEntry
+
+log = logging.getLogger(__name__)
 
 _PREVIEW_STOPWORDS = {
     "a",
@@ -2565,10 +2568,15 @@ def _login_provider(provider: str) -> None:
             print(f"Error: {exc}", file=sys.stderr)
             raise typer.Exit(1)
         store_credential(provider, "api_key", key)
+        stored = False
         try:
             manager.store_credential(provider, "api_key", key)
-        except Exception:
-            pass
+            stored = True
+        except Exception as exc:
+            log.error("AuthManager store failed for %s: %s", provider, exc)
+        if not stored:
+            print(f"Failed to save {label} API key.", file=sys.stderr)
+            raise typer.Exit(1)
         print(f"{label} API key saved.", flush=True)
         return
 

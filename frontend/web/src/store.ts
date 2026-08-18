@@ -177,6 +177,46 @@ function applyProgressEvent(payload: ProgressUpdateEvent): Partial<ChatRunStatus
   return patch;
 }
 
+// Fire a system Notification with a graceful degradation on platforms where
+// the Notification API is unavailable or the users has denied permission.
+function notifySystem(title: string, body: string, tag: string): void {
+  if (typeof window === "undefined" || !("Notification" in window)) return;
+  const show = (): void => {
+    if (Notification.permission !== "granted") return;
+    try {
+      const notification = new Notification(title, { body, tag });
+      notification.onclick = (): void => {
+        window.focus();
+        notification.close();
+      };
+    } catch {
+      // Notification constructor can throw on some platforms; degrade silently.
+    }
+  };
+  if (Notification.permission === "granted") {
+    show();
+  } else if (Notification.permission === "default") {
+    void Notification.requestPermission().then((permission) => {
+      if (permission === "granted") show();
+    });
+  }
+}
+
+// Notify the user once when a live run transitions into an ended state
+// (stopped after converge / user stop / engine failure) — see design §18.4.
+function notifyRunEnd(chatStatus: ChatRunStatus | null): void {
+  let title = "iterate 运行已结束";
+  let body = "迭代循环已结束，可打开「迭代详情」或「报告」查看结果。";
+  if (chatStatus?.error) {
+    title = "iterate 运行失败";
+    body = chatStatus.error;
+  } else if (chatStatus?.converged || chatStatus?.converged === true) {
+    title = "iterate 已收敛";
+    body = "迭代已收敛，所有目标问题均已被处理。";
+  }
+  notifySystem(title, body, "iterate-run-end");
+}
+
 // Hook to wire the SSE stream into the store. Called once from App.
 export function subscribeToStatus(projectRoot: string): () => void {
   // Track the last waiting state so we can fire a browser notification once
@@ -185,16 +225,35 @@ export function subscribeToStatus(projectRoot: string): () => void {
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let notificationGranted = false;
 
+  // Watch the live run state for a transition into an ended state ("stopped")
+  // from a non-ended state. Transition-based -> naturally deduplicated (only
+  // the first "stopped" observation per run fires; a later new run re-arms it
+  // by first moving out of "stopped"). A null previous state (fresh page load
+  // onto an already-finished run) is skipped so we don't spam a mount
+  // notification for an old run.
+  const unsubscribeRunNotify = useWebUi.subscribe((state, prev) => {
+    const now = state.chatStatus?.state;
+    const before = prev.chatStatus?.state;
+    if (now !== "stopped") return;
+    if (before === "stopped" || before === undefined || before === null) return;
+    notifyRunEnd(state.chatStatus);
+  });
+
   const onStatus = (payload: unknown): void => {
     const delta = payload as SseStatusPayload;
     const current = useWebUi.getState().status;
     if (!current) return;
-    // Merge live counters into the current status snapshot.
+    // Merge live counters into the current status snapshot. The convergence /
+    // checkpoint markers from the SSE delta are folded in so pages (e.g. the
+    // dashboard run-status banner) can read them from one place.
     useWebUi.setState({
       status: {
         ...current,
         entry_count: delta.entryCount ?? current.entry_count,
         latest_round: delta.latestRound ?? current.latest_round,
+        converged: delta.converged ?? current.converged,
+        checkpoint_exists: delta.checkpointExists ?? current.checkpoint_exists,
+        checkpoint_round: delta.checkpointRound ?? current.checkpoint_round,
         budget: {
           ...current.budget,
           usedTokens: delta.totalTokens ?? current.budget.usedTokens,
@@ -353,6 +412,7 @@ export function subscribeToStatus(projectRoot: string): () => void {
   return () => {
     closed = true;
     stopPolling();
+    unsubscribeRunNotify();
     if (reconnectTimer) clearTimeout(reconnectTimer);
     source?.close();
     useWebUi.getState().setConnectionState("disconnected");

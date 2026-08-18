@@ -165,7 +165,7 @@ def compute_convergence(rounds: list[ReviewRound]) -> ConvergenceInfo:
     last_round_count = result.findings_by_round[total_rounds - 1] if total_rounds > 0 else 0
     converged = total_rounds > 0 and last_round_count == 0
     if total_rounds == 0:
-        stopped_reason = "max_rounds_reached"
+        stopped_reason = "no_rounds"
     elif converged:
         stopped_reason = "converged"
     else:
@@ -229,7 +229,7 @@ def build_review_report(
     total_rounds = len(filtered_rounds)
     last_count = result.findings_by_round[total_rounds - 1] if total_rounds > 0 else 0
     if total_rounds == 0:
-        stopped_reason = "max_rounds_reached"
+        stopped_reason = "no_rounds"
     elif last_count == 0:
         stopped_reason = "converged"
     else:

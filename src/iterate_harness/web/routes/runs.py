@@ -15,7 +15,13 @@ from ...iterate.ci_report import ReportSummary, latest_report_entry
 from ...iterate.decision_log import DecisionLogEntry, read_entries
 from ...iterate.html_report import REPLAY_ENTRY_TYPES
 from .. import findings_triage
-from ..schemas import FindingsTriageRequest, OperationResult, RunSummary, TimelineEntry
+from ..schemas import (
+    FindingsTriageDismissRequest,
+    FindingsTriageRequest,
+    OperationResult,
+    RunSummary,
+    TimelineEntry,
+)
 from ..security import AuditLog
 
 router = APIRouter(tags=["runs"])
@@ -234,6 +240,55 @@ def record_findings_triage(
         message=f"已记录审批：{body.decision}",
         target=body.file,
         detail={"record": record},
+    )
+
+
+@router.delete("/runs/findings/triage/dismiss", response_model=OperationResult)
+def dismiss_findings_triage(
+    body: FindingsTriageDismissRequest,
+    project_root: str = "",
+    confirm: bool = False,
+) -> OperationResult:
+    """Dismiss (remove) one persisted triage decision, audited.
+
+    Requires ``confirm=true`` (the frontend always sends it). Unlike the
+    ``DELETE /runs/findings/triage`` full clear, this targets a single
+    (file, line, dimension) key via :func:`findings_triage.clear_decision`.
+    Returns how many decisions were removed (``1`` on success, ``0`` when
+    the finding had no persisted decision).
+    """
+    root = _resolve_project(project_root)
+    if not confirm:
+        raise HTTPException(
+            status_code=422,
+            detail="dismiss triage requires confirm=true (secondary confirmation)",
+        )
+    removed = findings_triage.clear_decision(
+        root,
+        file=body.file,
+        line=body.line,
+        dimension=body.dimension,
+    )
+    AuditLog(root).record(
+        "findings.triage.dismiss",
+        body.file,
+        summary={
+            "file": body.file,
+            "line": body.line,
+            "dimension": body.dimension,
+            "removed": removed,
+        },
+    )
+    return OperationResult(
+        status="ok",
+        message="已撤销审批记录" if removed else "未找到对应的审批记录",
+        target=body.file,
+        detail={
+            "file": body.file,
+            "line": body.line,
+            "dimension": body.dimension,
+            "removed": removed,
+        },
     )
 
 

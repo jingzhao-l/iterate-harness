@@ -16,6 +16,14 @@ function renderValue(value: unknown): string {
   return String(value);
 }
 
+// Redacted presentation for provider credentials (backend field: api_key).
+// Never reveals the key body; only reports its length so the operator can
+// tell a filled field from an empty one at a glance.
+function renderSecret(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) return "—";
+  return `••••••••（${value.length} 字符，已脱敏）`;
+}
+
 export default function ConfigPage(): React.JSX.Element {
   const [view, setView] = useState<ConfigView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,12 +34,13 @@ export default function ConfigPage(): React.JSX.Element {
   const [confirmSave, setConfirmSave] = useState(false);
   const [busy, setBusy] = useState(false);
   const pushToast = useWebUi((state) => state.pushToast);
+  const projectRoot = useWebUi((state) => state.projectRoot);
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
     setLoadError(null);
     try {
-      const config = await api.config();
+      const config = await api.config(projectRoot);
       setView(config);
       setDraft(yamlDump(config.raw, { noRefs: true, lineWidth: 120 }));
     } catch (error) {
@@ -40,7 +49,7 @@ export default function ConfigPage(): React.JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [pushToast]);
+  }, [pushToast, projectRoot]);
 
   useEffect(() => {
     void load();
@@ -66,10 +75,10 @@ export default function ConfigPage(): React.JSX.Element {
     setBusy(true);
     try {
       const parsed = yamlLoad(draft);
-      const result = await api.saveConfig((parsed ?? {}) as Record<string, unknown>);
+      const result = await api.saveConfig((parsed ?? {}) as Record<string, unknown>, projectRoot);
       pushToast(result.status === "ok" ? "success" : "error", result.message);
       if (result.status === "ok") {
-        const refreshed = await api.config();
+        const refreshed = await api.config(projectRoot);
         setView(refreshed);
         setDraft(yamlDump(refreshed.raw, { noRefs: true, lineWidth: 120 }));
         setDirty(false);
@@ -156,10 +165,10 @@ export default function ConfigPage(): React.JSX.Element {
                         <span className="mono">{name}</span>{" "}
                         {view.active_profile === name && <span className="badge green">active</span>}
                       </td>
-                      <td className="mono">{renderValue(profile.apiKey).slice(0, 16)}…</td>
+                      <td className="mono">{renderSecret((profile as Record<string, unknown>).api_key)}</td>
                       <td className="muted">
                         {Object.entries(profile as Record<string, unknown>)
-                          .filter(([key]) => key !== "apiKey")
+                          .filter(([key]) => key !== "api_key")
                           .map(([key, value]) => `${key}=${renderValue(value)}`)
                           .join(" · ") || "—"}
                       </td>

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import logging
 import os
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Slug validation
@@ -17,6 +21,9 @@ from pathlib import Path
 _VALID_SEGMENT = re.compile(r"^[a-zA-Z0-9._-]+$")
 _MAX_SLUG_LENGTH = 64
 _COMMON_SYMLINK_DIRS = ("node_modules", ".venv", "__pycache__", ".tox")
+
+#: Name of the JSON metadata file stored inside each managed worktree.
+_WORKTREE_META_FILENAME = ".iterate-harness-worktree.json"
 
 #: Length of the per-repo directory hash used to namespace worktrees.
 _REPO_SLUG_LENGTH = 12
@@ -98,6 +105,69 @@ def _flatten_slug(slug: str) -> str:
 
 def _worktree_branch(slug: str) -> str:
     return f"worktree-{_flatten_slug(slug)}"
+
+
+def _sidecar_meta_path(base_dir: Path, namespace: str, flat_slug: str) -> Path:
+    """Return the sidecar metadata path for a namespaced worktree.
+
+    Uses the same ``<ns>/<flat_slug>`` shape as ``base_dir`` so metadata
+    stays outside git but uniquely keyed per worktree.
+    """
+    return base_dir / namespace / f"{_flatten_slug(flat_slug)}.meta.json"
+
+
+def _write_metadata(
+    base_dir: Path,
+    worktree_path: Path,
+    *,
+    slug: str,
+    branch: str,
+    original_path: Path,
+    agent_id: str | None,
+) -> None:
+    """Persist worktree ownership metadata as a JSON sidecar outside the worktree."""
+    metadata = {
+        "slug": slug,
+        "branch": branch,
+        "original_path": str(original_path),
+        "agent_id": agent_id,
+        "created_at": time.time(),
+    }
+    namespace = worktree_path.parent.name
+    flat_slug = worktree_path.name
+    meta_file = _sidecar_meta_path(base_dir, namespace, flat_slug)
+    try:
+        meta_file.parent.mkdir(parents=True, exist_ok=True)
+        meta_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    except OSError:
+        # Non-fatal: metadata is an extra convenience, not required for
+        # worktree operation. The worktree itself still works without it.
+        logger.exception(
+            "[worktree] Failed to write metadata for %s", worktree_path
+        )
+
+
+def _read_metadata(base_dir: Path, worktree_path: Path) -> dict:
+    """Read the sidecar JSON metadata for *worktree_path*, empty dict on error."""
+    namespace = worktree_path.parent.name
+    flat_slug = worktree_path.name
+    meta_file = _sidecar_meta_path(base_dir, namespace, flat_slug)
+    if not meta_file.exists():
+        return {}
+    try:
+        data = json.loads(meta_file.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        logger.exception("[worktree] Failed to read metadata at %s", meta_file)
+        return {}
+
+
+def _drop_sidecar(meta_path: Path) -> None:
+    """Remove a sidecar metadata file, ignoring errors."""
+    try:
+        meta_path.unlink(missing_ok=True)
+    except OSError:
+        logger.exception("[worktree] Failed to remove metadata at %s", meta_path)
 
 
 async def _run_git(*args: str, cwd: Path) -> tuple[int, str, str]:
@@ -203,6 +273,16 @@ class WorktreeManager:
                 "rev-parse", "--git-dir", cwd=worktree_path
             )
             if code == 0:
+                # Refresh metadata so the worktree is attributed to the
+                # (possibly new) agent that resumed it.
+                _write_metadata(
+                    self.base_dir,
+                    worktree_path,
+                    slug=slug,
+                    branch=worktree_branch,
+                    original_path=repo_path,
+                    agent_id=agent_id,
+                )
                 return WorktreeInfo(
                     slug=slug,
                     path=worktree_path,
@@ -221,6 +301,15 @@ class WorktreeManager:
             raise RuntimeError(f"git worktree add failed: {stderr}")
 
         await _symlink_common_dirs(repo_path, worktree_path)
+
+        _write_metadata(
+            self.base_dir,
+            worktree_path,
+            slug=slug,
+            branch=worktree_branch,
+            original_path=repo_path,
+            agent_id=agent_id,
+        )
 
         return WorktreeInfo(
             slug=slug,
@@ -259,6 +348,9 @@ class WorktreeManager:
         if worktree_path is None:
             return False
 
+        namespace = worktree_path.parent.name
+        meta_file = _sidecar_meta_path(self.base_dir, namespace, worktree_path.name)
+
         # Remove symlinks before git removes the directory
         await _remove_symlinks(worktree_path)
 
@@ -274,6 +366,7 @@ class WorktreeManager:
                     "worktree", "remove", "--force", str(worktree_path),
                     cwd=repo_path_resolved,
                 )
+                _drop_sidecar(meta_file)
                 return True
 
         # Fallback: try to remove via absolute path from any working directory
@@ -282,6 +375,8 @@ class WorktreeManager:
             "worktree", "remove", "--force", str(worktree_path),
             cwd=self.base_dir,
         )
+        if code == 0:
+            _drop_sidecar(meta_file)
         return code == 0
 
     async def list_worktrees(self) -> list[WorktreeInfo]:
@@ -330,13 +425,24 @@ class WorktreeManager:
 
             # Slug is the directory name (flat form); restore '/' from '+'
             slug = child.name.replace("+", "/")
+
+            # Recover ownership metadata (agent_id, created_at). Falls back to
+            # git/st_mtime when no metadata file exists (legacy worktrees).
+            meta = _read_metadata(self.base_dir, child)
+            agent_id = meta.get("agent_id")
+            created_str = meta.get("created_at")
+            created_at = child.stat().st_mtime
+            if isinstance(created_str, (int, float)) and not isinstance(created_str, bool):
+                created_at = float(created_str)
+
             results.append(
                 WorktreeInfo(
                     slug=slug,
                     path=child,
                     branch=branch,
                     original_path=original_path,
-                    created_at=child.stat().st_mtime,
+                    created_at=created_at,
+                    agent_id=agent_id if agent_id else None,
                 )
             )
 

@@ -77,3 +77,31 @@ def test_build_inherited_cli_flags_forwards_system_prompt_as_append():
     idx = flags.index("--append-system-prompt")
     assert "Extra worker instructions." in flags[idx + 1]
     assert "--system-prompt" not in flags
+
+
+# ---------------------------------------------------------------------------
+# build_inherited_cli_flags – no shell quoting (direct exec argv)
+# ---------------------------------------------------------------------------
+
+
+def test_build_inherited_cli_flags_argv_contains_no_quotes():
+    """Flags are fed into ``create_subprocess_exec(*argv)`` with no shell, so
+    they must be passed verbatim — shell quotes would become literal chars."""
+    flags = build_inherited_cli_flags(
+        model="claude-opus-4-5",
+        system_prompt="You are a worker with several spaces.",
+        system_prompt_mode="replace",
+        settings_path="/tmp/settings file.json",
+        plugin_dirs=["/tmp/plugin dir"],
+        teammate_mode="auto",
+    )
+
+    for flag in flags:
+        assert "'" not in flag and '"' not in flag, f"unexpected quote in {flag!r}"
+
+    assert flags[flags.index("--model") + 1] == "claude-opus-4-5"
+    assert flags[flags.index("--system-prompt") + 1] == "You are a worker with several spaces."
+    assert flags[flags.index("--settings") + 1] == "/tmp/settings file.json"
+    plugin_idx = flags.index("--plugin-dir")
+    assert flags[plugin_idx + 1] == "/tmp/plugin dir"
+    assert flags[flags.index("--teammate-mode") + 1] == "auto"

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
+from urllib.parse import urlsplit
 
 from iterate_harness.bridge.types import WorkSecret
 
@@ -32,9 +34,42 @@ def decode_work_secret(secret: str) -> WorkSecret:
     )
 
 
+#: Loopback host names treated as "local" for WS vs WSS protocol selection.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _is_loopback_base(api_base_url: str) -> bool:
+    """Return True when ``api_base_url`` targets a loopback host.
+
+    Parses the URL's netloc so only the *host* (not the whole string) is
+    matched. This avoids false positives when an enterprise domain merely
+    contains ``localhost`` / ``127.0.0.1`` as a substring. Handles schemes,
+    ``host:port``, and bracketed IPv6 (``[::1]``) forms.
+    """
+    try:
+        netloc = urlsplit(api_base_url).netloc
+    except ValueError:
+        return False
+    if not netloc:
+        # Scheme-less input (e.g. ``localhost:3000``): take the first segment.
+        netloc = api_base_url.split("/", 1)[0]
+    host = netloc.rsplit(":", 1)[0].strip().lower()
+    # Strip IPv6 brackets: "[::1]" -> "::1".
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if host in _LOOPBACK_HOSTS:
+        return True
+    if not host:
+        return False
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def build_sdk_url(api_base_url: str, session_id: str) -> str:
     """Build a session ingress WebSocket URL."""
-    is_local = "localhost" in api_base_url or "127.0.0.1" in api_base_url
+    is_local = _is_loopback_base(api_base_url)
     protocol = "ws" if is_local else "wss"
     version = "v2" if is_local else "v1"
     host = api_base_url.replace("https://", "").replace("http://", "").rstrip("/")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -428,6 +429,13 @@ def test_normalize_anthropic_model_name_matches_hermes_behavior():
         path = tmp_path / "deep" / "nested" / "settings.json"
         save_settings(Settings(), path)
         assert path.exists()
+
+    def test_save_writes_settings_file_with_0600_mode(self, tmp_path: Path):
+        path = tmp_path / "settings.json"
+        save_settings(Settings(api_key="sk-secret"), path)
+        assert path.exists()
+        mode = stat.S_IMODE(path.stat().st_mode)
+        assert mode == 0o600
 
     def test_load_with_permission_settings(self, tmp_path: Path):
         path = tmp_path / "settings.json"

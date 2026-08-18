@@ -155,6 +155,49 @@ async def test_send_message_invalid_agent_id_raises(backend):
         await backend.send_message("no-at-sign", TeammateMessage(text="hi", from_agent="l"))
 
 
+async def test_send_message_non_numeric_timestamp_is_safe(backend, tmp_path, monkeypatch):
+    """A non-numeric (e.g. ISO-8601) timestamp must not break delivery; the
+    message falls back to time.time() instead of raising ValueError."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    config = TeammateSpawnConfig(
+        name="rcvr", team="myteam", prompt="wait",
+        cwd="/tmp", parent_session_id="s",
+    )
+    await backend.spawn(config)
+
+    msg = TeammateMessage(text="hi", from_agent="leader", timestamp="2026-08-18T00:00:00Z")
+    await backend.send_message("rcvr@myteam", msg)  # must not raise
+
+    from iterate_harness.swarm.mailbox import TeammateMailbox
+    mailbox = TeammateMailbox(team_name="myteam", agent_id="rcvr")
+    messages = await mailbox.read_all(unread_only=False)
+    assert any(m.payload.get("content") == "hi" for m in messages)
+    for m in messages:
+        if m.payload.get("content") == "hi":
+            assert isinstance(m.timestamp, float)
+            assert m.timestamp > 0  # time.time()-based, not NaN/0
+    await backend.shutdown("rcvr@myteam", force=True)
+
+
+async def test_send_message_numeric_timestamp_preserved(backend, tmp_path, monkeypatch):
+    """A numeric timestamp string must round-trip as the same float value."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    config = TeammateSpawnConfig(
+        name="rcvr", team="myteam", prompt="wait",
+        cwd="/tmp", parent_session_id="s",
+    )
+    await backend.spawn(config)
+
+    msg = TeammateMessage(text="hi", from_agent="leader", timestamp="1234567890.5")
+    await backend.send_message("rcvr@myteam", msg)
+
+    from iterate_harness.swarm.mailbox import TeammateMailbox
+    mailbox = TeammateMailbox(team_name="myteam", agent_id="rcvr")
+    messages = await mailbox.read_all(unread_only=False)
+    assert any(m.timestamp == 1234567890.5 for m in messages)
+    await backend.shutdown("rcvr@myteam", force=True)
+
+
 # ---------------------------------------------------------------------------
 # active_agents / shutdown_all
 # ---------------------------------------------------------------------------

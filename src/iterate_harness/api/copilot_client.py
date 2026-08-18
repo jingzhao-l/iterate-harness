@@ -14,8 +14,7 @@ from __future__ import annotations
 import logging
 from typing import AsyncIterator
 
-from openai import AsyncOpenAI
-
+from iterate_harness import __version__
 from iterate_harness.api.client import (
     ApiMessageRequest,
     ApiStreamEvent,
@@ -32,8 +31,6 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Header constants
 # ---------------------------------------------------------------------------
-
-_VERSION = "0.1.0"  # IterateHarness version for User-Agent
 
 # Default model for Copilot requests when the configured model is not
 # available in the Copilot model catalog.
@@ -85,23 +82,18 @@ class CopilotClient:
         self._enterprise_url = ent_url
         self._model = model
 
-        # Build the inner OpenAI-compatible client once.
+        # Build the inner OpenAI-compatible client once with Copilot's headers
+        # passed through the supported ``default_headers`` option.
         base_url = copilot_api_base(ent_url)
         default_headers: dict[str, str] = {
-            "User-Agent": f"iterate_harness/{_VERSION}",
+            "User-Agent": f"iterate_harness/{__version__}",
             "Openai-Intent": "conversation-edits",
         }
-        raw_openai = AsyncOpenAI(
+        self._inner = OpenAICompatibleClient(
             api_key=token,
             base_url=base_url,
             default_headers=default_headers,
         )
-        self._inner = OpenAICompatibleClient(
-            api_key=token,
-            base_url=base_url,
-        )
-        # Swap the underlying SDK client so Copilot headers are used.
-        self._inner._client = raw_openai  # noqa: SLF001
 
         log.info(
             "CopilotClient initialised (api_base=%s, enterprise=%s)",

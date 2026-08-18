@@ -6,6 +6,10 @@ import shutil
 from dataclasses import dataclass
 
 from iterate_harness.api.provider import ProviderInfo
+from iterate_harness.voice.stream_stt import (
+    STREAM_STT_UNAVAILABLE_REASON,
+    stream_stt_available,
+)
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,12 @@ def inspect_voice_capabilities(provider: ProviderInfo) -> VoiceDiagnostics:
         return VoiceDiagnostics(
             available=False,
             reason=provider.voice_reason,
+            recorder=recorder,
+        )
+    if not stream_stt_available():
+        return VoiceDiagnostics(
+            available=False,
+            reason=STREAM_STT_UNAVAILABLE_REASON,
             recorder=recorder,
         )
     if recorder is None:

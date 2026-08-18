@@ -939,8 +939,8 @@ def get_all_agent_definitions() -> list[AgentDefinition]:
             for agent_def in getattr(plugin, "agents", []):
                 if isinstance(agent_def, AgentDefinition):
                     agent_map[agent_def.name] = agent_def
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("plugin agents unavailable: %s", exc)
 
     return list(agent_map.values())
 

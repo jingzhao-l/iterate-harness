@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { useWebUi } from "../store";
 import type { WorkspaceView } from "../types";
 import { SkeletonTable } from "../components/Skeleton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -15,19 +16,20 @@ export default function Workspaces(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [removeSlug, setRemoveSlug] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  const projectRoot = useWebUi((state) => state.projectRoot);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.workspaces();
+      const data = await api.workspaces(projectRoot);
       setWorkspaces(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [projectRoot]);
 
   useEffect(() => {
     void load();
@@ -37,7 +39,7 @@ export default function Workspaces(): React.JSX.Element {
     if (!removeSlug) return;
     setRemoving(true);
     try {
-      await api.removeWorkspace(removeSlug);
+      await api.removeWorkspace(removeSlug, projectRoot);
       // Reload the list after removal.
       setRemoveSlug(null);
       void load();

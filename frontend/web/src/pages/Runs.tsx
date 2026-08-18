@@ -143,12 +143,16 @@ export default function Runs(): React.JSX.Element {
   // Bumped by the SSE stream whenever new decision-log entries arrive, so the
   // timeline + findings refetch while a loop is running (design §17 live data).
   const logRevision = useWebUi((state) => state.logRevision);
+  const projectRoot = useWebUi((state) => state.projectRoot);
 
   // Timeline pagination: pages are counted from the newest entry (offset 0).
   // We request PAGE_SIZE+1 so an over-full response tells us older pages exist.
   const TIMELINE_PAGE_SIZE = 40;
   const [timelinePage, setTimelinePage] = useState(0);
   const [timelineHasMore, setTimelineHasMore] = useState(false);
+  // Retry nonces so an error state can trigger a clean refetch of each panel.
+  const [timelineRetry, setTimelineRetry] = useState(0);
+  const [findingsRetry, setFindingsRetry] = useState(0);
 
   const [findings, setFindings] = useState<Finding[]>([]);
   const [findingsTotal, setFindingsTotal] = useState(0);
@@ -166,12 +170,12 @@ export default function Runs(): React.JSX.Element {
   const [showTriaged, setShowTriaged] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
-  // Load persisted triage decisions once.
+  // Load persisted triage decisions once (reload when the project root changes).
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const decisions = await api.triageDecisions();
+        const decisions = await api.triageDecisions(projectRoot);
         if (!cancelled) {
           const byKey: Record<string, TriageDecision> = {};
           for (const decision of decisions) byKey[decision.key] = decision;
@@ -185,7 +189,7 @@ export default function Runs(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [projectRoot]);
 
   const triageFinding = useCallback(
     (finding: Finding, decision: "approve" | "reject"): void => {
@@ -198,6 +202,8 @@ export default function Runs(): React.JSX.Element {
           finding.line ?? null,
           finding.dimension ?? "",
           decision,
+          undefined,
+          projectRoot,
         )
         .then((result) => {
           const record = result.detail?.record as TriageDecision | undefined;
@@ -216,19 +222,19 @@ export default function Runs(): React.JSX.Element {
         })
         .finally(() => setTriageBusyKey(null));
     },
-    [],
+    [projectRoot],
   );
 
   const clearTriage = useCallback((): void => {
     setTriageError(null);
     api
-      .clearTriage()
+      .clearTriage(projectRoot)
       .then(() => setTriage({}))
       .catch((error) => {
         setTriageError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => setConfirmClear(false));
-  }, []);
+  }, [projectRoot]);
 
   const triagedCount = Object.keys(triage).length;
 
@@ -248,7 +254,7 @@ export default function Runs(): React.JSX.Element {
     void (async () => {
       try {
         const page = await api.timeline(
-          undefined,
+          projectRoot,
           undefined,
           typeFilter || undefined,
           TIMELINE_PAGE_SIZE + 1,
@@ -271,7 +277,7 @@ export default function Runs(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [typeFilter, timelinePage, logRevision]);
+  }, [typeFilter, timelinePage, logRevision, timelineRetry, projectRoot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -280,7 +286,7 @@ export default function Runs(): React.JSX.Element {
     void (async () => {
       try {
         const response = await api.findings(
-          undefined,
+          projectRoot,
           severityFilter || undefined,
           dimensionFilter || undefined,
         );
@@ -301,7 +307,7 @@ export default function Runs(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [severityFilter, dimensionFilter, logRevision]);
+  }, [severityFilter, dimensionFilter, logRevision, findingsRetry, projectRoot]);
 
   const toggleExpanded = (index: number): void => {
     setExpanded((previous) => {
@@ -338,7 +344,17 @@ export default function Runs(): React.JSX.Element {
             <span className="spinner" /> 加载时间线…
           </div>
         ) : timelineError ? (
-          <p className="empty">加载失败：{timelineError}</p>
+          <>
+            <p className="empty">加载失败：{timelineError}</p>
+            <div style={{ marginTop: 12 }}>
+              <button
+                className="btn primary"
+                onClick={() => setTimelineRetry((n) => n + 1)}
+              >
+                重试
+              </button>
+            </div>
+          </>
         ) : timeline.length === 0 ? (
           <p className="empty">暂无 decision log 条目</p>
         ) : (
@@ -439,7 +455,17 @@ export default function Runs(): React.JSX.Element {
             <span className="spinner" /> 加载 findings…
           </div>
         ) : findingsError ? (
-          <p className="empty">加载 findings 失败：{findingsError}</p>
+          <>
+            <p className="empty">加载 findings 失败：{findingsError}</p>
+            <div style={{ marginTop: 12 }}>
+              <button
+                className="btn primary"
+                onClick={() => setFindingsRetry((n) => n + 1)}
+              >
+                重试
+              </button>
+            </div>
+          </>
         ) : findings.length === 0 ? (
           <p className="empty">暂无 findings</p>
         ) : (

@@ -170,7 +170,7 @@ class TestMultiRoundConvergence:
         c = compute_convergence([])
         assert c.total_rounds == 0
         assert c.converged is False
-        assert c.stopped_reason == "max_rounds_reached"
+        assert c.stopped_reason == "no_rounds"
 
 
 class TestBuildReviewReport:
@@ -208,6 +208,18 @@ class TestBuildReviewReport:
         assert len(report.findings) == 2
         assert [x.severity for x in report.findings] == ["critical", "low"]
         assert report.findings[0].summary == "sql injection"
+
+    def test_zero_rounds_reports_no_rounds_stop_reason(self):
+        report = build_review_report(
+            mode="dry-run",
+            goal="g",
+            dimensions=["security"],
+            max_review_rounds=3,
+            rounds=[],
+        )
+        assert report.convergence.total_rounds == 0
+        assert report.convergence.converged is False
+        assert report.convergence.stopped_reason == "no_rounds"
 
 
 class TestReviewerTasksAndSchema:

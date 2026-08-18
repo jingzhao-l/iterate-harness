@@ -7,6 +7,7 @@ rollback.
 
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ from ..security import AuditLog, REDACTION_PREFIX, redact_mapping
 from ..schemas import ConfigView, OperationResult
 
 router = APIRouter(tags=["config"])
+
+log = logging.getLogger(__name__)
 
 #: Backup suffix for the previous config file before a write.
 _BACKUP_SUFFIX = ".bak.webui"
@@ -168,13 +171,20 @@ def update_config(
         yaml_content = yaml.dump(resolved, default_flow_style=False, allow_unicode=True, sort_keys=False)
         config_path.write_text(yaml_content, encoding="utf-8")
     except (OSError, yaml.YAMLError) as exc:
-        # Restore from backup.
-        if config_path.exists() and (backup_path := config_path.with_suffix(config_path.suffix + _BACKUP_SUFFIX)).exists():
+        # Restore from backup. If the rollback itself fails, surface that too
+        # instead of silently leaving the file in a half-written state.
+        backup_path = config_path.with_suffix(config_path.suffix + _BACKUP_SUFFIX)
+        rollback_error: OSError | None = None
+        if config_path.exists() and backup_path.exists():
             try:
                 shutil.copy2(backup_path, config_path)
-            except OSError:
-                pass
-        raise HTTPException(status_code=500, detail=f"Config write failed: {exc}") from exc
+            except OSError as rollback_exc:
+                rollback_error = rollback_exc
+                log.error("config rollback failed for %s: %s", config_path, rollback_exc)
+        detail = f"Config write failed: {exc}"
+        if rollback_error is not None:
+            detail += f"; rollback also failed: {rollback_error}"
+        raise HTTPException(status_code=500, detail=detail) from exc
 
     AuditLog(root).record(
         "config.update",

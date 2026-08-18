@@ -7,6 +7,7 @@ never touch the real working directory or user config.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -448,6 +449,39 @@ class TestReports:
         )
         assert response.status_code == 404
 
+    def test_preview_rejects_non_report_files_in_iterate(self, client: TestClient, tmp_path: Path):
+        """Preview must not read arbitrary files under .iterate (e.g. the audit
+        or triage journals) — only the whitelisted report artifacts."""
+        (tmp_path / ".iterate").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".iterate" / "web-audit.jsonl").write_text(
+            '{"action":"config.update"}\n', encoding="utf-8"
+        )
+        (tmp_path / ".iterate" / "findings-triage.jsonl").write_text(
+            '{"key":"a.py"}\n', encoding="utf-8"
+        )
+        # The file exists and sits inside .iterate (so resolve_within passes),
+        # but its name is not a report artifact -> 404, content never returned.
+        response = client.get(
+            "/api/v1/reports/preview",
+            params={"project_root": str(tmp_path), "name": "web-audit.jsonl"},
+        )
+        assert response.status_code == 404
+        response = client.get(
+            "/api/v1/reports/preview",
+            params={"project_root": str(tmp_path), "name": "findings-triage.jsonl"},
+        )
+        assert response.status_code == 404
+
+    def test_preview_still_allows_every_report_filename(self, client: TestClient, tmp_path: Path):
+        (tmp_path / ".iterate").mkdir(parents=True, exist_ok=True)
+        for name in ("report.html", "replay.html", "report.csv"):
+            (tmp_path / ".iterate" / name).write_text(f"<{name}>", encoding="utf-8")
+            response = client.get(
+                "/api/v1/reports/preview",
+                params={"project_root": str(tmp_path), "name": name},
+            )
+            assert response.status_code == 200, name
+
 
 class TestEvents:
     def test_events_route_registered(self):
@@ -579,6 +613,69 @@ class TestFindingsTriage:
         assert body["status"] == "ok"
         assert body["detail"]["removed"] == 2
         assert len(client.get("/api/v1/runs/findings/triage", params={"project_root": str(tmp_path)}).json()) == 0
+
+    def _record(self, client: TestClient, tmp_path: Path, *, file: str, line, dimension: str, decision: str):
+        return client.post(
+            "/api/v1/runs/findings/triage",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={
+                "file": file,
+                "line": line,
+                "dimension": dimension,
+                "decision": decision,
+            },
+        )
+
+    def _dismiss(self, client: TestClient, tmp_path: Path, *, file: str, line, dimension: str, confirm: bool = False):
+        # The bundled starlette TestClient (requests-backed) ``delete()``
+        # helper forwards no body kwargs; route through the generic
+        # ``request()`` wrapper so the JSON body + content-type reach FastAPI.
+        return client.request(
+            "DELETE",
+            "/api/v1/runs/findings/triage/dismiss",
+            params={"project_root": str(tmp_path), "confirm": str(confirm).lower()},
+            content=json.dumps({"file": file, "line": line, "dimension": dimension}),
+            headers={"Content-Type": "application/json"},
+        )
+
+    def test_dismiss_requires_confirm(self, client: TestClient, tmp_path: Path):
+        response = self._dismiss(
+            client, tmp_path, file="a.py", line=3, dimension="security", confirm=False
+        )
+        assert response.status_code == 422
+        assert "dismiss triage requires confirm=true" in response.json()["detail"]
+
+    def test_dismiss_removes_single_decision(self, client: TestClient, tmp_path: Path):
+        self._record(client, tmp_path, file="a.py", line=3, dimension="security", decision="approve")
+        self._record(client, tmp_path, file="b.py", line=1, dimension="code_review", decision="reject")
+        assert len(client.get("/api/v1/runs/findings/triage", params={"project_root": str(tmp_path)}).json()) == 2
+
+        response = self._dismiss(
+            client, tmp_path, file="a.py", line=3, dimension="security", confirm=True
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        # Only the targeted decision is removed (not a full clear).
+        assert body["detail"]["removed"] == 1
+        remaining = client.get("/api/v1/runs/findings/triage", params={"project_root": str(tmp_path)}).json()
+        assert [r["file"] for r in remaining] == ["b.py"]
+
+    def test_dismiss_is_audited(self, client: TestClient, tmp_path: Path):
+        self._record(client, tmp_path, file="a.py", line=3, dimension="security", decision="approve")
+        self._dismiss(client, tmp_path, file="a.py", line=3, dimension="security", confirm=True)
+        audit = (tmp_path / ".iterate" / "web-audit.jsonl").read_text(encoding="utf-8")
+        assert "findings.triage.dismiss" in audit
+
+    def test_dismiss_missing_finding_returns_removed_zero(self, client: TestClient, tmp_path: Path):
+        response = self._dismiss(
+            client, tmp_path, file="never.json", line=1, dimension="security", confirm=True
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["detail"]["removed"] == 0
+        assert "未找到" in body["message"]
 
 
 class TestWorkspaces:

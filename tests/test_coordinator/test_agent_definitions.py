@@ -220,3 +220,22 @@ def test_load_agents_dir_skips_unreadable_files(tmp_path):
     agents = load_agents_dir(tmp_path)
     names = [a.name for a in agents]
     assert "good" in names
+
+
+def test_plugin_agents_unavailable_is_logged_not_raised(monkeypatch, caplog):
+    """A plugin-load failure must be logged (not silently swallowed) and must
+    never propagate to the caller."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("plugin crashed")
+
+    monkeypatch.setattr("iterate_harness.plugins.loader.load_plugins", boom)
+    import logging
+
+    from iterate_harness.coordinator.agent_definitions import get_all_agent_definitions
+
+    with caplog.at_level(logging.WARNING, logger="iterate_harness.coordinator.agent_definitions"):
+        agents = get_all_agent_definitions()
+
+    assert isinstance(agents, list)
+    assert any("plugin agents unavailable" in record.message for record in caplog.records)

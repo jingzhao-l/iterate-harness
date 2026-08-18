@@ -88,6 +88,7 @@ def save_checkpoint(
                 temp.unlink()
         except OSError:
             pass
+        return None
     return target
 
 

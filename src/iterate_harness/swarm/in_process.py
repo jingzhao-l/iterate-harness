@@ -400,6 +400,25 @@ async def _run_query_loop(
 # ---------------------------------------------------------------------------
 
 
+def _safe_message_timestamp(timestamp: str | None) -> float:
+    """Parse a teammate message timestamp as seconds-since-epoch.
+
+    Falls back to :func:`time.time` when *timestamp* is missing or cannot be
+    parsed as a number (e.g. an ISO-8601 string), so that a malformed value
+    never breaks message delivery.
+    """
+    if not timestamp:
+        return time.time()
+    try:
+        return float(timestamp)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[InProcessBackend] Invalid message timestamp %r; using time.time()",
+            timestamp,
+        )
+        return time.time()
+
+
 @dataclass
 class _TeammateEntry:
     """Internal registry entry for a running in-process teammate."""
@@ -520,7 +539,7 @@ class InProcessBackend:
                 "content": message.text,
                 **({"color": message.color} if message.color else {}),
             },
-            timestamp=message.timestamp and float(message.timestamp) or time.time(),
+            timestamp=_safe_message_timestamp(message.timestamp),
         )
         mailbox = TeammateMailbox(team_name=team_name, agent_id=agent_name)
         await mailbox.write(msg)

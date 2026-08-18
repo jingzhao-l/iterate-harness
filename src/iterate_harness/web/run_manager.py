@@ -242,8 +242,11 @@ class RunManager:
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - reset
+            except asyncio.CancelledError:
+                # Expected: the cancellation propagated into the run task.
                 pass
+            except Exception as exc:  # noqa: BLE001 - best-effort shutdown
+                log.warning("reset: run task raised during cancellation: %s", exc)
         self._reset("")
         self.state = "idle"
 

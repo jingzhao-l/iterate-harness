@@ -485,6 +485,33 @@ class TestLifecycle:
         assert manager.state == "idle"
         assert manager.run_id == ""
 
+    async def test_reset_logs_exception_raised_by_run_task(self, manager: RunManager, caplog):
+        """If cancelling the live run task surfaces a non-CancelledError, reset()
+        must log the failure instead of silently swallowing it."""
+
+        class FailingTask:
+            def done(self):
+                return False
+
+            def cancel(self):
+                pass
+
+            def __await__(self):
+                async def inner() -> None:
+                    raise RuntimeError("boom during cancellation")
+
+                return inner().__await__()
+
+        manager._task = FailingTask()  # type: ignore[assignment]
+        with caplog.at_level("WARNING"):
+            await manager.reset()
+        assert any(
+            "reset: run task raised during cancellation" in record.message
+            and "boom during cancellation" in record.message
+            for record in caplog.records
+        )
+        assert manager.state == "idle"
+
     def test_reset_recomputes_chat_dir(self, tmp_path):
         mgr = RunManager()
         mgr._reset(str(tmp_path))

@@ -20,6 +20,12 @@ export interface StatusResponse {
   } | null;
   entry_count: number;
   latest_round: number;
+  // Live fields merged from the SSE stream delta (SseStatusPayload) into the
+  // REST snapshot. Optional because the plain GET /status response won't
+  // always carry them.
+  converged?: boolean | null;
+  checkpoint_exists?: boolean;
+  checkpoint_round?: number;
   convergence: number[];
   budget: {
     usedTokens: number;

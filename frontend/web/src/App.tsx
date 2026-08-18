@@ -7,7 +7,7 @@
 //     Checkpoints / Budget / Config / Reports (g-buffer navigation)
 //   - "/" or Cmd/Ctrl+K: toggle the human-in-the-loop chat panel
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import { subscribeToStatus, useWebUi } from "./store";
 import ChatPanel from "./components/ChatPanel";
@@ -48,6 +48,48 @@ const CONN_LABELS: Record<string, string> = {
   reconnecting: "重连中…",
   disconnected: "已断开",
 };
+
+// Sidebar control to select the project root the whole console operates on
+// (design §17.5). Commits on blur / Enter so each keystroke doesn't tear down
+// and rebuild the SSE subscription.
+function ProjectRootInput(): React.JSX.Element {
+  const projectRoot = useWebUi((state) => state.projectRoot);
+  const setProjectRoot = useWebUi((state) => state.setProjectRoot);
+  const [value, setValue] = useState(projectRoot);
+
+  useEffect(() => {
+    setValue(projectRoot);
+  }, [projectRoot]);
+
+  const commit = (): void => {
+    const trimmed = value.trim();
+    if (trimmed !== projectRoot) setProjectRoot(trimmed);
+  };
+
+  return (
+    <div className="project-root">
+      <label htmlFor="project-root-input" className="project-root-label">
+        项目根目录
+      </label>
+      <input
+        id="project-root-input"
+        type="text"
+        value={value}
+        placeholder="留空则自动探测"
+        autoComplete="off"
+        onChange={(event) => setValue(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+            (event.target as HTMLInputElement).blur();
+          }
+        }}
+      />
+    </div>
+  );
+}
 
 export default function App(): React.JSX.Element {
   const projectRoot = useWebUi((state) => state.projectRoot);
@@ -121,6 +163,7 @@ export default function App(): React.JSX.Element {
           <span className="dot" />
           iterate-harness
         </div>
+        <ProjectRootInput />
         <nav className="nav">
           {NAV_ITEMS.map((item) => (
             <NavLink key={item.to} to={item.to} end={item.end}>
@@ -166,8 +209,12 @@ export default function App(): React.JSX.Element {
       </div>
 
       {/* Human-in-the-loop chat panel (design §18): fixed overlay available
-          on every page; the harness center is the run, chat is a side panel. */}
-      <ChatPanel />
+          on every page; the harness center is the run, chat is a side panel.
+          Wrapped in an ErrorBoundary like every routed page so a chat render
+          crash can never blank the whole console. */}
+      <ErrorBoundary>
+        <ChatPanel />
+      </ErrorBoundary>
     </div>
   );
 }

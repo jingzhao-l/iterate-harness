@@ -104,6 +104,21 @@ class TestCopilotClientInit:
         base = str(client._inner._client.base_url)
         assert "copilot-api.company.ghe.com" in base
 
+    def test_inner_client_sends_copilot_headers_and_live_version(self, tmp_path: Path, monkeypatch):
+        """The inner SDK client must carry Copilot's headers, including a
+        User-Agent reporting the *real* package version (not a hardcoded one)."""
+        from iterate_harness import __version__
+
+        monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "cfg"))
+        client = CopilotClient(github_token="gho_head")
+        headers = dict(client._inner._client.default_headers)
+        # Regression: the User-Agent used to be hardcoded to a stale "0.1.0".
+        assert headers["User-Agent"] == f"iterate_harness/{__version__}"
+        assert headers["Openai-Intent"] == "conversation-edits"
+        # Headers are merged (default_headers overlay the default Authorization),
+        # never replacing the auth header.
+        assert headers["Authorization"] == "Bearer gho_head"
+
 
 # ---------------------------------------------------------------------------
 # stream_message tests

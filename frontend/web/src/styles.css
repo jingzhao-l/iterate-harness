@@ -136,6 +136,36 @@ pre {
   color: #fff;
 }
 
+.project-root {
+  padding: 0 8px 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.project-root-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.project-root input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+}
+
+.project-root input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .main {
   padding: 24px 28px 64px;
   min-width: 0;
@@ -777,6 +807,27 @@ table.data tr.row-active td {
 .state-badge.state-running { background: #16a34a; }
 .state-badge.state-paused { background: var(--medium); }
 .state-badge.state-stopped { background: #64748b; }
+.state-badge.state-converged { background: #16a34a; }
+.state-badge.state-failed { background: var(--critical); }
+
+/* Persistent run-status banner on the dashboard (decoupled from the chat
+   panel) — see Dashboard.tsx. */
+.run-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  margin-bottom: 16px;
+}
+
+.run-banner-id {
+  margin-left: auto;
+  font-size: 12px;
+}
 
 .waiting-tag {
   display: inline-block;

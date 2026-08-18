@@ -6,6 +6,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 import iterate_harness.cli as cli
@@ -204,6 +206,27 @@ def test_provider_edit_can_replace_profile_api_key(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert "API key replaced" in result.output
     assert load_credential("openai", "api_key") == "new-key"
+
+
+def test_login_provider_surfaces_store_failure(tmp_path: Path, monkeypatch, capsys):
+    """A failed AuthManager store must not end in a silent 'saved' success."""
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("iterate_harness.auth.flows.ApiKeyFlow.run", lambda self: "sk-xyz")
+
+    def boom(self, *args, **kwargs):
+        raise OSError("keyring unavailable")
+
+    monkeypatch.setattr("iterate_harness.auth.manager.AuthManager.store_credential", boom)
+
+    with pytest.raises(typer.Exit) as exc_info:
+        cli._login_provider("openai")
+    assert exc_info.value.exit_code == 1
+
+    captured = capsys.readouterr()
+    assert "Failed to save" in captured.err
+    assert "API key saved" not in captured.out
 
 
 def test_dangerously_skip_permissions_passes_full_auto_to_run_repl(monkeypatch):

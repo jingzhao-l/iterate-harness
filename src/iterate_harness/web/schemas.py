@@ -137,6 +137,18 @@ class FindingsTriageRequest(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class FindingsTriageDismissRequest(BaseModel):
+    """Request body for dismissing one persisted triage decision.
+
+    Identifies the finding by its (file, line, dimension) dedup key — the same
+    triple used by :class:`FindingsTriageRequest` and ``runs.get_findings``.
+    """
+
+    file: str = Field(..., min_length=1)
+    line: int | None = None
+    dimension: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Chat / human-in-the-loop models (design §18.3)
 # ---------------------------------------------------------------------------
@@ -214,6 +226,7 @@ __all__ = [
     "ConfigView",
     "ControlRequest",
     "ErrorResponse",
+    "FindingsTriageDismissRequest",
     "FindingsTriageRequest",
     "OperationResult",
     "ReportView",

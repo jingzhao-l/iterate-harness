@@ -40,8 +40,6 @@ from iterate_harness.services.session_backend import SessionBackend
 
 log = logging.getLogger(__name__)
 
-log = logging.getLogger(__name__)
-
 _PROTOCOL_PREFIX = "OHJSON:"
 
 

@@ -114,9 +114,12 @@ def serve(
 ) -> int:
     """Run the WebUI server via uvicorn; returns the bound port.
 
-    Port ``0`` selects an OS-assigned ephemeral port (the actual port is
-    returned). If the requested port is taken, falls back to an ephemeral
-    port rather than crashing.
+    A listening socket is bound here and handed to uvicorn (``sock=``), which
+    removes the TOCTOU race of the old "probe then unbind" flow: the selected
+    port cannot be re-acquired between binding and server startup. Port ``0``
+    selects an OS-assigned ephemeral port (the actual port is returned). If the
+    requested port is already taken, an ephemeral port is used instead of
+    crashing.
     """
     import socket
 
@@ -124,11 +127,33 @@ def serve(
 
     app = create_app(project_root)
 
-    if port == 0:
-        # Bind a temp socket to learn a free port, then hand it to uvicorn.
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            probe.bind((host, 0))
-            port = probe.getsockname()[1]
+    # Bind the socket ourselves and pass it to uvicorn so it never re-binds
+    # (re-binding is what opened the TOCTOU window). This both selects an
+    # ephemeral port for ``port == 0`` and lets us fall back cleanly when the
+    # requested port is already in use.
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, port))
+        except OSError as exc:
+            if port == 0:
+                # Binding an ephemeral port cannot reasonably fail; surface the
+                # real error instead of masking it with a fallback retry.
+                raise
+            log.warning(
+                "requested port %s is unavailable (%s); falling back to an ephemeral port",
+                port,
+                exc,
+            )
+            sock.close()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, 0))
+        port = sock.getsockname()[1]
+    except OSError:
+        sock.close()
+        raise
 
     config = uvicorn.Config(
         app,
@@ -153,7 +178,7 @@ def serve(
             pass
 
     try:
-        server.run()
+        server.run(sockets=[sock])
     except KeyboardInterrupt:
         print("\niterate WebUI stopped.")
     return port

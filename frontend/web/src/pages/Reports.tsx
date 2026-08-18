@@ -16,21 +16,30 @@ function formatSize(bytes: number): string {
 export default function Reports(): React.JSX.Element {
   const [reports, setReports] = useState<ReportView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReportPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  // The report we last asked to preview, kept apart from `selected` so a
+  // failed preview can offer a retry against the same target.
+  const [previewTarget, setPreviewTarget] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const pushToast = useWebUi((state) => state.pushToast);
+  const projectRoot = useWebUi((state) => state.projectRoot);
 
   const loadReports = useCallback(async () => {
     setLoading(true);
+    setListError(null);
     try {
-      setReports(await api.reports());
+      setReports(await api.reports(projectRoot));
     } catch (error) {
-      pushToast("error", error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setListError(message);
+      pushToast("error", message);
     } finally {
       setLoading(false);
     }
-  }, [pushToast]);
+  }, [pushToast, projectRoot]);
 
   useEffect(() => {
     void loadReports();
@@ -39,27 +48,31 @@ export default function Reports(): React.JSX.Element {
   const openPreview = useCallback(
     async (name: string): Promise<void> => {
       setPreviewLoading(true);
+      setPreviewTarget(name);
+      setPreviewError(null);
       setSelected(null);
       try {
-        const preview = await api.reportPreview(name);
+        const preview = await api.reportPreview(name, projectRoot);
         setSelected(preview);
         setSearchParams({ name }, { replace: true });
       } catch (error) {
-        pushToast("error", error instanceof Error ? error.message : String(error));
+        const message = error instanceof Error ? error.message : String(error);
+        setPreviewError(message);
+        pushToast("error", message);
       } finally {
         setPreviewLoading(false);
       }
     },
-    [pushToast, setSearchParams],
+    [pushToast, setSearchParams, projectRoot],
   );
 
   // Auto-open a report when arriving with ?name= (e.g. from the dashboard).
   useEffect(() => {
     const requested = searchParams.get("name");
-    if (requested && reports.length > 0 && !selected && !previewLoading) {
+    if (requested && reports.length > 0 && !selected && !previewLoading && !previewError) {
       void openPreview(requested);
     }
-  }, [reports, searchParams, selected, previewLoading, openPreview]);
+  }, [reports, searchParams, selected, previewLoading, previewError, openPreview]);
 
   return (
     <>
@@ -70,6 +83,15 @@ export default function Reports(): React.JSX.Element {
         <div className="loading-block">
           <span className="spinner" /> 加载报告列表…
         </div>
+      ) : listError ? (
+        <section className="panel">
+          <p className="empty">加载报告列表失败：{listError}</p>
+          <div style={{ marginTop: 12 }}>
+            <button className="btn primary" onClick={() => void loadReports()}>
+              重试
+            </button>
+          </div>
+        </section>
       ) : reports.length === 0 ? (
         <section className="panel">
           <p className="empty">暂无报告产物</p>
@@ -115,6 +137,18 @@ export default function Reports(): React.JSX.Element {
             {previewLoading ? (
               <div className="loading-block">
                 <span className="spinner" /> 加载预览…
+              </div>
+            ) : previewError ? (
+              <div>
+                <p className="empty">预览加载失败：{previewError}</p>
+                {previewTarget && (
+                  <button
+                    className="btn primary"
+                    onClick={() => void openPreview(previewTarget)}
+                  >
+                    重试
+                  </button>
+                )}
               </div>
             ) : selected ? (
               <>

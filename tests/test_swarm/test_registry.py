@@ -39,6 +39,28 @@ def test_get_executor_unknown_raises():
         registry.get_executor("tmux")
 
 
+def test_get_executor_no_keyerror_for_every_detected_backend():
+    """Every backend_type that detection can return must be registered, so
+    get_executor() never raises KeyError on a real path (tmux/iterm2 are
+    reserved and never returned)."""
+    registry = BackendRegistry()
+    for mode in ("auto", "in_process", "tmux", "iterm2", "some-future-mode"):
+        preferred = registry.get_preferred_backend({"teammate_mode": mode})
+        executor = registry.get_executor(preferred)
+        assert executor is not None
+        assert executor.type == preferred
+    # auto-detect path
+    assert registry.get_executor().type in ("subprocess", "in_process")
+
+
+def test_detect_pane_backend_raises_reserved():
+    """Pane backends (tmux/iterm2) are reserved/unregistered, so
+    detect_pane_backend must raise rather than return an unusable type."""
+    registry = BackendRegistry()
+    with pytest.raises(RuntimeError, match="reserved"):
+        registry.detect_pane_backend()
+
+
 # ---------------------------------------------------------------------------
 # detect_backend
 # ---------------------------------------------------------------------------

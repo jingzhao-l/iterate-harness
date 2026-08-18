@@ -15,7 +15,7 @@ Severity = Literal["critical", "high", "medium", "low"]
 ReviewMode = Literal["dry-run", "normal"]
 Scope = Literal["full", "changed-only"]
 Language = Literal["zh", "en"]
-StoppedReason = Literal["converged", "max_rounds_reached"]
+StoppedReason = Literal["converged", "max_rounds_reached", "no_rounds"]
 Verdict = Literal["approved", "revise"]
 FinalVerdict = Literal["approved", "needs_revision"]
 

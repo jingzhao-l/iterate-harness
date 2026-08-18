@@ -232,10 +232,20 @@ class OpenAICompatibleClient:
     so it can be used as a drop-in replacement in the agent loop.
     """
 
-    def __init__(self, api_key: str, *, base_url: str | None = None, timeout: float | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        default_headers: dict[str, str] | None = None,
+    ) -> None:
+        headers = {"Authorization": f"Bearer {api_key}"}
+        if default_headers:
+            headers.update(default_headers)
         kwargs: dict[str, Any] = {
             "api_key": api_key,
-            "default_headers": {"Authorization": f"Bearer {api_key}"},
+            "default_headers": headers,
         }
         normalized_base_url = _normalize_openai_base_url(base_url)
         if normalized_base_url:

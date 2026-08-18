@@ -80,18 +80,44 @@ class BridgeSessionManager:
         handle = self._sessions.get(session_id)
         if handle is None:
             raise ValueError(f"Unknown bridge session: {session_id}")
+        task = self._copy_tasks.get(session_id)
         await handle.kill()
+        if task is not None:
+            # Cancel so the copy task's finally block runs and drops this
+            # session's entries from every manager dict.
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - shutdown cleanup
+                pass
+        # Idempotent fallback cleanup in case the copy task never started.
+        self._copy_tasks.pop(session_id, None)
+        self._sessions.pop(session_id, None)
+        self._commands.pop(session_id, None)
+        self._output_paths.pop(session_id, None)
 
     async def _copy_output(self, session_id: str, handle: SessionHandle) -> None:
         path = self._output_paths[session_id]
-        if handle.process.stdout is not None:
-            while True:
-                chunk = await handle.process.stdout.read(4096)
-                if not chunk:
-                    break
+        try:
+            if handle.process.stdout is not None:
+                # Open the output file once for the whole copy rather than on
+                # every 4KB chunk; flushes keep read_output() seeing the newest
+                # bytes while the process is still running.
                 with path.open("ab") as stream:
-                    stream.write(chunk)
-        await handle.process.wait()
+                    while True:
+                        chunk = await handle.process.stdout.read(4096)
+                        if not chunk:
+                            break
+                        stream.write(chunk)
+                        stream.flush()
+            await handle.process.wait()
+        finally:
+            # The copy finished and the process has exited; drop this session
+            # so the manager dicts do not grow unbounded over many runs.
+            self._copy_tasks.pop(session_id, None)
+            self._sessions.pop(session_id, None)
+            self._commands.pop(session_id, None)
+            self._output_paths.pop(session_id, None)
 
 
 _DEFAULT_MANAGER: BridgeSessionManager | None = None

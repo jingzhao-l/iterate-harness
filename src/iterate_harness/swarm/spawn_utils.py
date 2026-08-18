@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
 import sys
 
@@ -110,9 +109,13 @@ def build_inherited_cli_flags(
     Ensures teammates inherit important settings like permission mode, model
     selection, and plugin configuration from their parent.
 
-    All flag values are shell-quoted with :func:`shlex.quote` to prevent
-    command injection when the resulting list is later joined into a shell
-    command string.
+    All flag values are passed through verbatim (unquoted): the returned list
+    is executed via :func:`asyncio.create_subprocess_exec` with no shell, so
+    shell quoting would become literal characters in the arguments.
+
+    .. note::
+        If a caller needs to build a shell command string, it must apply its
+        own quoting (e.g. :func:`shlex.quote`) at that layer instead.
 
     Args:
         model: Model override to forward (e.g. ``"claude-opus-4-6"``).
@@ -124,7 +127,7 @@ def build_inherited_cli_flags(
         plan_mode_required: When True, bypass-permissions flag is suppressed
             (plan mode takes precedence over bypass for safety).
         settings_path: Path to a settings JSON file to propagate via
-            ``--settings``.  Shell-quoted for safety.
+            ``--settings``.  Passed through verbatim (no shell).
         teammate_mode: Teammate execution mode (``"auto"``, ``"in_process"``,
             ``"tmux"``).  Forwarded as ``--teammate-mode`` so tmux teammates
             use the same mode as the leader.
@@ -150,31 +153,31 @@ def build_inherited_cli_flags(
     # --- Model override ----------------------------------------------------
     # "inherit" means use the parent's model via the OPENHARNESS_MODEL env var.
     if model and model != "inherit":
-        flags.extend(["--model", shlex.quote(model)])
+        flags.extend(["--model", model])
 
     # --- System prompt override ------------------------------------------
     # Agent definitions can carry a dedicated worker system prompt. Forward it
     # explicitly so subprocess teammates preserve their role/personality.
     if system_prompt:
         prompt_flag = "--append-system-prompt" if system_prompt_mode == "append" else "--system-prompt"
-        flags.extend([prompt_flag, shlex.quote(system_prompt)])
+        flags.extend([prompt_flag, system_prompt])
 
     # --- Settings path propagation ----------------------------------------
     # Ensures teammates load the same settings JSON as the leader process.
     if settings_path:
-        flags.extend(["--settings", shlex.quote(settings_path)])
+        flags.extend(["--settings", settings_path])
 
     # --- Plugin directories -----------------------------------------------
     # Each enabled plugin directory is forwarded individually so that inline
     # plugins (loaded via --plugin-dir) are available inside teammates.
     for plugin_dir in plugin_dirs or []:
-        flags.extend(["--plugin-dir", shlex.quote(plugin_dir)])
+        flags.extend(["--plugin-dir", plugin_dir])
 
     # --- Teammate mode propagation ----------------------------------------
     # Forwards the session-level teammate mode so tmux-spawned teammates do
     # not re-detect the mode independently and possibly choose a different one.
     if teammate_mode:
-        flags.extend(["--teammate-mode", shlex.quote(teammate_mode)])
+        flags.extend(["--teammate-mode", teammate_mode])
 
     if extra_flags:
         flags.extend(extra_flags)

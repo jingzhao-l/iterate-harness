@@ -69,6 +69,34 @@ export default function Dashboard(): React.JSX.Element {
   const lastRun = status.last_run;
   const runActive = chatStatus?.state === "running" || chatStatus?.state === "starting" || chatStatus?.state === "paused";
 
+  // Persistent run-status banner, decoupled from the chat panel: it reads the
+  // real status source (store.status converged + store.chatStatus run state fed
+  // by the SSE run-state/progress-update events and the REST poll fallback).
+  const liveConverged = status.converged === true || chatStatus?.converged === true;
+  const chatState = chatStatus?.state;
+  const waitingForInput =
+    chatStatus?.waiting_for === "permission" ||
+    chatStatus?.waiting_for === "user_select" ||
+    chatStatus?.waiting_for === "user_prompt";
+  let bannerLabel = "空闲 · 等待启动";
+  let bannerKind = "idle";
+  if (chatStatus?.error) {
+    bannerLabel = "运行失败";
+    bannerKind = "failed";
+  } else if (liveConverged) {
+    bannerLabel = "已收敛";
+    bannerKind = "converged";
+  } else if (chatState === "running" || chatState === "starting") {
+    bannerLabel = chatState === "starting" ? "启动中" : "运行中";
+    bannerKind = chatState === "starting" ? "starting" : "running";
+  } else if (chatState === "paused") {
+    bannerLabel = "暂停 · 等待输入";
+    bannerKind = "paused";
+  } else if (chatState === "stopped") {
+    bannerLabel = "已停止";
+    bannerKind = "stopped";
+  }
+
   return (
     <>
       <div className="page-head">
@@ -85,6 +113,18 @@ export default function Dashboard(): React.JSX.Element {
           {runActive ? "运行中…" : "启动迭代"}
         </button>
       </div>
+
+      {/* Persistent run status (decoupled from the chat panel). */}
+      <section className={`run-banner ${bannerKind}`}>
+        <span className={`state-badge state-${bannerKind}`}>{bannerLabel}</span>
+        {waitingForInput && <span className="waiting-tag">需要你的输入</span>}
+        {chatStatus?.run_id && (
+          <span className="muted mono run-banner-id">
+            运行 #{chatStatus.run_id}
+            {chatStatus.project_root ? ` · ${chatStatus.project_root}` : ""}
+          </span>
+        )}
+      </section>
 
       <div className="cards">
         <div className="card">

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -24,6 +25,8 @@ from typing import Any, Literal
 
 from iterate_harness.swarm.mailbox import get_team_dir
 from iterate_harness.swarm.types import BackendType
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -635,7 +638,7 @@ async def _kill_orphaned_teammate_panes(team_name: str) -> None:
     """
     from iterate_harness.swarm.registry import get_backend_registry
     from iterate_harness.swarm.spawn_utils import is_inside_tmux
-    from iterate_harness.swarm.types import is_pane_backend
+    from iterate_harness.swarm.types import PaneBackend, is_pane_backend
 
     team_file = read_team_file(team_name)
     if not team_file:
@@ -658,12 +661,27 @@ async def _kill_orphaned_teammate_panes(team_name: str) -> None:
     async def _kill_one(member: TeamMember) -> None:
         try:
             executor = registry.get_executor(member.backend_type)
+            if not isinstance(executor, PaneBackend) or not hasattr(executor, "kill_pane"):
+                logger.warning(
+                    "Backend %r (%s) for %s does not implement PaneBackend.kill_pane — "
+                    "cannot kill pane %s; skipping",
+                    member.backend_type,
+                    type(executor).__name__,
+                    member.agent_id,
+                    member.tmux_pane_id,
+                )
+                return
             await executor.kill_pane(
                 member.tmux_pane_id,
                 use_external_session=use_external_session,
             )
         except Exception:
-            pass
+            logger.exception(
+                "Failed to kill pane %s for %s via backend %r",
+                member.tmux_pane_id,
+                member.agent_id,
+                member.backend_type,
+            )
 
     await asyncio.gather(*(_kill_one(m) for m in pane_members), return_exceptions=True)
 

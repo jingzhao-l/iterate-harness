@@ -4,89 +4,15 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from typing import TYPE_CHECKING, Any
 
-from iterate_harness.platforms import get_platform, get_platform_capabilities
-from iterate_harness.swarm.spawn_utils import is_tmux_available
+from iterate_harness.platforms import get_platform_capabilities
 from iterate_harness.swarm.types import BackendDetectionResult, BackendType, TeammateExecutor
 
 if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Detection helpers
-# ---------------------------------------------------------------------------
-
-
-def _detect_tmux() -> bool:
-    """Return True if the process is running inside an active tmux session.
-
-    Checks:
-    1. ``$TMUX`` environment variable (set by tmux for attached clients).
-    2. The ``tmux`` binary is available on PATH.
-    """
-    if not os.environ.get("TMUX"):
-        logger.debug("[BackendRegistry] _detect_tmux: $TMUX not set")
-        return False
-    if not shutil.which("tmux"):
-        logger.debug("[BackendRegistry] _detect_tmux: tmux binary not found on PATH")
-        return False
-    logger.debug("[BackendRegistry] _detect_tmux: inside tmux session with binary available")
-    return True
-
-
-def _detect_iterm2() -> bool:
-    """Return True if the process is running inside an iTerm2 terminal.
-
-    Checks ``$ITERM_SESSION_ID`` which iTerm2 sets for every terminal session.
-    """
-    if os.environ.get("ITERM_SESSION_ID"):
-        logger.debug("[BackendRegistry] _detect_iterm2: ITERM_SESSION_ID=%s", os.environ["ITERM_SESSION_ID"])
-        return True
-    logger.debug("[BackendRegistry] _detect_iterm2: ITERM_SESSION_ID not set")
-    return False
-
-
-def _is_it2_cli_available() -> bool:
-    """Return True if the ``it2`` CLI is installed (used for iTerm2 pane control)."""
-    available = shutil.which("it2") is not None
-    logger.debug("[BackendRegistry] _is_it2_cli_available: %s", available)
-    return available
-
-
-def _get_tmux_install_instructions() -> str:
-    """Return platform-specific tmux installation instructions."""
-    system = get_platform()
-    if system == "macos":
-        return (
-            "To use agent swarms, install tmux:\n"
-            "  brew install tmux\n"
-            "Then start a tmux session with: tmux new-session -s claude"
-        )
-    elif system in {"linux", "wsl"}:
-        return (
-            "To use agent swarms, install tmux:\n"
-            "  sudo apt install tmux    # Ubuntu/Debian\n"
-            "  sudo dnf install tmux    # Fedora/RHEL\n"
-            "Then start a tmux session with: tmux new-session -s claude"
-        )
-    elif system == "windows":
-        return (
-            "To use agent swarms, you need tmux which requires WSL "
-            "(Windows Subsystem for Linux).\n"
-            "Install WSL first, then inside WSL run:\n"
-            "  sudo apt install tmux\n"
-            "Then start a tmux session with: tmux new-session -s claude"
-        )
-    else:
-        return (
-            "To use agent swarms, install tmux using your system's package manager.\n"
-            "Then start a tmux session with: tmux new-session -s claude"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -97,10 +23,11 @@ def _get_tmux_install_instructions() -> str:
 class BackendRegistry:
     """Registry that maps BackendType names to TeammateExecutor instances.
 
-    Detection priority pipeline (mirrors ``registry.ts``):
-    1. ``in_process`` – when explicitly requested or no pane backend available.
-    2. ``tmux`` – when inside a tmux session and tmux binary present.
-    3. ``subprocess`` – always available as the safe fallback.
+    Currently only the ``in_process`` and ``subprocess`` backends are
+    implemented and registered.  The pane-based backends (``tmux`` /
+    ``iterm2``, see :class:`~iterate_harness.swarm.types.PaneBackend`) are
+    reserved for a future implementation and are never returned by detection,
+    so detection always yields a backend that :meth:`get_executor` can resolve.
 
     Usage::
 
@@ -128,10 +55,14 @@ class BackendRegistry:
     def detect_backend(self) -> BackendType:
         """Detect and cache the most capable available backend.
 
+        Only the implemented backends are ever selected here:
+        ``in_process`` or ``subprocess``.  The pane backends (``tmux`` /
+        ``iterm2``) are reserved for a future implementation and are never
+        returned, so the result is always resolvable via :meth:`get_executor`.
+
         Detection priority:
         1. ``in_process`` – if in-process fallback was previously activated.
-        2. ``tmux`` – if inside an active tmux session and tmux binary present.
-        3. ``subprocess`` – always available as the safe fallback.
+        2. ``subprocess`` – always available as the safe fallback.
 
         Returns:
             The detected :data:`BackendType` string.
@@ -156,24 +87,7 @@ class BackendRegistry:
             )
             return self._detected
 
-        # Priority 2: tmux (inside session + binary available)
-        inside_tmux = _detect_tmux()
-        if inside_tmux:
-            if "tmux" in self._backends:
-                logger.debug("[BackendRegistry] Selected: tmux (running inside tmux session)")
-                self._detected = "tmux"
-                self._detection_result = BackendDetectionResult(
-                    backend="tmux",
-                    is_native=True,
-                )
-                return self._detected
-            else:
-                logger.debug(
-                    "[BackendRegistry] Inside tmux but TmuxBackend not registered — "
-                    "falling through to subprocess"
-                )
-
-        # Priority 3: subprocess (always available)
+        # Priority 2: subprocess (always available)
         logger.debug("[BackendRegistry] Selected: subprocess (default fallback)")
         self._detected = "subprocess"
         self._detection_result = BackendDetectionResult(
@@ -183,89 +97,31 @@ class BackendRegistry:
         return self._detected
 
     def detect_pane_backend(self) -> BackendDetectionResult:
-        """Detect which pane backend (tmux / iTerm2) should be used.
+        """Detect which pane backend should be used.
 
-        Implements the same priority flow as ``detectAndGetBackend()`` in the
-        TypeScript source:
-
-        1. If inside tmux, always use tmux.
-        2. If in iTerm2 with ``it2`` CLI, use iTerm2.
-        3. If in iTerm2 without ``it2`` but tmux available, use tmux.
-        4. If in iTerm2 with no tmux, raise with setup instructions.
-        5. If tmux binary available (external session), use tmux.
-        6. Otherwise raise with platform-specific install instructions.
+        The pane backends (``tmux`` / ``iterm2``) are reserved for a future
+        implementation and are currently **not** registered.  Rather than
+        return a ``backend_type`` that :meth:`get_executor` would raise a
+        :class:`KeyError` for, this method raises :class:`RuntimeError` every
+        call so callers fall back to the implemented execution backends.
 
         Returns:
             :class:`BackendDetectionResult` describing the chosen pane backend.
 
         Raises:
-            RuntimeError: When no pane backend is available.
+            RuntimeError: Always, because no pane backend is implemented /
+                registered yet.
         """
-        logger.debug("[BackendRegistry] Starting pane backend detection...")
-
-        in_tmux = _detect_tmux()
-        in_iterm2 = _detect_iterm2()
-
-        logger.debug(
-            "[BackendRegistry] Environment: in_tmux=%s, in_iterm2=%s",
-            in_tmux,
-            in_iterm2,
+        logger.warning(
+            "[BackendRegistry] detect_pane_backend: tmux/iTerm2 pane backends are "
+            "reserved (not yet implemented/registered); raising instead of returning "
+            "an unusable backend_type"
         )
-
-        # Priority 1: inside tmux — always use tmux
-        if in_tmux:
-            logger.debug("[BackendRegistry] Selected pane backend: tmux (inside tmux session)")
-            return BackendDetectionResult(backend="tmux", is_native=True)
-
-        # Priority 2: in iTerm2, try native panes
-        if in_iterm2:
-            it2_available = _is_it2_cli_available()
-            logger.debug(
-                "[BackendRegistry] iTerm2 detected, it2 CLI available: %s", it2_available
-            )
-
-            if it2_available:
-                logger.debug("[BackendRegistry] Selected pane backend: iterm2 (native with it2 CLI)")
-                return BackendDetectionResult(backend="iterm2", is_native=True)
-
-            # it2 not available — can we fall back to tmux?
-            tmux_bin = is_tmux_available()
-            logger.debug(
-                "[BackendRegistry] it2 not available, tmux binary available: %s", tmux_bin
-            )
-
-            if tmux_bin:
-                logger.debug(
-                    "[BackendRegistry] Selected pane backend: tmux (fallback in iTerm2, "
-                    "it2 setup recommended)"
-                )
-                return BackendDetectionResult(
-                    backend="tmux",
-                    is_native=False,
-                    needs_setup=True,
-                )
-
-            logger.debug(
-                "[BackendRegistry] ERROR: in iTerm2 but no it2 CLI and no tmux"
-            )
-            raise RuntimeError(
-                "iTerm2 detected but it2 CLI not installed.\n"
-                "Install it2 with: pip install it2"
-            )
-
-        # Priority 3: not in tmux or iTerm2 — use tmux external session if available
-        tmux_bin = is_tmux_available()
-        logger.debug(
-            "[BackendRegistry] Not in tmux or iTerm2, tmux binary available: %s", tmux_bin
+        raise RuntimeError(
+            "Pane-backed execution (tmux / iTerm2) is not available: these backends "
+            "are reserved for a future implementation and not currently registered. "
+            "Use the 'subprocess' or 'in_process' execution mode instead."
         )
-
-        if tmux_bin:
-            logger.debug("[BackendRegistry] Selected pane backend: tmux (external session mode)")
-            return BackendDetectionResult(backend="tmux", is_native=False)
-
-        # No pane backend available
-        logger.debug("[BackendRegistry] ERROR: No pane backend available")
-        raise RuntimeError(_get_tmux_install_instructions())
 
     def get_executor(self, backend: BackendType | None = None) -> TeammateExecutor:
         """Return a TeammateExecutor for the given backend type.
@@ -296,7 +152,8 @@ class BackendRegistry:
 
         Args:
             config: Optional settings dict. Reads ``teammate_mode`` key if
-                    present (values: ``"auto"``, ``"in_process"``, ``"tmux"``).
+                    present (values: ``"auto"``, ``"in_process"``,
+                    ``"tmux"``).
 
         Returns:
             The resolved :data:`BackendType`.
@@ -310,8 +167,17 @@ class BackendRegistry:
 
         if mode == "in_process":
             return "in_process"
-        elif mode == "tmux":
-            return "tmux"
+        elif mode in ("tmux", "iterm2"):
+            # Pane backends are reserved for a future implementation and are
+            # not registered, so requesting one explicitly would later throw a
+            # KeyError from get_executor(). Fall back to auto-detection,
+            # which always yields an implemented/registered backend.
+            logger.warning(
+                "[BackendRegistry] Preferred backend %r is reserved (not yet "
+                "implemented/registered); falling back to auto-detection",
+                mode,
+            )
+            return self.detect_backend()
         else:
             # "auto" — fall through to detection
             return self.detect_backend()
@@ -386,8 +252,10 @@ class BackendRegistry:
 
             self._backends["in_process"] = InProcessBackend()
 
-        # Tmux backend registration is deferred until implementation exists.
-        # If a TmuxBackend is available it can be registered via register_backend().
+        # Tmux/iTerm2 backends are reserved for a future implementation and
+        # are intentionally NOT registered here, so detection never yields an
+        # unresolvable backend_type. A future TmuxBackend/iTerm2Backend can be
+        # hooked up via register_backend().
 
 
 # ---------------------------------------------------------------------------

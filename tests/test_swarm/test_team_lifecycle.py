@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import importlib
+import logging
 import time
 from pathlib import Path
 
 import pytest
 
+from iterate_harness.swarm import registry as registry_mod
+from iterate_harness.swarm import spawn_utils as spawn_utils_mod
 from iterate_harness.swarm.team_lifecycle import (
     TeamFile,
     TeamLifecycleManager,
     TeamMember,
+    _kill_orphaned_teammate_panes,
+    get_team_file_path,
 )
 
 
@@ -195,3 +201,53 @@ def test_remove_nonexistent_member_raises(manager):
 def test_add_member_to_nonexistent_team_raises(manager):
     with pytest.raises(ValueError, match="does not exist"):
         manager.add_member("no-team", _make_member())
+
+
+# ---------------------------------------------------------------------------
+# _kill_orphaned_teammate_panes — logging when backend lacks kill_pane
+# ---------------------------------------------------------------------------
+
+
+class _NoKillPaneExecutor:
+    """A TeammateExecutor that is NOT a PaneBackend (no ``kill_pane`` method).
+    Used to prove _kill_one logs a warning instead of silently swallowing an
+    AttributeError."""
+
+    type = "tmux"
+
+    def is_available(self):
+        return True
+
+
+async def test_kill_orphaned_pane_logs_when_backend_has_no_kill_pane(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    tf = TeamFile(name="zulu", created_at=time.time())
+    tf.members["w@zulu"] = TeamMember(
+        agent_id="w@zulu",
+        name="w",
+        backend_type="tmux",
+        joined_at=time.time(),
+        tmux_pane_id="%1",
+    )
+    tf.save(get_team_file_path("zulu"))
+
+    class FakeRegistry:
+        def get_executor(self, backend):
+            return _NoKillPaneExecutor()
+
+    # NOTE: test_imports.py pops every ``iterate_harness.swarm.*`` module from
+    # sys.modules during the suite run, which under pytest's importlib-mode
+    # orphans the module object referenced by the module-level ``registry_mod``
+    # import. Re-import here in the test body so we patch the *live* registry
+    # module that ``_kill_orphaned_teammate_panes`` will resolve at runtime.
+    live_registry = importlib.import_module("iterate_harness.swarm.registry")
+    monkeypatch.setattr(live_registry, "get_backend_registry", lambda: FakeRegistry())
+    monkeypatch.setattr(spawn_utils_mod, "is_inside_tmux", lambda: False)
+
+    with caplog.at_level(logging.WARNING, logger="iterate_harness.swarm.team_lifecycle"):
+        await _kill_orphaned_teammate_panes("zulu")
+
+    assert any(
+        "does not implement PaneBackend.kill_pane" in m for m in caplog.messages
+    ), "expected a warning about the backend lacking kill_pane"

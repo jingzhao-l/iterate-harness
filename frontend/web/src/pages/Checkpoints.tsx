@@ -42,19 +42,20 @@ export default function Checkpoints(): React.JSX.Element {
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const pushToast = useWebUi((state) => state.pushToast);
+  const projectRoot = useWebUi((state) => state.projectRoot);
 
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      setView(await api.checkpoints());
+      setView(await api.checkpoints(projectRoot));
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
       pushToast("error", error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }
-  }, [pushToast]);
+  }, [pushToast, projectRoot]);
 
   useEffect(() => {
     void load();
@@ -187,7 +188,7 @@ export default function Checkpoints(): React.JSX.Element {
           busy={busy}
           onCancel={() => setConfirmRestore(false)}
           onConfirm={() => {
-            void runOperation(() => api.restoreCheckpoint(), () => setConfirmRestore(false));
+            void runOperation(() => api.restoreCheckpoint(projectRoot), () => setConfirmRestore(false));
           }}
         >
           重新武装当前检查点，供下一次 <code>/iterate resume</code> 使用。此操作会写入审计日志。
@@ -202,7 +203,7 @@ export default function Checkpoints(): React.JSX.Element {
           busy={busy}
           onCancel={() => setConfirmClear(false)}
           onConfirm={() => {
-            void runOperation(() => api.clearCheckpoint(), () => setConfirmClear(false));
+            void runOperation(() => api.clearCheckpoint(projectRoot), () => setConfirmClear(false));
           }}
         >
           将丢弃当前检查点。此操作不可撤销，并会写入审计日志。确定继续吗？
