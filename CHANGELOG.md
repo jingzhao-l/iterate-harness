@@ -4,6 +4,16 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.11.2] - 2026-08-18
+
+WebUI reliability fixes from a full implementation audit.
+
+### Fixed
+
+- **Chat history lost after SSE disconnect/reconnect** (`store.ts`): the hub only serves live subscribers, so chat messages, progress events and decision-log entries published while the stream was down were permanently lost on reconnect. `onopen` now resyncs chat history + run status from REST and bumps the decision-log revision on (re)connect — the UI never shows a stale transcript.
+- **Assistant output dropped on early run termination** (`web/run_manager.py`): buffer text was only flushed on an `AssistantTurnComplete`, so a turn interrupted by an error, an early stop or a system-exit silently discarded the model's partial output. A `_flush_assistant_buffer` in the run loop's `finally` now publishes any buffered text (no-op when the last turn was already flushed), plus a regression test.
+- **Report mtime conversion wrapped in an empty exception** (`web/routes/reports.py`): conversion failures were swallowed with `except Exception: pass`, hiding the error and leaving `modified` silently null. Replaced with an explicit `_to_modified_iso` helper that logs a warning and degrades to `None` only for genuinely un-representable mtimes, with tests.
+
 ## [1.11.1] - 2026-08-17
 
 WebUI review fix: truthful tool-failure markers in the human-in-the-loop chat timeline.
