@@ -7,6 +7,20 @@
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
 </p>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/iterate-harness"><img src="https://img.shields.io/npm/dt/iterate-harness?label=Downloads&style=for-the-badge&color=2ea44f&logo=npm&logoColor=white" alt="npm downloads"></a>
+</p>
+
+<p align="center">
+  <a href="#-快速开始"><img src="https://img.shields.io/badge/快速开始-5_分钟-blue?logo=github&logoColor=white" alt="Quick Start"></a>
+  <a href="#-iterate-特性"><img src="https://img.shields.io/badge/Iterate-6_工具-ff69b4" alt="Iterate Tools"></a>
+  <a href="#-iterate-特性"><img src="https://img.shields.io/badge/模式-dry--run_|_normal-61DAFB" alt="Modes"></a>
+  <img src="https://img.shields.io/badge/python-%E2%89%A53.10-blue?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.npmjs.org%2Fiterate-harness%2Flatest&query=version&label=version&color=brightgreen" alt="Version">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow" alt="License"></a>
+  <a href="https://github.com/jingzhao-l/iterate-harness"><img src="https://img.shields.io/github/stars/jingzhao-l/iterate-harness?style=social&label=Star" alt="Stars"></a>
+</p>
+
 **iterate** 是一个让 AI 编程助手具备多轮自主代码审查与修复能力的开源项目。它解决很具体的痛点：
 
 > AI 助手往往"说得多、做得浅"：一次对话只改几行、看过一个文件就不再管全局，也很少回头复核自己改坏的东西。iterate 把这些收尾工作——逐项审查、分维度排查、修复、验证、再迭代——自动化，让 AI 真正像资深工程师一样把改动做完、做对。
@@ -26,21 +40,6 @@
 聚焦型 fork：内核 agent loop、React TUI、工具/技能/插件体系与权限层全部
 继承；在此之上叠加了从 iterate skill TypeScript 实现移植的语义层，以及
 引擎级的收敛控制策略。
-
-<p align="center">
-  <a href="#-快速开始"><img src="https://img.shields.io/badge/快速开始-5_分钟-blue?style=for-the-badge" alt="Quick Start"></a>
-  <a href="#-iterate-特性"><img src="https://img.shields.io/badge/Iterate-6_工具-ff69b4?style=for-the-badge" alt="Iterate Tools"></a>
-  <a href="#-iterate-特性"><img src="https://img.shields.io/badge/模式-dry--run_|_normal-61DAFB?style=for-the-badge" alt="Modes"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"></a>
-  <a href="https://github.com/jingzhao-l/iterate-harness"><img src="https://img.shields.io/github/stars/jingzhao-l/iterate-harness?style=for-the-badge&logo=github&logoColor=white" alt="Stars"></a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-1.9.3-brightgreen" alt="Version">
-  <a href="https://www.npmjs.com/package/iterate-harness"><img src="https://img.shields.io/npm/dt/iterate-harness?label=Downloads&logo=npm&logoColor=white" alt="npm downloads"></a>
-</p>
 
 > ⭐ 如果这个项目对你有帮助，欢迎点亮 GitHub Star，这是对开源维护最大的支持！
 

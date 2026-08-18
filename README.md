@@ -7,6 +7,22 @@
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
 </p>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/iterate-harness"><img src="https://img.shields.io/npm/dt/iterate-harness?label=Downloads&style=for-the-badge&color=2ea44f&logo=npm&logoColor=white" alt="npm downloads"></a>
+</p>
+
+<p align="center">
+  <a href="#-quick-start"><img src="https://img.shields.io/badge/Quick_Start-5_min-blue?logo=github&logoColor=white" alt="Quick Start"></a>
+  <a href="#-iterate-features"><img src="https://img.shields.io/badge/Iterate-6_tools-ff69b4" alt="Iterate Tools"></a>
+  <a href="#-iterate-features"><img src="https://img.shields.io/badge/Modes-dry--run_|_normal-61DAFB" alt="Modes"></a>
+  <img src="https://img.shields.io/badge/python-%E2%89%A53.10-blue?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.npmjs.org%2Fiterate-harness%2Flatest&query=version&label=version&color=brightgreen" alt="Version">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow" alt="License"></a>
+  <a href="https://github.com/jingzhao-l/iterate-harness"><img src="https://img.shields.io/github/stars/jingzhao-l/iterate-harness?style=social&label=Star" alt="Stars"></a>
+</p>
+
+---
+
 **iterate** is an open-source project that gives AI coding assistants the
 ability to **repeatedly review and fix code in multi-round autonomous loops**.
 It targets a concrete pain point:
@@ -35,21 +51,6 @@ It is a focused fork of [OpenHarness](https://github.com/HKUDS/OpenHarness)
 and permission layer are inherited; the iterate semantic layer (ported from
 the iterate skill's TypeScript implementation) plus the engine-level
 convergence policy are layered on top.
-
-<p align="center">
-  <a href="#-quick-start"><img src="https://img.shields.io/badge/Quick_Start-5_min-blue?style=for-the-badge" alt="Quick Start"></a>
-  <a href="#-iterate-features"><img src="https://img.shields.io/badge/Iterate-6_tools-ff69b4?style=for-the-badge" alt="Iterate Tools"></a>
-  <a href="#-iterate-features"><img src="https://img.shields.io/badge/Modes-dry--run_|_normal-61DAFB?style=for-the-badge" alt="Modes"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"></a>
-  <a href="https://github.com/jingzhao-l/iterate-harness"><img src="https://img.shields.io/github/stars/jingzhao-l/iterate-harness?style=for-the-badge&logo=github&logoColor=white" alt="Stars"></a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/version-1.9.4-brightgreen" alt="Version">
-  <a href="https://www.npmjs.com/package/iterate-harness"><img src="https://img.shields.io/npm/dt/iterate-harness?label=Downloads&logo=npm&logoColor=white" alt="npm downloads"></a>
-</p>
 
 > ⭐ If this project helps you, please consider giving it a GitHub star — it means a lot to open-source maintenance!
 
