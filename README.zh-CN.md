@@ -39,6 +39,7 @@
   <img src="https://img.shields.io/badge/python-≥3.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
   <img src="https://img.shields.io/badge/version-1.9.3-brightgreen" alt="Version">
+  <a href="https://www.npmjs.com/package/iterate-harness"><img src="https://img.shields.io/npm/dt/iterate-harness?label=Downloads&logo=npm&logoColor=white" alt="npm downloads"></a>
 </p>
 
 > ⭐ 如果这个项目对你有帮助，欢迎点亮 GitHub Star，这是对开源维护最大的支持！
