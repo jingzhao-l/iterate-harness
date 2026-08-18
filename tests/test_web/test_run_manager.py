@@ -121,8 +121,60 @@ class TestToolEvents:
 
 
 # ---------------------------------------------------------------------------
-# Status snapshot
+# Assistant text buffering (design §18: model output is flushed per turn)
 # ---------------------------------------------------------------------------
+
+
+class TestAssistantBuffer:
+    async def _flush_and_collect_text(self, manager: RunManager) -> list[str]:
+        from iterate_harness.web.hub import hub
+
+        queue = await hub.subscribe()
+        try:
+            await manager._flush_assistant_buffer()
+        finally:
+            await hub.unsubscribe(queue)
+        texts: list[str] = []
+        while not queue.empty():
+            event = queue.get_nowait()
+            if event.type == "chat-message" and event.data.get("kind") == "text":
+                texts.append(event.data["content"])
+        return texts
+
+    async def test_flush_publishes_partial_text(self, manager: RunManager):
+        """Buffered assistant text that is never wrapped by an
+        ``AssistantTurnComplete`` (e.g. the run errored mid-turn) must still
+        reach the chat panel instead of being silently dropped."""
+        manager._assistant_buffer = "partially generated output"
+        texts = await self._flush_and_collect_text(manager)
+        assert texts == ["partially generated output"]
+        # Buffer was drained so it cannot double-publish on the next flush.
+        assert manager._assistant_buffer == ""
+
+    async def test_flush_noop_when_empty(self, manager: RunManager):
+        assert await self._flush_and_collect_text(manager) == []
+
+    async def test_turn_complete_flushes_buffer_as_text(self, manager: RunManager):
+        """A completed assistant turn drains the running buffer into one
+        assistant text message (regression guard for the flush path)."""
+        from iterate_harness.engine.stream_events import AssistantTurnComplete
+        from iterate_harness.web.hub import hub
+
+        manager._assistant_buffer = "summary of findings"
+        queue = await hub.subscribe()
+        try:
+            await manager._render_event(
+                AssistantTurnComplete(message=None, usage=None)  # type: ignore[arg-type]
+            )
+        finally:
+            await hub.unsubscribe(queue)
+        texts: list[str] = []
+        while not queue.empty():
+            event = queue.get_nowait()
+            if event.type == "chat-message" and event.data.get("kind") == "text":
+                texts.append(event.data["content"])
+        assert texts == ["summary of findings"]
+        assert manager._assistant_buffer == ""
 
 
 class TestStatus:

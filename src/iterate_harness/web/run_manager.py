@@ -312,6 +312,12 @@ class RunManager:
             await self._publish_chat("system", f"运行失败：{exc}", kind="error")
             await self._set_state("stopped", message="运行失败")
         finally:
+            # Flush any assistant text that was still buffered when the loop
+            # ended — a turn interrupted by an error, an early stop, or a
+            # system-exit would otherwise drop the model's partial output with
+            # no trace (no-op when the last turn completed and was already
+            # flushed).
+            await self._flush_assistant_buffer()
             if bundle is not None:
                 try:
                     await close_runtime(bundle)
@@ -368,10 +374,7 @@ class RunManager:
             if remaining > 0:
                 self._assistant_buffer += event.text[:remaining]
         elif isinstance(event, AssistantTurnComplete):
-            text = self._assistant_buffer.strip()
-            self._assistant_buffer = ""
-            if text:
-                await self._publish_chat("assistant", text, kind="text")
+            await self._flush_assistant_buffer()
         elif isinstance(event, StatusEvent):
             await self._publish_chat("system", event.message, kind="status")
         elif isinstance(event, ErrorEvent):
@@ -659,6 +662,13 @@ class RunManager:
         if not files:
             raise RunManagerError(f"相对 {ref} 没有变更文件（工作区干净）")
         return files
+
+    async def _flush_assistant_buffer(self) -> None:
+        """Publish any buffered assistant text as a chat message (no-op if empty)."""
+        text = self._assistant_buffer.strip()
+        self._assistant_buffer = ""
+        if text:
+            await self._publish_chat("assistant", text, kind="text")
 
     async def _set_state(self, state: RunState, *, message: str = "") -> None:
         async with self._lock:

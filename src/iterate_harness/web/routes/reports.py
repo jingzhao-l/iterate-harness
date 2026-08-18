@@ -7,11 +7,16 @@ inline for the frontend's embedded preview panel.
 
 from __future__ import annotations
 
+import datetime
+import logging
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
 from ..schemas import ReportView
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["reports"])
 
@@ -26,6 +31,23 @@ def _resolve_project(project_root: str) -> Path:
     return root
 
 
+def _to_modified_iso(stat: os.stat_result) -> str | None:
+    """Convert a file's mtime to an ISO-8601 UTC timestamp.
+
+    Returns ``None`` only when the mtime cannot be represented (e.g. an
+    out-of-range platform value); the conversion is best-effort and logs a
+    warning instead of silently swallowing the failure so the report list
+    shows a usable ``modified`` for normal files.
+    """
+    try:
+        return datetime.datetime.fromtimestamp(
+            stat.st_mtime, tz=datetime.timezone.utc
+        ).isoformat()
+    except (OSError, OverflowError, ValueError) as exc:
+        log.warning("report mtime conversion failed: %s", exc)
+        return None
+
+
 @router.get("/reports", response_model=list[ReportView])
 def list_reports(project_root: str = "") -> list[ReportView]:
     """List generated report artifacts in the project's ``.iterate``."""
@@ -38,20 +60,17 @@ def list_reports(project_root: str = "") -> list[ReportView]:
             if not path.is_file():
                 continue
             stat = path.stat()
-            modified = None
-            try:
-                import datetime
-                modified = datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.timezone.utc).isoformat()
-            except Exception:
-                pass
-        except OSError:
+        except OSError as exc:
+            # A raced deletion or permission change between is_file and stat
+            # should not fail the whole listing — log and keep going.
+            log.warning("report stat failed for %s: %s", name, exc)
             continue
         out.append(
             ReportView(
                 name=name,
                 path=str(path.relative_to(root)),
                 size=stat.st_size,
-                modified=modified,
+                modified=_to_modified_iso(stat),
             )
         )
     return out

@@ -400,6 +400,29 @@ class TestReports:
         body = client.get("/api/v1/reports", params={"project_root": str(tmp_path)}).json()
         assert [r["name"] for r in body] == ["report.html"]
 
+    def test_list_reports_populates_modified(self, client: TestClient, tmp_path: Path):
+        """A normal report file must surface a usable ISO-8601 ``modified`` so
+        the Reports page can show when each artifact was generated."""
+        import re
+
+        (tmp_path / ".iterate").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".iterate" / "report.html").write_text("<html>report</html>", encoding="utf-8")
+        body = client.get("/api/v1/reports", params={"project_root": str(tmp_path)}).json()
+        assert len(body) == 1
+        modified = body[0]["modified"]
+        # e.g. 2026-08-17T00:00:00.123456+00:00 (fractional seconds optional)
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?\+00:00$", modified) is not None
+
+    def test_modified_iso_overflow_returns_none(self, tmp_path: Path):
+        """An mtime the platform cannot represent must degrade cleanly to None
+        (with a logged warning) instead of raising / silently swallowing."""
+        from types import SimpleNamespace
+
+        from iterate_harness.web.routes import reports
+
+        stat = SimpleNamespace(st_mtime=10**20)  # far beyond representable range
+        assert reports._to_modified_iso(stat) is None  # type: ignore[arg-type]
+
     def test_preview_report(self, client: TestClient, tmp_path: Path):
         (tmp_path / ".iterate").mkdir(parents=True, exist_ok=True)
         (tmp_path / ".iterate" / "report.html").write_text("<html>report</html>", encoding="utf-8")

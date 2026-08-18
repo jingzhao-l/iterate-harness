@@ -325,8 +325,15 @@ export function subscribeToStatus(projectRoot: string): () => void {
       stopPolling();
       lastWaitingFor = null;
       useWebUi.getState().setConnectionState("connected");
-      // Only show a toast on reconnection, not on the initial connect.
+      // The hub only serves live subscribers, so any chat messages, progress
+      // and decision-log events published while the stream was down were lost.
+      // On a reconnect (but not the initial connect) resync them from REST so
+      // the UI never shows a stale transcript after a disconnect.
       if (everConnected) {
+        void useWebUi.getState().loadChatHistory();
+        void useWebUi.getState().refreshChatStatus();
+        // Remind decision-log pages (Runs) to refetch their live data too.
+        useWebUi.getState().bumpLogRevision();
         useWebUi.getState().pushToast("success", "实时流已重新连接");
       }
       everConnected = true;
