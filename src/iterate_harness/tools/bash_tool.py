@@ -114,19 +114,36 @@ async def _read_remaining_output(process: asyncio.subprocess.Process) -> bytearr
     return output_buffer
 
 
+#: How long to keep retrying to capture partial output when a read window comes
+#: back empty at timeout. On some platforms (macOS, non-PTY pipes) a short burst
+#: produced right when the timeout fires can miss the first 50ms read by a hair;
+#: without this retry the force-kill that follows would close the pipe and the
+#: partial output would be lost entirely.
+_DRAIN_MAX_RETRY_WINDOW_SECONDS = 0.5
+
+
 async def _drain_available_output(
     stream: asyncio.StreamReader | None,
     *,
     read_timeout: float = 0.05,
+    max_wait: float = _DRAIN_MAX_RETRY_WINDOW_SECONDS,
 ) -> bytearray:
     output_buffer = bytearray()
     if stream is None:
         return output_buffer
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max_wait
     while True:
         try:
             chunk = await asyncio.wait_for(stream.read(65536), timeout=read_timeout)
         except asyncio.TimeoutError:
-            return output_buffer
+            # No chunk arrived within one window. If we already captured data the
+            # child is idle mid-flush, so stop immediately. Otherwise keep trying
+            # a few more windows: a burst written exactly when the timeout fired
+            # may be schedulable with a small latency and is worth waiting for.
+            if output_buffer or loop.time() >= deadline:
+                return output_buffer
+            continue
         if not chunk:
             return output_buffer
         output_buffer.extend(chunk)

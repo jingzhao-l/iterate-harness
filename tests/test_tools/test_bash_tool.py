@@ -72,6 +72,60 @@ class _NeverClosingStdout:
         return b""
 
 
+class _LateDeliverStdout:
+    """Outlet that misses the first 50ms read window, then delivers output.
+
+    Simulates the macOS pipe case where a short burst produced exactly when the
+    timeout fires is not schedulable within the first read window. The drain
+    helper must keep retrying (up to ``max_wait``) instead of giving up.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def read(self, _size: int = -1):
+        self.calls += 1
+        if self.calls <= 1:
+            # Exceed the default 50ms read window so ``wait_for`` times out.
+            await asyncio.sleep(0.08)
+            return b""
+        if self.calls == 2:
+            return b"early output\n"
+        # After delivering the burst once, go idle/empty so the drain's retry
+        # loop terminates (empty window with buffered output → return).
+        return b""
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_drain_retries_empty_first_window_to_capture_late_burst():
+    """Regression test for the macOS pipe race in ``_drain_available_output``.
+
+    A short burst produced right as the timeout fires can miss the first 50ms
+    read window. The drain helper must keep retrying (up to ``max_wait``) instead
+    of giving up and returning empty output, which would lose the partial output.
+    """
+    outlet = _LateDeliverStdout()
+    result = await bash_tool_module._drain_available_output(outlet)
+    assert result == b"early output\n"
+    assert outlet.calls >= 2
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_drain_stops_immediately_when_data_is_present():
+    """Once the drain captures data it must stop on the next empty window.
+
+    This guards against the retry loop over-reading or hanging when a child is
+    idle mid-flush after already emitting output.
+    """
+    outlet = _LateDeliverStdout()
+    first = await bash_tool_module._drain_available_output(outlet)
+    # First pass consumes and returns the early burst.
+    assert first == b"early output\n"
+    # A second pass sees only empty windows and must return empty promptly.
+    again = await bash_tool_module._drain_available_output(outlet)
+    assert again == b""
+
+
 @pytest.mark.asyncio
 async def test_bash_tool_preflight_short_circuits_interactive_scaffold_even_with_timeout_fixture(monkeypatch, tmp_path: Path):
     process = _FakeProcess(

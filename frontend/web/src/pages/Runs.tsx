@@ -153,6 +153,7 @@ export default function Runs(): React.JSX.Element {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [findingsTotal, setFindingsTotal] = useState(0);
   const [findingsLoading, setFindingsLoading] = useState(true);
+  const [findingsError, setFindingsError] = useState<string | null>(null);
   const [severityFilter, setSeverityFilter] = useState("");
   const [dimensionFilter, setDimensionFilter] = useState("");
 
@@ -275,6 +276,7 @@ export default function Runs(): React.JSX.Element {
   useEffect(() => {
     let cancelled = false;
     setFindingsLoading(true);
+    setFindingsError(null);
     void (async () => {
       try {
         const response = await api.findings(
@@ -286,10 +288,11 @@ export default function Runs(): React.JSX.Element {
           setFindings(response.findings);
           setFindingsTotal(response.total);
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setFindings([]);
           setFindingsTotal(0);
+          setFindingsError(error instanceof Error ? error.message : String(error));
         }
       } finally {
         if (!cancelled) setFindingsLoading(false);
@@ -435,6 +438,8 @@ export default function Runs(): React.JSX.Element {
           <div className="loading-block">
             <span className="spinner" /> 加载 findings…
           </div>
+        ) : findingsError ? (
+          <p className="empty">加载 findings 失败：{findingsError}</p>
         ) : findings.length === 0 ? (
           <p className="empty">暂无 findings</p>
         ) : (
