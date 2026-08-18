@@ -41,6 +41,7 @@ convergence policy are layered on top.
   <a href="#-iterate-features"><img src="https://img.shields.io/badge/Iterate-6_tools-ff69b4?style=for-the-badge" alt="Iterate Tools"></a>
   <a href="#-iterate-features"><img src="https://img.shields.io/badge/Modes-dry--run_|_normal-61DAFB?style=for-the-badge" alt="Modes"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/jingzhao-l/iterate-harness"><img src="https://img.shields.io/github/stars/jingzhao-l/iterate-harness?style=for-the-badge&logo=github&logoColor=white" alt="Stars"></a>
 </p>
 
 <p align="center">
@@ -48,6 +49,8 @@ convergence policy are layered on top.
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
   <img src="https://img.shields.io/badge/version-1.9.4-brightgreen" alt="Version">
 </p>
+
+> ⭐ If this project helps you, please consider giving it a GitHub star — it means a lot to open-source maintenance!
 
 ---
 

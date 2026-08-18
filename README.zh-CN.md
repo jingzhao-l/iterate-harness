@@ -32,6 +32,7 @@
   <a href="#-iterate-特性"><img src="https://img.shields.io/badge/Iterate-6_工具-ff69b4?style=for-the-badge" alt="Iterate Tools"></a>
   <a href="#-iterate-特性"><img src="https://img.shields.io/badge/模式-dry--run_|_normal-61DAFB?style=for-the-badge" alt="Modes"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/jingzhao-l/iterate-harness"><img src="https://img.shields.io/github/stars/jingzhao-l/iterate-harness?style=for-the-badge&logo=github&logoColor=white" alt="Stars"></a>
 </p>
 
 <p align="center">
@@ -39,6 +40,8 @@
   <img src="https://img.shields.io/badge/React+Ink-TUI-61DAFB?logo=react&logoColor=white" alt="React">
   <img src="https://img.shields.io/badge/version-1.9.3-brightgreen" alt="Version">
 </p>
+
+> ⭐ 如果这个项目对你有帮助，欢迎点亮 GitHub Star，这是对开源维护最大的支持！
 
 ---
 
