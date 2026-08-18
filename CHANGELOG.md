@@ -4,6 +4,27 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.11.3] - 2026-08-18
+
+Full implementation audit (code + UX) closing all remaining gaps with tests; worktree metadata no longer pollutes git state.
+
+### Fixed
+
+- **Worktree metadata polluted the worktree's git state** (`swarm/worktree.py`): the ownership JSON written inside each worktree made directories appear modified to git, so a subsequent `git add -A` in the fix flow could stage the metadata or fail an "empty diff" check. Metadata is now persisted as a sidecar `<ns>/<flat_slug>.meta.json` *outside* the worktree, keeping the worktree's git state clean while preserving ownership/agent/slug lookups (with regression tests).
+- **Streaming STT placeholder** (`voice/stream_stt.py`): replaced a silent placeholder that parsed real audio into non-speech frames with an explicit `NotImplementedError` so unsupported engines fail loudly instead of degrading silently.
+- **Settings file permissions** (`config/settings.py`): the persisted settings file is now written `0o600` (owner-only) instead of default permissive mode, protecting any locally cached secrets.
+- **Swarm lifecycle hardening** (`swarm/registry.py`, `swarm/team_lifecycle.py`): ownership/teardown flows now surface and log errors instead of swallowing them (empty exception blocks removed), keeping resource cleanup reliable.
+- **Worktree spool hardening** (`swarm/spawn_utils.py`, `swarm/in_process.py`): input validation and error propagation tightened for agent spawn/spool execution.
+- **Report checksum verification** (`iterate/checkpoint.py`, `iterate/review.py`): checkpoint/review artifact handling hardens against corrupt or missing sidecar data.
+- **API secret exposure** (`web/routes/config.py`, `api/*`): API-key style fields are masked (not truncated) in config responses so they cannot be partially leaked to the UI.
+- **Bridge secret encryption** (`bridge/work_secret.py`, `bridge/manager.py`): secret-at-rest encryption is enforced and decryption failures are logged explicitly.
+- **WebUI page states** (frontend `web/src/pages/*`): Runs/Dashboard/Checkpoints/Reports/Workspaces now render distinct loading/empty/error states instead of silently blank — including a visible failure state when run `find`-results fail to load (previously an unhandled promise could leave the list blank).
+- **Type coverage** (frontend `web/src/types.ts`): completed type definitions so the frontend builds cleanly under strict checks.
+
+### Added
+
+- **Voice test suite** (`tests/test_voice/`): unit tests for `stream_stt` and `voice_mode`.
+
 ## [1.11.2] - 2026-08-18
 
 WebUI reliability fixes from a full implementation audit.
