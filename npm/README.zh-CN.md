@@ -67,6 +67,10 @@ rm -rf ~/.iterate-harness-npm   # 托管虚拟环境
 `harness/iterate-harness/npm/` 维护，通过 `git subtree` 同步到
 [iterate-harness 发布仓库](https://github.com/jingzhao-l/iterate-harness) 并从那里发布到 npm。
 
+## ⚠️ 免责声明
+
+本包按「现状」（AS IS）提供，不附带任何明示或暗示的担保，包括但不限于对适销性、特定用途适用性及不侵权性的担保。它所安装的 harness 会执行自动化的代码审查与修复，normal 模式下产生的所有改动均由 AI 模型生成，可能引入缺陷、回归或非预期行为。使用者需为本项目所产生、修改或提交的代码负全部责任。完整说明与安全指引见 [iterate-harness README](https://github.com/jingzhao-l/iterate-harness)。
+
 ## License / 许可证
 
 MIT —— 与 harness 相同。agent 内核源自
