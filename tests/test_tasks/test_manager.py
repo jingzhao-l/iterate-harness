@@ -13,7 +13,7 @@ from iterate_harness.tasks.manager import BackgroundTaskManager, _encode_task_wo
 
 @pytest.mark.asyncio
 async def test_create_shell_task_and_read_output(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_shell_task(
@@ -31,7 +31,7 @@ async def test_create_shell_task_and_read_output(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_agent_task_with_command_override_and_write(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_agent_task(
@@ -47,7 +47,7 @@ async def test_create_agent_task_with_command_override_and_write(tmp_path: Path,
 
 @pytest.mark.asyncio
 async def test_create_agent_task_preserves_multiline_prompt(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_agent_task(
@@ -66,7 +66,7 @@ async def test_create_agent_task_preserves_multiline_prompt(tmp_path: Path, monk
 
 @pytest.mark.asyncio
 async def test_write_to_stopped_agent_task_restarts_process(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_agent_task(
@@ -96,7 +96,7 @@ async def test_create_shell_task_stores_env_on_record(tmp_path: Path, monkeypatc
     ``TaskRecord.env`` field so ``_start_process`` can forward it to the
     subprocess. Plumbing this dict instead of baking ``KEY=val`` into the
     command string is the fix for #230."""
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_shell_task(
@@ -119,7 +119,7 @@ async def test_create_shell_task_argv_path_bypasses_shell(tmp_path: Path, monkey
     fix for #230: bash on Windows cannot exec Windows-pathed binaries
     when launched via ``create_subprocess_exec``, so teammate spawn must
     not route through a shell."""
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     import sys
@@ -140,7 +140,7 @@ async def test_create_shell_task_argv_path_bypasses_shell(tmp_path: Path, monkey
 
 @pytest.mark.asyncio
 async def test_create_shell_task_rejects_both_command_and_argv(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
     with pytest.raises(ValueError, match="only one"):
         await manager.create_shell_task(
@@ -153,7 +153,7 @@ async def test_create_shell_task_rejects_both_command_and_argv(tmp_path: Path, m
 
 @pytest.mark.asyncio
 async def test_create_shell_task_rejects_neither_command_nor_argv(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
     with pytest.raises(ValueError, match="either command or argv"):
         await manager.create_shell_task(
@@ -167,7 +167,7 @@ async def test_start_process_forwards_env_to_subprocess(tmp_path: Path, monkeypa
     """End-to-end: env vars passed via ``create_shell_task(env=...)`` must be
     visible to the spawned subprocess. The subprocess prints the value, and
     we read it back from the task output."""
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_shell_task(
@@ -195,7 +195,7 @@ def test_encode_task_worker_payload_preserves_structured_messages() -> None:
 
 @pytest.mark.asyncio
 async def test_stop_task(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
 
     task = await manager.create_shell_task(
@@ -211,7 +211,7 @@ async def test_stop_task(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_completion_listener_fires_when_task_finishes(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     manager = BackgroundTaskManager()
     seen: list[tuple[str, str, int | None]] = []
     done = asyncio.Event()

@@ -30,7 +30,7 @@ async def _wait_for_terminal_task(task_id: str, *, timeout_seconds: float = 2.0)
 
 @pytest.mark.asyncio
 async def test_task_create_and_output_tool(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     create_result = await TaskCreateTool().execute(
@@ -68,7 +68,7 @@ async def test_team_create_tool(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_task_update_tool_updates_metadata(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     create_result = await TaskCreateTool().execute(
@@ -113,7 +113,7 @@ async def test_agent_tool_uses_subprocess_backend_and_task_is_pollable(
     returned IDs like "in_process_3f7a9b1c2d4e" that BackgroundTaskManager
     never saw — every poll attempt raised ValueError.
     """
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     result = await AgentTool().execute(
@@ -169,7 +169,7 @@ async def test_send_message_swarm_path_uses_subprocess_backend(
     """
     from unittest.mock import AsyncMock, patch
 
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     from iterate_harness.tools.send_message_tool import SendMessageTool
@@ -199,7 +199,7 @@ async def test_send_message_swarm_path_uses_subprocess_backend(
 
 @pytest.mark.asyncio
 async def test_agent_tool_creates_missing_team_when_team_argument_is_provided(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     get_team_registry()._teams.clear()
     context = ToolExecutionContext(cwd=tmp_path)
 
@@ -222,7 +222,7 @@ async def test_agent_tool_creates_missing_team_when_team_argument_is_provided(tm
 
 @pytest.mark.asyncio
 async def test_agent_tool_supports_remote_and_teammate_modes(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     for i, mode in enumerate(("remote_agent", "in_process_teammate")):

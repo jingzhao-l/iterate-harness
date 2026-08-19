@@ -1,6 +1,8 @@
 export type FrontendConfig = {
 	backend_command: string[];
 	initial_prompt?: string | null;
+	theme?: string;
+	version?: string;
 };
 
 export type TranscriptItem = {

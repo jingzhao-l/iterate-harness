@@ -16,10 +16,10 @@ def get_config_dir() -> Path:
     """Return the configuration directory, creating it if needed.
 
     Resolution order:
-    1. OPENHARNESS_CONFIG_DIR environment variable
+    1. ITERATE_CONFIG_DIR environment variable
     2. ~/.iterate-harness/
     """
-    env_dir = os.environ.get("OPENHARNESS_CONFIG_DIR")
+    env_dir = os.environ.get("ITERATE_CONFIG_DIR")
     if env_dir:
         config_dir = Path(env_dir)
     else:
@@ -38,10 +38,10 @@ def get_data_dir() -> Path:
     """Return the data directory for caches, history, etc.
 
     Resolution order:
-    1. OPENHARNESS_DATA_DIR environment variable
+    1. ITERATE_DATA_DIR environment variable
     2. ~/.iterate-harness/data/
     """
-    env_dir = os.environ.get("OPENHARNESS_DATA_DIR")
+    env_dir = os.environ.get("ITERATE_DATA_DIR")
     if env_dir:
         data_dir = Path(env_dir)
     else:
@@ -55,10 +55,10 @@ def get_logs_dir() -> Path:
     """Return the logs directory.
 
     Resolution order:
-    1. OPENHARNESS_LOGS_DIR environment variable
+    1. ITERATE_LOGS_DIR environment variable
     2. ~/.iterate-harness/logs/
     """
-    env_dir = os.environ.get("OPENHARNESS_LOGS_DIR")
+    env_dir = os.environ.get("ITERATE_LOGS_DIR")
     if env_dir:
         logs_dir = Path(env_dir)
     else:
@@ -123,38 +123,8 @@ def get_project_autopilot_dir(cwd: str | Path) -> Path:
     return autopilot_dir
 
 
-def get_project_autopilot_registry_path(cwd: str | Path) -> Path:
-    """Return the autopilot task registry path."""
-    return get_project_autopilot_dir(cwd) / "registry.json"
-
-
-def get_project_repo_journal_path(cwd: str | Path) -> Path:
-    """Return the append-only repo journal path."""
-    return get_project_autopilot_dir(cwd) / "repo_journal.jsonl"
-
-
 def get_project_active_repo_context_path(cwd: str | Path) -> Path:
     """Return the synthesized active repo context path."""
     return get_project_autopilot_dir(cwd) / "active_repo_context.md"
 
 
-def get_project_autopilot_policy_path(cwd: str | Path) -> Path:
-    """Return the autopilot policy path."""
-    return get_project_autopilot_dir(cwd) / "autopilot_policy.yaml"
-
-
-def get_project_verification_policy_path(cwd: str | Path) -> Path:
-    """Return the verification policy path."""
-    return get_project_autopilot_dir(cwd) / "verification_policy.yaml"
-
-
-def get_project_release_policy_path(cwd: str | Path) -> Path:
-    """Return the release policy path."""
-    return get_project_autopilot_dir(cwd) / "release_policy.yaml"
-
-
-def get_project_autopilot_runs_dir(cwd: str | Path) -> Path:
-    """Return the autopilot run artifacts directory."""
-    runs_dir = get_project_autopilot_dir(cwd) / "runs"
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    return runs_dir

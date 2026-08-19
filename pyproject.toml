@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "iterate-harness"
 dynamic = ["version"]
-description = "iterate-skill powered fork of OpenHarness - dedicated agent harness for the iterate review/fix loop"
+description = "iterate - dedicated agent harness for the multi-round review/fix loop"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -60,8 +60,8 @@ packages = ["src/iterate_harness"]
 exclude = [
     "/.git",
     "/.venv",
-    "/.openharness-venv",
-    "/.openharness",
+    "/.iterate-harness-venv",
+    "/.iterate-harness",
     "/.pytest_cache",
     "/.mypy_cache",
     "/.ruff_cache",

@@ -21,7 +21,6 @@ class ProviderSpec:
     backend_type:
       "anthropic"    — Anthropic SDK (default for claude-* models)
       "openai_compat" — OpenAI-compatible REST API
-      "copilot"      — GitHub Copilot OAuth flow
     """
 
     # Identity
@@ -31,7 +30,7 @@ class ProviderSpec:
     display_name: str = ""  # shown in status / diagnostics
 
     # Routing
-    backend_type: str = "openai_compat"  # "anthropic" | "openai_compat" | "copilot"
+    backend_type: str = "openai_compat"  # "anthropic" | "openai_compat"
     default_base_url: str = ""  # fallback base URL for this provider
 
     # Auto-detection signals
@@ -41,7 +40,6 @@ class ProviderSpec:
     # Classification flags
     is_gateway: bool = False  # routes any model (OpenRouter, AiHubMix, …)
     is_local: bool = False  # local deployment (vLLM, Ollama)
-    is_oauth: bool = False  # uses OAuth instead of API key
 
     @property
     def label(self) -> str:
@@ -53,20 +51,6 @@ class ProviderSpec:
 # ---------------------------------------------------------------------------
 
 PROVIDERS: tuple[ProviderSpec, ...] = (
-    # === GitHub Copilot (OAuth, detected by api_format="copilot") ============
-    ProviderSpec(
-        name="github_copilot",
-        keywords=("copilot",),
-        env_key="",
-        display_name="GitHub Copilot",
-        backend_type="copilot",
-        default_base_url="",
-        detect_by_key_prefix="",
-        detect_by_base_keyword="",
-        is_gateway=False,
-        is_local=False,
-        is_oauth=True,
-    ),
     # === Gateways (detected by api_key prefix / base_url keyword) ============
     # OpenRouter: global gateway, keys start with "sk-or-"
     ProviderSpec(
@@ -80,7 +64,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="openrouter",
         is_gateway=True,
         is_local=False,
-        is_oauth=False,
     ),
     # AiHubMix: OpenAI-compatible gateway
     ProviderSpec(
@@ -94,7 +77,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="aihubmix",
         is_gateway=True,
         is_local=False,
-        is_oauth=False,
     ),
     # SiliconFlow (硅基流动): OpenAI-compatible gateway
     ProviderSpec(
@@ -108,7 +90,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="siliconflow",
         is_gateway=True,
         is_local=False,
-        is_oauth=False,
     ),
     # VolcEngine (火山引擎 / Ark): OpenAI-compatible gateway
     ProviderSpec(
@@ -122,7 +103,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="volces",
         is_gateway=True,
         is_local=False,
-        is_oauth=False,
     ),
     # ModelScope: OpenAI-compatible inference API
     ProviderSpec(
@@ -136,7 +116,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="modelscope",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # === Standard cloud providers (matched by model-name keyword) ============
     # Anthropic: native SDK for claude-* models
@@ -151,7 +130,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # OpenAI: gpt-* models
     ProviderSpec(
@@ -165,7 +143,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # DeepSeek
     ProviderSpec(
@@ -179,7 +156,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="deepseek",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # Google Gemini
     ProviderSpec(
@@ -193,7 +169,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="googleapis",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # DashScope (Qwen / 阿里云)
     ProviderSpec(
@@ -207,7 +182,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="dashscope",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # Moonshot / Kimi
     ProviderSpec(
@@ -221,7 +195,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="moonshot",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # MiniMax
     ProviderSpec(
@@ -235,7 +208,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="minimax",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # Zhipu AI / GLM
     ProviderSpec(
@@ -249,7 +221,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="bigmodel",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # Groq
     ProviderSpec(
@@ -263,7 +234,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="groq",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # Mistral
     ProviderSpec(
@@ -277,7 +247,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="mistral",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # StepFun (阶跃星辰)
     ProviderSpec(
@@ -291,7 +260,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="stepfun",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # Baidu / ERNIE
     ProviderSpec(
@@ -305,7 +273,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="baidubce",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # === Cloud platform providers (detected by base_url) ====================
     # AWS Bedrock
@@ -320,7 +287,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="bedrock",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # Google Vertex AI
     ProviderSpec(
@@ -334,7 +300,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="aiplatform",
         is_gateway=False,
         is_local=False,
-        is_oauth=False,
     ),
     # === Local deployments (matched by keyword or base_url) =================
     # Ollama
@@ -349,7 +314,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="localhost:11434",
         is_gateway=False,
         is_local=True,
-        is_oauth=False,
     ),
     # vLLM / any OpenAI-compatible local server
     ProviderSpec(
@@ -363,7 +327,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="",
         is_gateway=False,
         is_local=True,
-        is_oauth=False,
     ),
 )
 
@@ -388,7 +351,7 @@ def _match_by_model(model: str) -> ProviderSpec | None:
     model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
     normalized_prefix = model_prefix.replace("-", "_")
 
-    std_specs = [s for s in PROVIDERS if not s.is_local and not s.is_oauth]
+    std_specs = [s for s in PROVIDERS if not s.is_local]
 
     # Prefer an explicit provider-prefix match (e.g. "deepseek/..." → deepseek spec)
     for spec in std_specs:

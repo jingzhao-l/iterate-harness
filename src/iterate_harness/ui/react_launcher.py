@@ -9,6 +9,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from iterate_harness import __version__
+
 
 def _resolve_theme() -> str:
     """Read the theme name from settings, defaulting to 'default'."""
@@ -142,7 +144,7 @@ async def launch_react_tui(
             raise RuntimeError("Failed to install React terminal frontend dependencies")
 
     env = os.environ.copy()
-    env["OPENHARNESS_FRONTEND_CONFIG"] = json.dumps(
+    env["ITERATE_FRONTEND_CONFIG"] = json.dumps(
         {
             "backend_command": build_backend_command(
                 cwd=cwd or str(Path.cwd()),
@@ -156,6 +158,7 @@ async def launch_react_tui(
             ),
             "initial_prompt": prompt,
             "theme": _resolve_theme(),
+            "version": __version__,
         }
     )
     tsx_cmd = _resolve_tsx(frontend_dir)

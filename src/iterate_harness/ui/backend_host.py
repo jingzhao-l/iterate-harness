@@ -720,7 +720,7 @@ class ReactBackendHost:
                 for value in allowed_models
             ]
         provider_name = provider.lower()
-        if provider_name in {"anthropic", "anthropic_claude"}:
+        if provider_name in {"anthropic"}:
             resolved_current = resolve_model_setting(current_model, provider_name)
             return [
                 {
@@ -733,7 +733,7 @@ class ReactBackendHost:
                 for value, label, description in CLAUDE_MODEL_ALIAS_OPTIONS
             ]
         families: list[tuple[str, str]] = []
-        if provider_name in {"openai-codex", "openai", "openai-compatible", "openrouter", "github_copilot"}:
+        if provider_name in {"openai", "openai-compatible", "openrouter"}:
             families.extend(
                 [
                     ("gpt-5.4", "OpenAI flagship"),

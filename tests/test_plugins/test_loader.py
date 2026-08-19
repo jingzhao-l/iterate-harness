@@ -104,7 +104,7 @@ def _write_tool_plugin(root: Path, *, enabled_by_default: bool = True) -> Path:
 
 
 def test_load_plugins_from_project_dir(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     plugins_root = project / ".iterate-harness" / "plugins"
     plugins_root.mkdir(parents=True)
@@ -124,7 +124,7 @@ def test_load_plugins_from_project_dir(tmp_path: Path, monkeypatch):
 
 
 def test_plugin_skills_and_hooks_are_merged(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     plugins_root = project / ".iterate-harness" / "plugins"
     plugins_root.mkdir(parents=True)
@@ -140,7 +140,7 @@ def test_plugin_skills_and_hooks_are_merged(tmp_path: Path, monkeypatch):
 
 
 def test_project_plugins_are_disabled_by_default(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     plugins_root = project / ".iterate-harness" / "plugins"
     plugins_root.mkdir(parents=True)
@@ -152,7 +152,7 @@ def test_project_plugins_are_disabled_by_default(tmp_path: Path, monkeypatch):
 
 
 def test_project_plugins_disabled_by_default_warns_operator(tmp_path: Path, monkeypatch, caplog):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     plugins_root = project / ".iterate-harness" / "plugins"
     plugins_root.mkdir(parents=True)
@@ -167,7 +167,7 @@ def test_project_plugins_disabled_by_default_warns_operator(tmp_path: Path, monk
 
 
 def test_user_plugins_still_load_when_project_plugins_are_disabled(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     project_plugins_root = project / ".iterate-harness" / "plugins"
     project_plugins_root.mkdir(parents=True)
@@ -183,7 +183,7 @@ def test_user_plugins_still_load_when_project_plugins_are_disabled(tmp_path: Pat
 
 
 def test_enabled_plugin_tools_are_loaded(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     plugins_root = project / ".iterate-harness" / "plugins"
     plugins_root.mkdir(parents=True)
@@ -198,7 +198,7 @@ def test_enabled_plugin_tools_are_loaded(tmp_path: Path, monkeypatch):
 
 
 def test_disabled_plugin_tools_are_not_imported(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     plugins_root = project / ".iterate-harness" / "plugins"
     plugins_root.mkdir(parents=True)

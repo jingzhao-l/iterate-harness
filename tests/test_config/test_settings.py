@@ -95,7 +95,7 @@ class TestSettings:
         """_apply_env_overrides should pick up OPENAI_BASE_URL for relay
         providers that use OpenAI-compatible format."""
         monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
-        monkeypatch.delenv("OPENHARNESS_BASE_URL", raising=False)
+        monkeypatch.delenv("ITERATE_BASE_URL", raising=False)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setenv("OPENAI_BASE_URL", "https://relay.example.com/v1")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-relay-key")
@@ -105,8 +105,8 @@ class TestSettings:
         assert s.base_url == "https://relay.example.com/v1"
 
     def test_env_overrides_pick_up_compact_threshold_settings(self, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("OPENHARNESS_CONTEXT_WINDOW_TOKENS", "123456")
-        monkeypatch.setenv("OPENHARNESS_AUTO_COMPACT_THRESHOLD_TOKENS", "120000")
+        monkeypatch.setenv("ITERATE_CONTEXT_WINDOW_TOKENS", "123456")
+        monkeypatch.setenv("ITERATE_AUTO_COMPACT_THRESHOLD_TOKENS", "120000")
         path = tmp_path / "settings.json"
         path.write_text(json.dumps({}))
         s = load_settings(path)
@@ -130,9 +130,9 @@ class TestLoadSaveSettings:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-        monkeypatch.delenv("OPENHARNESS_BASE_URL", raising=False)
+        monkeypatch.delenv("ITERATE_BASE_URL", raising=False)
         monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
-        monkeypatch.delenv("OPENHARNESS_MODEL", raising=False)
+        monkeypatch.delenv("ITERATE_MODEL", raising=False)
         path = tmp_path / "nonexistent.json"
         s = load_settings(path)
         assert s == Settings().materialize_active_profile()
@@ -143,7 +143,7 @@ class TestLoadSaveSettings:
         monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
         monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
-        monkeypatch.delenv("OPENHARNESS_MODEL", raising=False)
+        monkeypatch.delenv("ITERATE_MODEL", raising=False)
         path = tmp_path / "settings.json"
         path.write_text(json.dumps({"model": "claude-opus-4-20250514", "verbose": True, "fast_mode": True}))
         s = load_settings(path)
@@ -158,7 +158,7 @@ class TestLoadSaveSettings:
         monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
         monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
-        monkeypatch.delenv("OPENHARNESS_MODEL", raising=False)
+        monkeypatch.delenv("ITERATE_MODEL", raising=False)
         path = tmp_path / "settings.json"
         original = Settings(api_key="sk-roundtrip", model="claude-opus-4-20250514", verbose=True)
         save_settings(original, path)
@@ -192,24 +192,24 @@ class TestLoadSaveSettings:
 
     def test_materialize_active_profile_uses_profile_model(self):
         settings = Settings(
-            active_profile="codex",
+            active_profile="deepseek",
             profiles={
-                "codex": ProviderProfile(
-                    label="Codex Subscription",
-                    provider="openai_codex",
+                "deepseek": ProviderProfile(
+                    label="DeepSeek",
+                    provider="deepseek",
                     api_format="openai",
-                    auth_source="codex_subscription",
-                    default_model="gpt-5.4",
-                    last_model="gpt-5",
+                    auth_source="deepseek_api_key",
+                    default_model="deepseek-chat",
+                    last_model="deepseek-reasoner",
                 )
             },
         )
 
         materialized = settings.materialize_active_profile()
 
-        assert materialized.provider == "openai_codex"
+        assert materialized.provider == "deepseek"
         assert materialized.api_format == "openai"
-        assert materialized.model == "gpt-5"
+        assert materialized.model == "deepseek-reasoner"
 
     def test_materialize_active_profile_projects_compact_threshold_settings(self):
         settings = Settings(
@@ -249,26 +249,26 @@ class TestLoadSaveSettings:
                     last_model="kimi-k2.5",
                     base_url="https://api.moonshot.cn/v1",
                 ),
-                "codex": ProviderProfile(
-                    label="Codex Subscription",
-                    provider="openai_codex",
+                "zhipu": ProviderProfile(
+                    label="Zhipu AI (GLM)",
+                    provider="zhipu",
                     api_format="openai",
-                    auth_source="codex_subscription",
-                    default_model="gpt-5.4",
-                    last_model="gpt-5.4",
+                    auth_source="zhipu_api_key",
+                    default_model="glm-4.5",
+                    last_model="glm-4.5",
                 ),
             },
         )
 
-        updated = settings.merge_cli_overrides(active_profile="codex")
+        updated = settings.merge_cli_overrides(active_profile="zhipu")
         profile_name, profile = updated.resolve_profile()
 
-        assert profile_name == "codex"
-        assert updated.provider == "openai_codex"
-        assert updated.base_url is None
-        assert updated.model == "gpt-5.4"
-        assert profile.provider == "openai_codex"
-        assert profile.auth_source == "codex_subscription"
+        assert profile_name == "zhipu"
+        assert updated.provider == "zhipu"
+        assert updated.base_url == "https://open.bigmodel.cn/api/paas/v4"
+        assert updated.model == "glm-4.5"
+        assert profile.provider == "zhipu"
+        assert profile.auth_source == "zhipu_api_key"
 
     def test_merge_cli_active_profile_keeps_profile_compact_threshold_settings(self):
         settings = Settings(
@@ -309,13 +309,13 @@ class TestLoadSaveSettings:
 
     def test_claude_profile_materializes_alias_to_concrete_model(self):
         settings = Settings(
-            active_profile="claude-subscription",
+            active_profile="claude-api",
             profiles={
-                "claude-subscription": ProviderProfile(
-                    label="Claude Subscription",
-                    provider="anthropic_claude",
+                "claude-api": ProviderProfile(
+                    label="Claude API",
+                    provider="anthropic",
                     api_format="anthropic",
-                    auth_source="claude_subscription",
+                    auth_source="anthropic_api_key",
                     default_model="sonnet",
                     last_model="opus",
                 )
@@ -328,13 +328,13 @@ class TestLoadSaveSettings:
 
     def test_claude_profile_normalizes_prefixed_model_name(self):
         settings = Settings(
-            active_profile="claude-subscription",
+            active_profile="claude-api",
             profiles={
-                "claude-subscription": ProviderProfile(
-                    label="Claude Subscription",
-                    provider="anthropic_claude",
+                "claude-api": ProviderProfile(
+                    label="Claude API",
+                    provider="anthropic",
                     api_format="anthropic",
-                    auth_source="claude_subscription",
+                    auth_source="anthropic_api_key",
                     default_model="claude-sonnet-4-6",
                     last_model="anthropic/claude-sonnet-4-20250514",
                 )
@@ -397,7 +397,7 @@ class TestLoadSaveSettings:
         assert materialized.model == "claude-opus-4-6"
 
     def test_resolve_auth_prefers_profile_scoped_credential_for_custom_compatible_profile(self, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path))
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-global-env")
         store_credential("profile:kimi-anthropic", "api_key", "sk-profile-specific", use_keyring=False)
         settings = Settings(
@@ -458,11 +458,11 @@ def test_normalize_anthropic_model_name_matches_hermes_behavior():
         path.write_text(json.dumps({"model": "from-file", "base_url": "https://file.example"}))
         monkeypatch.setenv("ANTHROPIC_MODEL", "from-env-model")
         monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://env.example/anthropic")
-        monkeypatch.setenv("OPENHARNESS_TIMEOUT", "42.5")
-        monkeypatch.setenv("OPENHARNESS_MAX_TURNS", "42")
+        monkeypatch.setenv("ITERATE_TIMEOUT", "42.5")
+        monkeypatch.setenv("ITERATE_MAX_TURNS", "42")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-override")
-        monkeypatch.setenv("OPENHARNESS_SANDBOX_ENABLED", "true")
-        monkeypatch.setenv("OPENHARNESS_SANDBOX_FAIL_IF_UNAVAILABLE", "1")
+        monkeypatch.setenv("ITERATE_SANDBOX_ENABLED", "true")
+        monkeypatch.setenv("ITERATE_SANDBOX_FAIL_IF_UNAVAILABLE", "1")
 
         s = load_settings(path)
 
@@ -526,8 +526,8 @@ class TestAnsiEscapeSequences:
         assert updated.model == "claude-opus-4-6"
 
     def test_env_override_strips_ansi_from_iterate_harness_model(self, monkeypatch):
-        """Test that ANSI escape sequences are stripped from OPENHARNESS_MODEL env var."""
-        monkeypatch.setenv("OPENHARNESS_MODEL", "\x1b[32mclaude-sonnet-4-6\x1b[0m")
+        """Test that ANSI escape sequences are stripped from ITERATE_MODEL env var."""
+        monkeypatch.setenv("ITERATE_MODEL", "\x1b[32mclaude-sonnet-4-6\x1b[0m")
         s = Settings()
         updated = _apply_env_overrides(s)
         assert updated.model == "claude-sonnet-4-6"

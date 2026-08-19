@@ -1,16 +1,16 @@
 ---
 name: harness-eval
-description: This skill should be used when the user asks to "test the harness", "run integration tests", "validate features with real API", "test with real model calls", "run agent loop tests", "verify end-to-end", or needs to verify OpenHarness features on a real codebase with actual LLM calls.
+description: This skill should be used when the user asks to "test the harness", "run integration tests", "validate features with real API", "test with real model calls", "run agent loop tests", "verify end-to-end", or needs to verify iterate-harness features on a real codebase with actual LLM calls.
 version: 0.2.0
 ---
 
 # Harness Eval — End-to-End Feature Validation
 
-Validate OpenHarness features by running real agent loops against an unfamiliar codebase with actual LLM API calls. Every test exercises the full stack: API client → model → tool calls → execution → result.
+Validate iterate-harness features by running real agent loops against an unfamiliar codebase with actual LLM API calls. Every test exercises the full stack: API client → model → tool calls → execution → result.
 
 ## Core Principles
 
-1. **Test on an unfamiliar project** — never test on OpenHarness itself (the agent modifies its own code). Clone a real project as the workspace.
+1. **Test on an unfamiliar project** — never test on iterate-harness itself (the agent modifies its own code). Clone a real project as the workspace.
 2. **Use real API calls** — no mocks. Configure a real LLM endpoint.
 3. **Multi-turn conversations** — always test 2+ turns where the model needs prior context.
 4. **Combine features** — test hooks+skills+agent loop together, not in isolation.
@@ -20,7 +20,7 @@ Validate OpenHarness features by running real agent loops against an unfamiliar 
 
 ### 1. Prepare Workspace
 
-Clone an unfamiliar project (do not use OpenHarness):
+Clone an unfamiliar project (do not use iterate-harness):
 
 ```bash
 git clone https://github.com/HKUDS/AutoAgent /tmp/eval-workspace
@@ -50,14 +50,14 @@ which rg
 srt --version
 ```
 
-Then run a minimal smoke check through OpenHarness, not just raw `srt`, so you verify the real adapter path:
+Then run a minimal smoke check through iterate-harness, not just raw `srt`, so you verify the real adapter path:
 
 ```python
 from pathlib import Path
-from openharness.config.settings import Settings, SandboxSettings, save_settings
-from openharness.tools.bash_tool import BashTool
+from iterate_harness.config.settings import Settings, SandboxSettings, save_settings
+from iterate_harness.tools.bash_tool import BashTool
 
-cfg = Path("/tmp/openharness-sandbox-settings.json")
+cfg = Path("/tmp/iterate_harness-sandbox-settings.json")
 save_settings(Settings(sandbox=SandboxSettings(enabled=True, fail_if_unavailable=True)), cfg)
 # Point config loader at this file, then run BashTool on a tiny command such as `pwd`.
 ```
@@ -130,7 +130,7 @@ python -m pytest tests/ -q -k "not autoagent"  # unit tests (no API)
 
 For ad hoc long-horizon validation, it is acceptable to run a temporary Python driver script as long as it:
 
-- uses real OpenHarness engine/tool objects
+- uses real iterate-harness engine/tool objects
 - targets an unfamiliar repository
 - prints per-scenario JSON summaries
 - records tools, errors, turns, and token usage
@@ -151,7 +151,7 @@ For long-running real evals, refine the timeout guidance:
 - First check whether `max_turns` was manually set too low
 - If `max_turns=200` and the run still fails, the next suspect is wall-clock timeout, not turn count
 - Distinguish environment failures from product failures
-  - Example: missing dependency in the unfamiliar target repo is not automatically an OpenHarness regression
+  - Example: missing dependency in the unfamiliar target repo is not automatically an iterate-harness regression
   - Example: missing `srt`/`bwrap`/`rg` is an eval environment issue
 
 ## Feature Coverage Checklist
@@ -168,13 +168,13 @@ For long-running real evals, refine the timeout guidance:
 
 ## Common Pitfalls
 
-- Testing on OpenHarness itself — agent modifies its own running code
+- Testing on iterate-harness itself — agent modifies its own running code
 - Using mocks — misses serialization and API compatibility bugs
 - Single-turn only — misses context accumulation and compaction bugs
 - Artificially lowering `max_turns` during real evals — can create false failures that do not reflect product defaults
 - Not checking tool call list — model may claim tool use without calling it
 - Hardcoding paths — use `WORKSPACE` variable, skip in CI with `pytest.mark.skipif`
-- Declaring sandbox “tested” after only checking raw `srt` — verify the OpenHarness adapter path too
+- Declaring sandbox “tested” after only checking raw `srt` — verify the iterate-harness adapter path too
 - Abandoning long tasks too early — some real tasks pause for minutes before the next event arrives
 
 ## Additional Resources
@@ -182,7 +182,7 @@ For long-running real evals, refine the timeout guidance:
 ### Reference Files
 
 - **`references/test-patterns.md`** — Complete code templates for `make_engine`, `collect`, and each feature category
-- **`references/feature-matrix.md`** — Detailed test cases for every OpenHarness module
+- **`references/feature-matrix.md`** — Detailed test cases for every iterate-harness module
 
 ### Existing Test Files
 

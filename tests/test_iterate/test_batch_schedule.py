@@ -17,7 +17,7 @@ from iterate_harness.services.cron import load_cron_jobs
 @pytest.fixture()
 def isolated_registry(tmp_path, monkeypatch):
     """Redirect the cron registry/history to a temp data dir."""
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     return tmp_path / "data"
 
 

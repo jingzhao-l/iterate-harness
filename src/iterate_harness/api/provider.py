@@ -5,17 +5,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from iterate_harness.auth.external import describe_external_binding
-from iterate_harness.auth.storage import load_external_binding
 from iterate_harness.api.registry import detect_provider_from_registry
 from iterate_harness.config.settings import Settings
 
 _AUTH_KIND: dict[str, str] = {
     "anthropic": "api_key",
     "openai_compat": "api_key",
-    "copilot": "oauth_device",
-    "openai_codex": "external_oauth",
-    "anthropic_claude": "external_oauth",
 }
 
 _VOICE_REASON: dict[str, str] = {
@@ -23,9 +18,6 @@ _VOICE_REASON: dict[str, str] = {
         "voice mode shell exists, but live voice auth/streaming is not configured in this build"
     ),
     "openai_compat": "voice mode is not wired for OpenAI-compatible providers in this build",
-    "copilot": "voice mode is not supported for GitHub Copilot",
-    "openai_codex": "voice mode is not supported for Codex subscription auth",
-    "anthropic_claude": "voice mode is not supported for Claude subscription auth",
 }
 
 
@@ -41,28 +33,6 @@ class ProviderInfo:
 
 def detect_provider(settings: Settings) -> ProviderInfo:
     """Infer the active provider and rough capability set using the registry."""
-    if settings.provider == "openai_codex":
-        return ProviderInfo(
-            name="openai-codex",
-            auth_kind="external_oauth",
-            voice_supported=False,
-            voice_reason=_VOICE_REASON["openai_codex"],
-        )
-    if settings.provider == "anthropic_claude":
-        return ProviderInfo(
-            name="claude-subscription",
-            auth_kind="external_oauth",
-            voice_supported=False,
-            voice_reason=_VOICE_REASON["anthropic_claude"],
-        )
-    if settings.api_format == "copilot":
-        return ProviderInfo(
-            name="github_copilot",
-            auth_kind="oauth_device",
-            voice_supported=False,
-            voice_reason=_VOICE_REASON["copilot"],
-        )
-
     spec = detect_provider_from_registry(
         model=settings.model,
         api_key=settings.api_key or None,
@@ -96,30 +66,10 @@ def detect_provider(settings: Settings) -> ProviderInfo:
 
 def auth_status(settings: Settings) -> str:
     """Return a compact auth status string."""
-    if settings.api_format == "copilot":
-        from iterate_harness.api.copilot_auth import load_copilot_auth
-
-        auth_info = load_copilot_auth()
-        if not auth_info:
-            return "missing (run 'ih auth copilot-login')"
-        if auth_info.enterprise_url:
-            return f"configured (enterprise: {auth_info.enterprise_url})"
-        return "configured"
     try:
         resolved = settings.resolve_auth()
     except ValueError as exc:
-        if settings.provider == "openai_codex":
-            return "missing (run 'ih auth codex-login')"
-        if settings.provider == "anthropic_claude":
-            binding = load_external_binding("anthropic_claude")
-            if binding is not None:
-                external_state = describe_external_binding(binding)
-                if external_state.state != "missing":
-                    return external_state.state
-            message = str(exc)
-            if "third-party" in message:
-                return "invalid base_url"
-            return "missing (run 'ih auth claude-login')"
+        del exc
         return "missing"
     if resolved.source.startswith("external:"):
         return f"configured ({resolved.source.removeprefix('external:')})"

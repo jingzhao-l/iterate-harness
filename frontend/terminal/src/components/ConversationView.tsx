@@ -32,20 +32,22 @@ function ConversationViewInner({
 	assistantBuffer,
 	showWelcome,
 	outputStyle,
+	version,
 }: {
 	items: TranscriptItem[];
 	assistantBuffer: string;
 	showWelcome: boolean;
 	outputStyle: string;
+	version?: string;
 }): React.JSX.Element {
 	const {theme} = useTheme();
-	const isCodexStyle = outputStyle === 'codex';
+	const isCompactStyle = outputStyle === 'compact';
 	const visible = items.slice(-40);
 	const grouped = groupToolPairs(visible);
 
 	return (
 		<Box flexDirection="column" flexGrow={1}>
-			{showWelcome && items.length === 0 ? <WelcomeBanner /> : null}
+			{showWelcome && items.length === 0 ? <WelcomeBanner version={version} /> : null}
 
 			{grouped.map((group, index) => {
 				if (Array.isArray(group)) {
@@ -70,7 +72,7 @@ function ConversationViewInner({
 			})}
 
 			{assistantBuffer ? (
-				isCodexStyle ? (
+				isCompactStyle ? (
 					<Box flexDirection="row" marginTop={0}>
 						<Text>{assistantBuffer}</Text>
 					</Box>
@@ -100,11 +102,11 @@ function MessageRow({
 	theme: ReturnType<typeof useTheme>['theme'];
 	outputStyle: string;
 }): React.JSX.Element {
-	const isCodexStyle = outputStyle === 'codex';
+	const isCompactStyle = outputStyle === 'compact';
 
 	switch (item.role) {
 		case 'user':
-			if (isCodexStyle) {
+			if (isCompactStyle) {
 				return (
 					<Box marginTop={0}>
 						<Text>
@@ -124,7 +126,7 @@ function MessageRow({
 			);
 
 		case 'assistant':
-			if (isCodexStyle) {
+			if (isCompactStyle) {
 				return (
 					<Box marginTop={0} marginBottom={0}>
 						<Text>{item.text}</Text>
@@ -147,7 +149,7 @@ function MessageRow({
 			return <ToolCallDisplay item={item} outputStyle={outputStyle} />;
 
 		case 'system':
-			if (isCodexStyle) {
+			if (isCompactStyle) {
 				return (
 					<Box marginTop={0}>
 						<Text>

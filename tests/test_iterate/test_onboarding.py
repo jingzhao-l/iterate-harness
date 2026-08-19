@@ -302,7 +302,7 @@ class TestDetectionRenderAndOnboard:
         (tmp_path / "pyproject.toml").write_text("x", encoding="utf-8")
 
         class _FakeRun:
-            def __call__(self, *, prompt, permission_mode):
+            async def __call__(self, *, prompt, permission_mode):
                 (tmp_path / "ITERATE.md").write_text("garbage without markers", encoding="utf-8")
 
         import iterate_harness.ui.app as app_mod

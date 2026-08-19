@@ -28,38 +28,40 @@ def test_cli_help():
     )
     plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
     assert result.exit_code == 0
-    assert "Oh my Harness!" in plain_output
+    assert "iterate" in plain_output
+    assert "multi-round review & fix harness" in plain_output
     assert "setup" in plain_output
     assert "--dry-run" in plain_output
 
 
 def test_setup_flow_selects_profile_and_model(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path))
 
     selected = []
 
     def fake_select(statuses, default_value=None):
         selected.append((tuple(statuses.keys()), default_value))
-        return "codex"
+        return "deepseek"
 
-    logged_in = []
+    captured_keys = []
 
-    def fake_login(provider):
-        logged_in.append(provider)
+    def fake_keyflow_run(self):
+        captured_keys.append(self.provider)
+        return "fake-key"
 
     monkeypatch.setattr("iterate_harness.cli._select_setup_workflow", fake_select)
-    monkeypatch.setattr("iterate_harness.cli._prompt_model_for_profile", lambda profile: "gpt-5.4")
-    monkeypatch.setattr("iterate_harness.cli._login_provider", fake_login)
+    monkeypatch.setattr("iterate_harness.cli._prompt_model_for_profile", lambda profile: "deepseek-chat")
+    monkeypatch.setattr("iterate_harness.auth.flows.ApiKeyFlow.run", fake_keyflow_run)
 
     result = runner.invoke(app, ["setup"])
     assert result.exit_code == 0
     assert "Setup complete:" in result.output
-    assert logged_in == ["openai_codex"]
+    assert captured_keys == ["deepseek"]
 
     settings = load_settings()
-    assert settings.active_profile == "codex"
-    assert settings.resolve_profile()[1].last_model == "gpt-5.4"
+    assert settings.active_profile == "deepseek"
+    assert settings.resolve_profile()[1].last_model == "deepseek-chat"
 
 
 def test_select_from_menu_uses_questionary_when_tty(monkeypatch):
@@ -67,7 +69,7 @@ def test_select_from_menu_uses_questionary_when_tty(monkeypatch):
 
     class _Prompt:
         def ask(self):
-            return "codex"
+            return "deepseek"
 
     fake_questionary = types.SimpleNamespace(
         Choice=lambda title, value, checked=False: {
@@ -86,17 +88,17 @@ def test_select_from_menu_uses_questionary_when_tty(monkeypatch):
 
     result = cli._select_from_menu(
         "Choose a provider workflow:",
-        [("codex", "Codex"), ("claude-api", "Claude API")],
-        default_value="codex",
+        [("deepseek", "DeepSeek"), ("claude-api", "Claude API")],
+        default_value="deepseek",
     )
 
-    assert result == "codex"
+    assert result == "deepseek"
     assert answers
 
 
 def test_setup_flow_existing_api_key_profile_can_update_secret(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     from iterate_harness.auth.manager import AuthManager
@@ -121,7 +123,7 @@ def test_setup_flow_existing_api_key_profile_can_update_secret(tmp_path: Path, m
 
 def test_setup_flow_creates_kimi_profile_with_profile_scoped_key(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path))
     # Prevent env var leakage from overriding the configured api_key
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -158,7 +160,7 @@ def test_setup_flow_creates_kimi_profile_with_profile_scoped_key(tmp_path: Path,
 
 def test_provider_add_can_store_profile_api_key(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path))
 
     from iterate_harness.auth.storage import load_credential
 
@@ -192,7 +194,7 @@ def test_provider_add_can_store_profile_api_key(tmp_path: Path, monkeypatch):
 
 def test_provider_edit_can_replace_profile_api_key(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     from iterate_harness.auth.manager import AuthManager
@@ -210,7 +212,7 @@ def test_provider_edit_can_replace_profile_api_key(tmp_path: Path, monkeypatch):
 
 def test_login_provider_surfaces_store_failure(tmp_path: Path, monkeypatch, capsys):
     """A failed AuthManager store must not end in a silent 'saved' success."""
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr("iterate_harness.auth.flows.ApiKeyFlow.run", lambda self: "sk-xyz")
@@ -390,7 +392,7 @@ def test_build_dry_run_preview_classifies_slash_command_and_flags_bad_mcp(monkey
     monkeypatch.setattr("iterate_harness.ui.runtime._resolve_api_client_from_settings", lambda settings: object())
 
     preview = cli._build_dry_run_preview(
-        prompt="/plugin list",
+        prompt="/config show",
         cwd=str(tmp_path),
         model=None,
         max_turns=None,
@@ -403,7 +405,7 @@ def test_build_dry_run_preview_classifies_slash_command_and_flags_bad_mcp(monkey
     )
 
     assert preview["entrypoint"]["kind"] == "slash_command"
-    assert preview["entrypoint"]["command"] == "plugin"
+    assert preview["entrypoint"]["command"] == "config"
     assert preview["entrypoint"]["remote_invocable"] is False
     assert preview["entrypoint"]["remote_admin_opt_in"] is True
     assert preview["entrypoint"]["behavior"] == "stateful"
@@ -522,61 +524,3 @@ def test_build_dry_run_preview_recommends_matching_skills_and_tools(monkeypatch,
     assert "grep" in recommended_tools
 
 
-def test_autopilot_run_next_cli(monkeypatch, tmp_path: Path):
-    runner = CliRunner()
-
-    class FakeStore:
-        def __init__(self, cwd):
-            self.cwd = cwd
-
-        async def run_next(self, *, model=None, max_turns=None, permission_mode=None):
-            class Result:
-                card_id = "ap-1234"
-                status = "completed"
-                run_report_path = "/tmp/run.md"
-                verification_report_path = "/tmp/verify.md"
-
-            return Result()
-
-    monkeypatch.setattr("iterate_harness.autopilot.RepoAutopilotStore", FakeStore)
-
-    result = runner.invoke(app, ["autopilot", "run-next", "--cwd", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert "ap-1234 -> completed" in result.output
-
-
-def test_autopilot_install_cron_cli(monkeypatch, tmp_path: Path):
-    runner = CliRunner()
-
-    class FakeStore:
-        def __init__(self, cwd):
-            self.cwd = cwd
-
-        def install_default_cron(self):
-            return ["autopilot.scan", "autopilot.tick"]
-
-    monkeypatch.setattr("iterate_harness.autopilot.RepoAutopilotStore", FakeStore)
-
-    result = runner.invoke(app, ["autopilot", "install-cron", "--cwd", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert "autopilot.scan" in result.output
-
-
-def test_autopilot_export_dashboard_cli(monkeypatch, tmp_path: Path):
-    runner = CliRunner()
-
-    class FakeStore:
-        def __init__(self, cwd):
-            self.cwd = cwd
-
-        def export_dashboard(self, output=None):
-            return tmp_path / "docs" / "autopilot"
-
-    monkeypatch.setattr("iterate_harness.autopilot.RepoAutopilotStore", FakeStore)
-
-    result = runner.invoke(app, ["autopilot", "export-dashboard", "--cwd", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert "Exported autopilot dashboard" in result.output

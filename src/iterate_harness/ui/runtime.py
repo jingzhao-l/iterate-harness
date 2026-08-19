@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
 from iterate_harness.api.client import AnthropicApiClient, SupportsStreamingMessages
-from iterate_harness.api.codex_client import CodexApiClient
-from iterate_harness.api.copilot_client import CopilotClient
 from iterate_harness.api.openai_client import OpenAICompatibleClient
 from iterate_harness.api.provider import auth_status, detect_provider
 from iterate_harness.bridge import get_bridge_manager
@@ -167,28 +165,6 @@ def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
             )
             raise SystemExit(1)
 
-    if settings.api_format == "copilot":
-        from iterate_harness.api.copilot_client import COPILOT_DEFAULT_MODEL
-
-        copilot_model = (
-            COPILOT_DEFAULT_MODEL
-            if settings.model in {"claude-sonnet-4-20250514", "claude-sonnet-4-6", "sonnet", "default"}
-            else settings.model
-        )
-        return CopilotClient(model=copilot_model)
-    if settings.provider == "openai_codex":
-        auth = _safe_resolve_auth()
-        return CodexApiClient(
-            auth_token=auth.value,
-            base_url=settings.base_url,
-        )
-    if settings.provider == "anthropic_claude":
-        return AnthropicApiClient(
-            auth_token=_safe_resolve_auth().value,
-            base_url=settings.base_url,
-            claude_oauth=True,
-            auth_token_resolver=lambda: settings.resolve_auth().value,
-        )
     if settings.api_format in ("openai", "openai_compat"):
         auth = _safe_resolve_auth()
         return OpenAICompatibleClient(

@@ -160,7 +160,6 @@ class TestSensitivePathProtection:
             "/home/user/.docker/config.json",
             "/home/user/.kube/config",
             "/home/user/.iterate-harness/credentials.json",
-            "/home/user/.iterate-harness/copilot_auth.json",
         ):
             decision = checker.evaluate("read_file", is_read_only=True, file_path=path)
             assert decision.allowed is False, f"Expected {path} to be denied"
@@ -222,7 +221,6 @@ class TestSensitivePathProtection:
             "*/.docker/config.json": "/home/u/.docker/config.json",
             "*/.kube/config": "/home/u/.kube/config",
             "*/.iterate-harness/credentials.json": "/home/u/.iterate-harness/credentials.json",
-            "*/.iterate-harness/copilot_auth.json": "/home/u/.iterate-harness/copilot_auth.json",
         }
         test_path = example_paths[pattern]
         checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))

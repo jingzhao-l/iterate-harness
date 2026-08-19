@@ -173,7 +173,7 @@ async def test_subprocess_backend_argv_preserves_windows_backslashes(
     # Use the public override env var rather than monkeypatching the
     # function symbol — proved fragile under full-suite pytest module
     # attribute resolution.
-    monkeypatch.setenv("OPENHARNESS_TEAMMATE_COMMAND", win_path)
+    monkeypatch.setenv("ITERATE_TEAMMATE_COMMAND", win_path)
 
     backend = SubprocessBackend()
     config = TeammateSpawnConfig(
@@ -233,11 +233,11 @@ async def test_subprocess_backend_passes_env_via_kwarg(
     argv = captured.get("argv") or []
     # No element of argv should look like a shell env-prefix token.
     for token in argv:
-        assert "OPENHARNESS_AGENT_TEAMS=" not in token
+        assert "ITERATE_AGENT_TEAMS=" not in token
         assert "CLAUDE_CODE_COORDINATOR_MODE=" not in token
     env = captured.get("env")
     assert isinstance(env, dict)
-    assert env.get("OPENHARNESS_AGENT_TEAMS") == "1"
+    assert env.get("ITERATE_AGENT_TEAMS") == "1"
 
 
 @pytest.mark.asyncio

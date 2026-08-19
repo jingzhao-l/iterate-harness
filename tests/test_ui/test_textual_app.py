@@ -44,8 +44,8 @@ class ScriptedApiClient:
 @pytest.mark.asyncio
 async def test_textual_app_handles_commands(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
 
     app = IterateHarnessTerminalApp(api_client=StaticApiClient("unused"))
     async with app.run_test() as pilot:
@@ -60,8 +60,8 @@ async def test_textual_app_handles_commands(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_textual_app_runs_one_model_turn(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
 
     app = IterateHarnessTerminalApp(api_client=StaticApiClient("hello from textual"))
     async with app.run_test() as pilot:
@@ -77,8 +77,8 @@ async def test_textual_app_runs_one_model_turn(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_textual_app_handles_ask_user_tool(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
 
     app = IterateHarnessTerminalApp(
         api_client=ScriptedApiClient(
@@ -119,8 +119,8 @@ async def test_textual_app_handles_ask_user_tool(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_textual_sidebar_refresh_is_snapshot_based(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
 
     app = IterateHarnessTerminalApp(api_client=StaticApiClient("hello"))
     async with app.run_test():
@@ -162,8 +162,8 @@ async def test_textual_sidebar_refresh_is_snapshot_based(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_textual_current_response_update_is_deduplicated(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
 
     app = IterateHarnessTerminalApp(api_client=StaticApiClient("hello"))
     async with app.run_test():

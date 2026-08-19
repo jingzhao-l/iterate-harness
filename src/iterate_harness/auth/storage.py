@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,17 +32,6 @@ _KEYRING_SERVICE = "iterate_harness"
 
 def _creds_lock_path() -> Path:
     return _creds_path().with_suffix(".json.lock")
-
-
-@dataclass(frozen=True)
-class ExternalAuthBinding:
-    """Pointer to credentials managed by an external CLI."""
-
-    provider: str
-    source_path: str
-    source_kind: str
-    managed_by: str
-    profile_label: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -193,37 +181,6 @@ def clear_provider_credentials(provider: str, *, use_keyring: bool | None = None
 def list_stored_providers() -> list[str]:
     """Return the list of providers that have credentials in the file store."""
     return list(_load_creds_file().keys())
-
-
-def store_external_binding(binding: ExternalAuthBinding) -> None:
-    """Persist metadata describing an external auth source for *provider*."""
-    with exclusive_file_lock(_creds_lock_path()):
-        data = _load_creds_file()
-        entry = data.setdefault(binding.provider, {})
-        entry["external_binding"] = asdict(binding)
-        _save_creds_file(data)
-    log.debug("Stored external auth binding for provider: %s", binding.provider)
-
-
-def load_external_binding(provider: str) -> ExternalAuthBinding | None:
-    """Load external auth binding metadata for *provider* if present."""
-    entry = _load_creds_file().get(provider, {})
-    if not isinstance(entry, dict):
-        return None
-    raw = entry.get("external_binding")
-    if not isinstance(raw, dict):
-        return None
-    try:
-        return ExternalAuthBinding(
-            provider=str(raw["provider"]),
-            source_path=str(raw["source_path"]),
-            source_kind=str(raw["source_kind"]),
-            managed_by=str(raw["managed_by"]),
-            profile_label=str(raw.get("profile_label", "") or ""),
-        )
-    except KeyError:
-        log.warning("Ignoring malformed external auth binding for provider: %s", provider)
-        return None
 
 
 # ---------------------------------------------------------------------------

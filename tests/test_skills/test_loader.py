@@ -11,7 +11,7 @@ from iterate_harness.skills.loader import _parse_skill_markdown as parse_skill_m
 
 
 def test_load_skill_registry_includes_bundled(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     registry = load_skill_registry()
 
     names = [skill.name for skill in registry.list_skills()]
@@ -26,7 +26,7 @@ def test_load_skill_registry_includes_bundled(tmp_path: Path, monkeypatch):
 
 
 def test_load_skill_registry_includes_user_skills(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     skills_dir = get_user_skills_dir()
     deploy_dir = skills_dir / "deploy"
     deploy_dir.mkdir(parents=True)
@@ -41,7 +41,7 @@ def test_load_skill_registry_includes_user_skills(tmp_path: Path, monkeypatch):
 
 
 def test_user_skill_metadata_tracks_command_name_and_frontmatter_flags(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     skills_dir = get_user_skills_dir()
     deploy_dir = skills_dir / "deploy-flow"
     deploy_dir.mkdir(parents=True)

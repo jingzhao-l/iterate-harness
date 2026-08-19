@@ -25,7 +25,7 @@ def _read_positive_int_env(name: str, default: int, *, minimum: int = 1) -> int:
 
 def tool_output_inline_chars() -> int:
     return _read_positive_int_env(
-        "OPENHARNESS_TOOL_OUTPUT_INLINE_CHARS",
+        "ITERATE_TOOL_OUTPUT_INLINE_CHARS",
         DEFAULT_TOOL_OUTPUT_INLINE_CHARS,
         minimum=256,
     )
@@ -33,7 +33,7 @@ def tool_output_inline_chars() -> int:
 
 def tool_output_preview_chars() -> int:
     return _read_positive_int_env(
-        "OPENHARNESS_TOOL_OUTPUT_PREVIEW_CHARS",
+        "ITERATE_TOOL_OUTPUT_PREVIEW_CHARS",
         DEFAULT_TOOL_OUTPUT_PREVIEW_CHARS,
         minimum=128,
     )
@@ -41,7 +41,7 @@ def tool_output_preview_chars() -> int:
 
 def microcompact_tool_result_chars() -> int:
     return _read_positive_int_env(
-        "OPENHARNESS_MICROCOMPACT_TOOL_RESULT_CHARS",
+        "ITERATE_MICROCOMPACT_TOOL_RESULT_CHARS",
         DEFAULT_MICROCOMPACT_TOOL_RESULT_CHARS,
         minimum=256,
     )

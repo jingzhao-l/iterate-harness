@@ -137,12 +137,12 @@ def estimate_conversation_tokens(messages: list[ConversationMessage]) -> int:
 
 
 def _vision_token_budget_per_image() -> int:
-    raw = os.environ.get("OPENHARNESS_IMAGE_TOKEN_ESTIMATE", "").strip()
+    raw = os.environ.get("ITERATE_IMAGE_TOKEN_ESTIMATE", "").strip()
     if raw:
         try:
             return max(64, int(raw))
         except ValueError:
-            log.warning("Ignoring invalid OPENHARNESS_IMAGE_TOKEN_ESTIMATE=%r", raw)
+            log.warning("Ignoring invalid ITERATE_IMAGE_TOKEN_ESTIMATE=%r", raw)
     return _DEFAULT_VISION_IMAGE_TOKEN_ESTIMATE
 
 

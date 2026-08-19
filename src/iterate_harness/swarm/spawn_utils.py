@@ -8,7 +8,7 @@ import sys
 
 
 # Environment variable to override the teammate command
-TEAMMATE_COMMAND_ENV_VAR = "OPENHARNESS_TEAMMATE_COMMAND"
+TEAMMATE_COMMAND_ENV_VAR = "ITERATE_TEAMMATE_COMMAND"
 
 
 # ---------------------------------------------------------------------------
@@ -59,9 +59,9 @@ _TEAMMATE_ENV_VARS = [
     # --- IterateHarness-native provider settings --------------------------------
     # These are read by settings._apply_env_overrides() and must survive across
     # tmux boundaries so teammates use the same provider as the leader.
-    "OPENHARNESS_API_FORMAT",
-    "OPENHARNESS_BASE_URL",
-    "OPENHARNESS_MODEL",
+    "ITERATE_API_FORMAT",
+    "ITERATE_BASE_URL",
+    "ITERATE_MODEL",
     "OPENAI_API_KEY",
 ]
 
@@ -70,7 +70,7 @@ def get_teammate_command() -> str:
     """Return the executable used to spawn teammate processes.
 
     Resolution order:
-    1. ``OPENHARNESS_TEAMMATE_COMMAND`` environment variable — allows the
+    1. ``ITERATE_TEAMMATE_COMMAND`` environment variable — allows the
        operator to point at a specific binary or wrapper script.
     2. The current Python interpreter running the ``iterate_harness`` module.
        This keeps spawned teammates on the same venv/source tree as the
@@ -151,7 +151,7 @@ def build_inherited_cli_flags(
             flags.extend(["--permission-mode", "acceptEdits"])
 
     # --- Model override ----------------------------------------------------
-    # "inherit" means use the parent's model via the OPENHARNESS_MODEL env var.
+    # "inherit" means use the parent's model via the ITERATE_MODEL env var.
     if model and model != "inherit":
         flags.extend(["--model", model])
 
@@ -188,14 +188,14 @@ def build_inherited_cli_flags(
 def build_inherited_env_vars() -> dict[str, str]:
     """Build environment variables to forward to spawned teammates.
 
-    Always includes ``OPENHARNESS_AGENT_TEAMS=1`` plus any provider/proxy
+    Always includes ``ITERATE_AGENT_TEAMS=1`` plus any provider/proxy
     vars that are set in the current process.
 
     Returns:
         Dict of env var name → value to merge into the subprocess environment.
     """
     env: dict[str, str] = {
-        "OPENHARNESS_AGENT_TEAMS": "1",
+        "ITERATE_AGENT_TEAMS": "1",
         # Spawned workers should behave like workers, not recursively re-enter
         # coordinator mode just because the parent leader had the flag set.
         "CLAUDE_CODE_COORDINATOR_MODE": "0",

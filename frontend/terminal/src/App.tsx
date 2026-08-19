@@ -15,9 +15,9 @@ import {useBackendSession} from './hooks/useBackendSession.js';
 import {ThemeProvider, useTheme} from './theme/ThemeContext.js';
 import type {FrontendConfig} from './types.js';
 
-const rawReturnSubmit = process.env.OPENHARNESS_FRONTEND_RAW_RETURN === '1';
+const rawReturnSubmit = process.env.ITERATE_FRONTEND_RAW_RETURN === '1';
 const scriptedSteps = (() => {
-	const raw = process.env.OPENHARNESS_FRONTEND_SCRIPT;
+	const raw = process.env.ITERATE_FRONTEND_SCRIPT;
 	if (!raw) {
 		return [] as string[];
 	}
@@ -488,8 +488,9 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				<ConversationView
 					items={deferredTranscript}
 					assistantBuffer={deferredAssistantBuffer}
-					showWelcome={session.ready && outputStyle !== 'codex'}
+					showWelcome={session.ready && outputStyle !== 'compact'}
 					outputStyle={outputStyle}
+					version={String((config as Record<string, unknown>).version ?? '')}
 				/>
 			</Box>
 

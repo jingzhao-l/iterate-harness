@@ -29,11 +29,11 @@ class TestInspectVoiceCapabilities:
     def test_keeps_provider_reason_when_provider_blocks_voice(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/sox")
         provider = ProviderInfo(
-            name="copilot",
-            auth_kind="oauth_device",
+            name="ollama",
+            auth_kind="api_key",
             voice_supported=False,
-            voice_reason="voice mode is not supported for GitHub Copilot",
+            voice_reason="voice mode is not supported for local Ollama",
         )
         diag = inspect_voice_capabilities(provider)
         assert diag.available is False
-        assert diag.reason == "voice mode is not supported for GitHub Copilot"
+        assert diag.reason == "voice mode is not supported for local Ollama"

@@ -99,8 +99,8 @@ class ImageToTextTool(BaseTool):
                 output=(
                     "image_to_text failed: vision model is not configured. "
                     "Please set vision.model and vision.api_key in your settings, "
-                    "or configure the OPENHARNESS_VISION_MODEL and "
-                    "OPENHARNESS_VISION_API_KEY environment variables."
+                    "or configure the ITERATE_VISION_MODEL and "
+                    "ITERATE_VISION_API_KEY environment variables."
                 ),
                 is_error=True,
             )

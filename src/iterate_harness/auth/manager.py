@@ -17,54 +17,54 @@ from iterate_harness.config.settings import (
 )
 from iterate_harness.auth.storage import (
     clear_provider_credentials,
-    load_external_binding,
     load_credential,
     store_credential,
 )
 
 log = logging.getLogger(__name__)
 
-# Providers that IterateHarness knows about.
+# Providers that IterateHarness knows about (iterate-exclusive: API-key only).
 _KNOWN_PROVIDERS = [
     "anthropic",
-    "anthropic_claude",
     "openai",
-    "openai_codex",
-    "copilot",
+    "deepseek",
     "dashscope",
-    "bedrock",
-    "vertex",
     "moonshot",
     "gemini",
     "minimax",
+    "zhipu",
+    "siliconflow",
+    "nvidia",
     "modelscope",
 ]
 
 _AUTH_SOURCES = [
     "anthropic_api_key",
     "openai_api_key",
-    "codex_subscription",
-    "claude_subscription",
-    "copilot_oauth",
+    "deepseek_api_key",
     "dashscope_api_key",
-    "bedrock_api_key",
-    "vertex_api_key",
     "moonshot_api_key",
     "gemini_api_key",
     "minimax_api_key",
+    "zhipu_api_key",
+    "siliconflow_api_key",
+    "nvidia_api_key",
     "modelscope_api_key",
 ]
 
 _PROFILE_BY_PROVIDER = {
     "anthropic": "claude-api",
-    "anthropic_claude": "claude-subscription",
     "openai": "openai-compatible",
-    "openai_codex": "codex",
-    "copilot": "copilot",
+    "deepseek": "deepseek",
+    "dashscope": "qwen",
     "moonshot": "moonshot",
     "gemini": "gemini",
     "minimax": "minimax",
+    "zhipu": "zhipu",
+    "siliconflow": "siliconflow",
+    "nvidia": "nvidia",
     "modelscope": "modelscope",
+    "ollama": "ollama",
 }
 
 
@@ -117,8 +117,6 @@ class AuthManager:
         """Return auth source configuration status."""
         import os
 
-        from iterate_harness.auth.external import describe_external_binding
-
         active_profile_name, active_profile = self.settings.resolve_profile()
         result: dict[str, Any] = {}
         for source in _AUTH_SOURCES:
@@ -138,30 +136,6 @@ class AuthManager:
                     state = "configured"
             elif source == "openai_api_key":
                 if os.environ.get("OPENAI_API_KEY"):
-                    configured = True
-                    origin = "env"
-                    state = "configured"
-                elif load_credential(storage_provider, "api_key"):
-                    configured = True
-                    origin = "file"
-                    state = "configured"
-            elif source in {"codex_subscription", "claude_subscription"}:
-                binding = load_external_binding(storage_provider)
-                if binding is not None:
-                    external_state = describe_external_binding(binding)
-                    configured = external_state.configured
-                    origin = external_state.source
-                    state = external_state.state
-                    detail = external_state.detail
-            elif source == "copilot_oauth":
-                from iterate_harness.api.copilot_auth import load_copilot_auth
-
-                if load_copilot_auth():
-                    configured = True
-                    origin = "file"
-                    state = "configured"
-            elif source == "modelscope_api_key":
-                if os.environ.get("MODELSCOPE_API_KEY"):
                     configured = True
                     origin = "env"
                     state = "configured"
@@ -202,84 +176,33 @@ class AuthManager:
         active = self.get_active_provider()
         result: dict[str, Any] = {}
 
+        env_vars: dict[str, str] = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "dashscope": "DASHSCOPE_API_KEY",
+            "moonshot": "MOONSHOT_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "minimax": "MINIMAX_API_KEY",
+            "zhipu": "ZHIPUAI_API_KEY",
+            "siliconflow": "SILICONFLOW_API_KEY",
+            "nvidia": "NVIDIA_API_KEY",
+            "modelscope": "MODELSCOPE_API_KEY",
+        }
+
         for provider in _KNOWN_PROVIDERS:
             configured = False
             source = "missing"
-
-            if provider == "anthropic":
-                if os.environ.get("ANTHROPIC_API_KEY"):
-                    configured = True
-                    source = "env"
-                elif load_credential("anthropic", "api_key") or getattr(self.settings, "api_key", ""):
-                    configured = True
-                    source = "file"
-
-            elif provider == "anthropic_claude":
-                binding = load_external_binding(provider)
-                if binding is not None:
-                    configured = True
-                    source = "external"
-
-            elif provider == "openai":
-                if os.environ.get("OPENAI_API_KEY"):
-                    configured = True
-                    source = "env"
-                elif load_credential("openai", "api_key"):
-                    configured = True
-                    source = "file"
-
-            elif provider == "openai_codex":
-                binding = load_external_binding(provider)
-                if binding is not None:
-                    configured = True
-                    source = "external"
-
-            elif provider == "copilot":
-                from iterate_harness.api.copilot_auth import load_copilot_auth
-
-                if load_copilot_auth():
-                    configured = True
-                    source = "file"
-
-            elif provider == "dashscope":
-                if os.environ.get("DASHSCOPE_API_KEY"):
-                    configured = True
-                    source = "env"
-                elif load_credential("dashscope", "api_key"):
-                    configured = True
-                    source = "file"
-
-            elif provider == "moonshot":
-                if os.environ.get("MOONSHOT_API_KEY"):
-                    configured = True
-                    source = "env"
-                elif load_credential("moonshot", "api_key"):
-                    configured = True
-                    source = "file"
-
-            elif provider == "minimax":
-                if os.environ.get("MINIMAX_API_KEY"):
-                    configured = True
-                    source = "env"
-                elif load_credential("minimax", "api_key"):
-                    configured = True
-                    source = "file"
-
-            elif provider == "modelscope":
-                if os.environ.get("MODELSCOPE_API_KEY"):
-                    configured = True
-                    source = "env"
-                elif load_credential("modelscope", "api_key"):
-                    configured = True
-                    source = "file"
-
-            elif provider in ("bedrock", "vertex"):
-                # These typically use environment-level credentials (AWS/GCP).
-                cred = load_credential(provider, "api_key")
-                if cred:
-                    configured = True
-                    source = "file"
-
+            env_var = env_vars.get(provider)
+            if env_var and os.environ.get(env_var):
+                configured = True
+                source = "env"
+            elif provider == "anthropic" and getattr(self.settings, "api_key", ""):
+                configured = True
+                source = "file"
+            elif load_credential(provider, "api_key"):
+                configured = True
+                source = "file"
             result[provider] = {
                 "configured": configured,
                 "source": source,

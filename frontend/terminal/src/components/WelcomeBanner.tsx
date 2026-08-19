@@ -3,19 +3,17 @@ import {Box, Text} from 'ink';
 
 import {useTheme} from '../theme/ThemeContext.js';
 
-const VERSION = '0.1.0';
-
 // prettier-ignore
 const LOGO = [
-	' ██████╗ ██╗  ██╗    ███╗   ███╗██╗   ██╗    ██╗  ██╗ █████╗ ██████╗ ███╗   ██╗███████╗███████╗███████╗██╗',
-	'██╔═══██╗██║  ██║    ████╗ ████║╚██╗ ██╔╝    ██║  ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝██║',
-	'██║   ██║███████║    ██╔████╔██║ ╚████╔╝     ███████║███████║██████╔╝██╔██╗ ██║█████╗  ███████╗███████╗██║',
-	'██║   ██║██╔══██║    ██║╚██╔╝██║  ╚██╔╝      ██╔══██║██╔══██║██╔══██╗██║╚██╗██║██╔══╝  ╚════██║╚════██║╚═╝',
-	'╚██████╔╝██║  ██║    ██║ ╚═╝ ██║   ██║       ██║  ██║██║  ██║██║  ██║██║ ╚████║███████╗███████║███████║██╗',
-	' ╚═════╝ ╚═╝  ╚═╝    ╚═╝     ╚═╝   ╚═╝       ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚══════╝╚═╝',
+	' ██╗ ████████╗ ███████╗ ██████╗  █████╗ ████████╗ ███████╗',
+	' ██║ ╚══██╔══╝ ██╔════╝ ██╔══██╗ ██╔══██╗ ╚══██╔══╝ ██╔════╝',
+	' ██║    ██║    █████╗   ██████╔╝ ███████║    ██║    █████╗  ',
+	' ██║    ██║    ██╔══╝   ██╔══██╗ ██╔══██║    ██║    ██╔══╝  ',
+	' ██║    ██║    ███████╗ ██║  ██║ ██║  ██║    ██║    ███████╗',
+	' ╚═╝    ╚═╝    ╚══════╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝    ╚═╝    ╚══════╝',
 ];
 
-export function WelcomeBanner(): React.JSX.Element {
+export function WelcomeBanner({version}: {version?: string}): React.JSX.Element {
 	const {theme} = useTheme();
 
 	return (
@@ -26,12 +24,15 @@ export function WelcomeBanner(): React.JSX.Element {
 				))}
 				<Text> </Text>
 				<Text>
-					<Text dimColor> An AI-powered coding assistant</Text>
-					<Text dimColor>{'  '}v{VERSION}</Text>
+					<Text dimColor> review → fix → validate → converge</Text>
+					{version ? <Text dimColor>{'  '}v{version}</Text> : null}
 				</Text>
 				<Text> </Text>
 				<Text>
 					<Text dimColor> </Text>
+					<Text color={theme.colors.primary}>/iterate</Text>
+					<Text dimColor> review/fix loop</Text>
+					<Text dimColor>{'  '}|{'  '}</Text>
 					<Text color={theme.colors.primary}>/help</Text>
 					<Text dimColor> commands</Text>
 					<Text dimColor>{'  '}|{'  '}</Text>

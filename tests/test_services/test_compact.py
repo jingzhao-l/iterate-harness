@@ -244,7 +244,7 @@ def test_microcompact_compacts_mcp_results_while_preserving_recent():
 
 
 def test_microcompact_compacts_large_non_allowlisted_results(monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_MICROCOMPACT_TOOL_RESULT_CHARS", "256")
+    monkeypatch.setenv("ITERATE_MICROCOMPACT_TOOL_RESULT_CHARS", "256")
     messages = [
         ConversationMessage(
             role="assistant",
@@ -284,7 +284,7 @@ def test_compact_prompt_too_long_detection_handles_llama_cpp_errors():
 
 
 def test_compact_token_estimate_counts_images(monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_IMAGE_TOKEN_ESTIMATE", "6000")
+    monkeypatch.setenv("ITERATE_IMAGE_TOKEN_ESTIMATE", "6000")
     messages = [
         ConversationMessage(
             role="user",
@@ -296,7 +296,7 @@ def test_compact_token_estimate_counts_images(monkeypatch):
 
 
 def test_should_autocompact_counts_image_tokens(monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_IMAGE_TOKEN_ESTIMATE", "6000")
+    monkeypatch.setenv("ITERATE_IMAGE_TOKEN_ESTIMATE", "6000")
     messages = [
         ConversationMessage(
             role="user",

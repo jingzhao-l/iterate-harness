@@ -59,7 +59,7 @@ async def test_search_edit_flow_across_registry(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_task_and_todo_flow_across_registry(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_tool_registry()
     context = ToolExecutionContext(cwd=tmp_path, metadata={"tool_registry": registry})
 
@@ -112,7 +112,7 @@ async def test_task_and_todo_flow_across_registry(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_skill_and_config_flow_across_registry(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     skills_dir = tmp_path / "config" / "skills"
     skills_dir.mkdir(parents=True)
     pytest_dir = skills_dir / "pytest"
@@ -143,7 +143,7 @@ async def test_skill_and_config_flow_across_registry(tmp_path: Path, monkeypatch
 
 @pytest.mark.asyncio
 async def test_agent_send_message_flow_restarts_completed_agent(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_tool_registry()
     context = ToolExecutionContext(cwd=tmp_path, metadata={"tool_registry": registry})
 
@@ -223,7 +223,7 @@ async def test_ask_user_question_flow_across_registry(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_notebook_and_cron_flow_across_registry(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_tool_registry()
     context = ToolExecutionContext(cwd=tmp_path, metadata={"tool_registry": registry})
 

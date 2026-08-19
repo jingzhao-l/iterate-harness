@@ -161,7 +161,7 @@ class BackendRegistry:
         if config:
             mode = config.get("teammate_mode", "auto")
         else:
-            mode = os.environ.get("OPENHARNESS_TEAMMATE_MODE", "auto")
+            mode = os.environ.get("ITERATE_TEAMMATE_MODE", "auto")
 
         logger.debug("[BackendRegistry] get_preferred_backend: mode=%s", mode)
 

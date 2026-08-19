@@ -340,7 +340,7 @@ async def test_query_engine_executes_tool_calls(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_query_engine_coordinator_mode_uses_coordinator_prompt_and_runs_agent_loop(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("CLAUDE_CODE_COORDINATOR_MODE", "1")
 
     api_client = CoordinatorLoopApiClient()
@@ -861,7 +861,7 @@ async def test_notification_hook_fires_on_permission_prompt(tmp_path: Path, monk
 @pytest.mark.asyncio
 async def test_subagent_stop_hook_fires_when_spawned_agent_finishes(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     recorder = _RecordingHookExecutor()
     engine = QueryEngine(
         api_client=FakeApiClient(
@@ -1357,9 +1357,9 @@ async def test_query_engine_synthesizes_tool_result_when_parallel_tool_raises(tm
 
 @pytest.mark.asyncio
 async def test_query_engine_offloads_large_tool_result_outputs(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("OPENHARNESS_TOOL_OUTPUT_INLINE_CHARS", "256")
-    monkeypatch.setenv("OPENHARNESS_TOOL_OUTPUT_PREVIEW_CHARS", "128")
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_TOOL_OUTPUT_INLINE_CHARS", "256")
+    monkeypatch.setenv("ITERATE_TOOL_OUTPUT_PREVIEW_CHARS", "128")
     registry = ToolRegistry()
     registry.register(_LargeOutputTool())
 

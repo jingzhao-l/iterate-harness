@@ -81,6 +81,5 @@ This package is provided "AS IS", without warranty of any kind, express or impli
 
 ## License
 
-MIT — same as the harness. The agent kernel originates from
-[OpenHarness](https://github.com/HKUDS/OpenHarness); the iterate semantic layer
+MIT — same as the harness. The iterate semantic layer
 originates from [iterate-skill](https://github.com/jingzhao-l/iterate-skill).

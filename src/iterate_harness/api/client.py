@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import uuid
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Protocol
+from typing import Any, AsyncIterator, Protocol
 
 from anthropic import APIError, APIStatusError, AsyncAnthropic
 
@@ -16,12 +14,6 @@ from iterate_harness.api.errors import (
     IterateHarnessApiError,
     RateLimitFailure,
     RequestFailure,
-)
-from iterate_harness.auth.external import (
-    claude_attribution_header,
-    claude_oauth_betas,
-    claude_oauth_headers,
-    get_claude_code_session_id,
 )
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.engine.messages import ConversationMessage, assistant_message_from_api
@@ -33,7 +25,6 @@ MAX_RETRIES = 3
 BASE_DELAY = 1.0  # seconds
 MAX_DELAY = 30.0
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 529}
-OAUTH_BETA_HEADER = "oauth-2025-04-20"
 
 
 @dataclass(frozen=True)
@@ -121,41 +112,19 @@ class AnthropicApiClient:
         self,
         api_key: str | None = None,
         *,
-        auth_token: str | None = None,
         base_url: str | None = None,
-        claude_oauth: bool = False,
-        auth_token_resolver: Callable[[], str] | None = None,
     ) -> None:
         self._api_key = api_key
-        self._auth_token = auth_token
         self._base_url = base_url
-        self._claude_oauth = claude_oauth
-        self._auth_token_resolver = auth_token_resolver
-        self._session_id = get_claude_code_session_id() if claude_oauth else ""
         self._client = self._create_client()
 
     def _create_client(self) -> AsyncAnthropic:
         kwargs: dict[str, Any] = {}
         if self._api_key:
             kwargs["api_key"] = self._api_key
-        if self._auth_token:
-            kwargs["auth_token"] = self._auth_token
-            kwargs["default_headers"] = (
-                claude_oauth_headers()
-                if self._claude_oauth
-                else {"anthropic-beta": OAUTH_BETA_HEADER}
-            )
         if self._base_url:
             kwargs["base_url"] = self._base_url
         return AsyncAnthropic(**kwargs)
-
-    def _refresh_client_auth(self) -> None:
-        if not self._claude_oauth or self._auth_token_resolver is None:
-            return
-        next_token = self._auth_token_resolver()
-        if next_token and next_token != self._auth_token:
-            self._auth_token = next_token
-            self._client = self._create_client()
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield text deltas and the final assistant message with retry on transient errors."""
@@ -163,7 +132,6 @@ class AnthropicApiClient:
 
         for attempt in range(MAX_RETRIES + 1):
             try:
-                self._refresh_client_auth()
                 async for event in self._stream_once(request):
                     yield event
                 return  # Success
@@ -204,32 +172,11 @@ class AnthropicApiClient:
         }
         if request.system_prompt:
             params["system"] = request.system_prompt
-        if self._claude_oauth:
-            attribution = claude_attribution_header()
-            params["system"] = (
-                f"{attribution}\n{params['system']}"
-                if params.get("system")
-                else attribution
-            )
         if request.tools:
             params["tools"] = request.tools
-        if self._claude_oauth:
-            params["betas"] = claude_oauth_betas()
-            params["metadata"] = {
-                "user_id": json.dumps(
-                    {
-                        "device_id": "iterate_harness",
-                        "session_id": self._session_id,
-                        "account_uuid": "",
-                    },
-                    separators=(",", ":"),
-                )
-            }
-            params["extra_headers"] = {"x-client-request-id": str(uuid.uuid4())}
 
         try:
-            stream_api = self._client.beta.messages if self._claude_oauth else self._client.messages
-            async with stream_api.stream(**params) as stream:
+            async with self._client.messages.stream(**params) as stream:
                 async for event in stream:
                     if getattr(event, "type", None) != "content_block_delta":
                         continue

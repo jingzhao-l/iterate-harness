@@ -91,8 +91,8 @@ async def test_react_backend_drains_async_agents_in_coordinator_mode(tmp_path, m
     the coordinator polls in-turn (locking the UI).
     """
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
 
     host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
     host._bundle = await build_runtime(api_client=StaticApiClient("unused"))
@@ -139,8 +139,8 @@ async def test_react_backend_skips_drain_when_not_coordinator(tmp_path, monkeypa
     poll the task manager and submit follow-up turns for unrelated background tasks.
     """
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
 
     host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
     host._bundle = await build_runtime(api_client=StaticApiClient("unused"))

@@ -28,7 +28,7 @@ Choose the target deliberately:
 
 - Built-in IterateHarness skills live in `src/iterate_harness/skills/bundled/content/*.md`.
 - User skills for `ih` live in `~/.iterate-harness/skills/<skill-dir>/SKILL.md`.
-- Private `ih` skills live in `~/.ohmo/skills/<skill-dir>/SKILL.md`.
+- Private `ih` skills live in `~/.iterate-harness/skills/<skill-dir>/SKILL.md` (per-user install).
 - Plugin skills live in `<plugin-root>/skills/<skill-dir>/SKILL.md`.
 
 IterateHarness user and plugin skills use a directory layout. Do not create flat

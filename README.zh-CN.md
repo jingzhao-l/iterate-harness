@@ -36,10 +36,9 @@
 | **iterate-harness** | 独立无头引擎（`ih`，npm: `iterate-harness`） | **本仓库** —— 在终端 / CI / Git 钩子里运行同一闭环，无需对话式助手 |
 | **iterate-plugin** | dsh 桌面客户端插件 | 把 iterate 的收敛仪表盘 / review 进度带进 dsh 界面 |
 
-它是 [OpenHarness](https://github.com/HKUDS/OpenHarness)（v0.1.9，MIT）的
-聚焦型 fork：内核 agent loop、React TUI、工具/技能/插件体系与权限层全部
-继承；在此之上叠加了从 iterate skill TypeScript 实现移植的语义层，以及
-引擎级的收敛控制策略。
+它是一款**独立的专属 agent harness**，围绕 iterate review/fix 闭环打造：
+内核 agent loop、React TUI、工具/技能/插件体系与权限层全部为 iterate 原生，
+核心是移植自 iterate skill TypeScript 实现的语义层，以及引擎级的收敛控制策略。
 
 > ⭐ 如果这个项目对你有帮助，欢迎点亮 GitHub Star，这是对开源维护最大的支持！
 
@@ -184,11 +183,10 @@ python -m pytest -q                      # 全量
 
 ## 📄 许可与致谢
 
-MIT——与上游一致。iterate-harness 是
-[OpenHarness](https://github.com/HKUDS/OpenHarness) 的 fork，维护于
-[jingzhao-l/iterate-harness](https://github.com/jingzhao-l/iterate-harness)；
-agent 内核、TUI 与扩展体系的全部功劳归于上游。iterate 语义层源自
-[iterate-skill](https://github.com/jingzhao-l/iterate-skill) 项目。
+MIT。iterate-harness 维护于
+[jingzhao-l/iterate-harness](https://github.com/jingzhao-l/iterate-harness)。
+iterate 语义层源自 [iterate-skill](https://github.com/jingzhao-l/iterate-skill)
+项目。
 
 ## ⚠️ 免责声明
 

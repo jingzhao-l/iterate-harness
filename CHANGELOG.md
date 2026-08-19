@@ -4,6 +4,25 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.12.2] - 2026-08-19
+
+Iterate-only cleanup: stripped the remaining OpenHarness branding and the general-purpose agent-harness surface area from the CLI/TUI, auth, commands, workflows, and docs so `ih` presents purely as the iterate review/fix harness.
+
+### Removed
+
+- **Non-iterate CLI commands** (`cli.py`): dropped `cron`, `autopilot`, `hooks`, `mcp`, `plugin`, `reload-plugins`, `ship` from `ih --help`; dry-run classification table updated.
+- **TUI slash commands** (`commands/registry.py`): removed `/hooks`, `/mcp`, `/plugin`, `/reload-plugins`, `/autopilot`, `/ship`; cleaned "ohmo" wording from the remaining `/stop` help.
+- **Autopilot subsystem**: the whole repo-autopilot stack is gone — `src/iterate_harness/autopilot/`, the project autopilot path helpers, the `autopilot-run-next.yml` / `autopilot-scan.yml` / `autopilot-pages.yml` workflows, `autopilot-dashboard/`, `docs/autopilot/`, and related tests.
+- **Redundant `local` provider profile** (`config/settings.py`, `cli.py`, `auth/manager.py`): removed the duplicate OpenAI-compatible "local" profile; Ollama now covers local endpoints, and `ih auth login` / `ih setup` no longer present a dead-end local provider.
+- **Legacy release notes** (`RELEASE_NOTES_v0.1.8.md`, `RELEASE_NOTES_v0.1.9.md`): stale OpenHarness-era files removed.
+- **Bug-report template `oh` reference** (`.github/ISSUE_TEMPLATE/bug_report.yml`): repro placeholder now uses `ih`.
+
+### Changed
+
+- **Branding** (`scripts/install.sh`, `frontend/terminal/src/components/WelcomeBanner.tsx`, `config/schema.py`): "Oh my Harness" / `ohmo` / `openclaw` references removed; `bot_names` is now `["iterate_harness"]`; the install banner is iterate-branded.
+- **Auth guidance** (`cli.py`): `ih auth login` for local providers points to `ih setup` instead of dead-ending; setup hints include Ollama.
+- **Skill docs** (`skills/bundled/content/skill-creator.md`): private skills path changed from `~/.ohmo/skills` to `~/.iterate-harness/skills`.
+
 ## [1.12.1] - 2026-08-19
 
 Force reviewers to open every file in their assigned review scope and surface a coverage gap hint.

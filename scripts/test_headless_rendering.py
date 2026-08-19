@@ -33,10 +33,10 @@ async def test_markdown_render() -> tuple[bool, str]:
     from io import StringIO
     from rich.console import Console
 
-    from openharness.ui.output import OutputRenderer
-    from openharness.engine.stream_events import AssistantTextDelta, AssistantTurnComplete
-    from openharness.engine.messages import ConversationMessage, TextBlock
-    from openharness.api.usage import UsageSnapshot
+    from iterate_harness.ui.output import OutputRenderer
+    from iterate_harness.engine.stream_events import AssistantTextDelta, AssistantTurnComplete
+    from iterate_harness.engine.messages import ConversationMessage, TextBlock
+    from iterate_harness.api.usage import UsageSnapshot
 
     renderer = OutputRenderer(style_name="default")
     buffer = StringIO()
@@ -61,8 +61,8 @@ async def test_tool_output_format() -> tuple[bool, str]:
     from io import StringIO
     from rich.console import Console
 
-    from openharness.ui.output import OutputRenderer
-    from openharness.engine.stream_events import ToolExecutionStarted, ToolExecutionCompleted
+    from iterate_harness.ui.output import OutputRenderer
+    from iterate_harness.engine.stream_events import ToolExecutionStarted, ToolExecutionCompleted
 
     renderer = OutputRenderer(style_name="default")
     buffer = StringIO()
@@ -89,8 +89,8 @@ async def test_spinner_display() -> tuple[bool, str]:
     from io import StringIO
     from rich.console import Console
 
-    from openharness.ui.output import OutputRenderer
-    from openharness.engine.stream_events import ToolExecutionStarted, ToolExecutionCompleted
+    from iterate_harness.ui.output import OutputRenderer
+    from iterate_harness.engine.stream_events import ToolExecutionStarted, ToolExecutionCompleted
 
     renderer = OutputRenderer(style_name="default")
     buffer = StringIO()
@@ -119,7 +119,7 @@ async def test_real_model_headless() -> tuple[bool, str]:
     if not settings["api_key"]:
         return False, "ANTHROPIC_AUTH_TOKEN not set"
 
-    from openharness.ui.app import run_print_mode
+    from iterate_harness.ui.app import run_print_mode
 
     try:
         await run_print_mode(

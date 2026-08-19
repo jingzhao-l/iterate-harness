@@ -2,11 +2,9 @@
 
 iterate-harness is an open-source agent harness for the iterate review/fix loop
 by default — clear, hackable, and compatible across a wide range of AI coding
-workflows. It is a focused fork of
-[OpenHarness](https://github.com/HKUDS/OpenHarness) that layers the iterate
-semantic layer (deterministic review engine, engine-enforced convergence,
-append-only decision log, git-isolated fix loop) on top of the upstream agent
-kernel and TUI.
+workflows. It is built natively around the iterate semantic layer
+(deterministic review engine, engine-enforced convergence, append-only
+decision log, git-isolated fix loop).
 
 ## Ways to contribute
 
@@ -109,7 +107,6 @@ Useful contributions in the docs area include：
 
 ## License
 
-iterate-harness 采用 [MIT 许可](./LICENSE)，与上游
-[OpenHarness](https://github.com/HKUDS/OpenHarness) 一致。iterate 语义层源自
+iterate-harness 采用 [MIT 许可](./LICENSE)。iterate 语义层源自
 [iterate-skill](https://github.com/jingzhao-l/iterate-skill)。通过提交 PR，
 你同意你的贡献采用相同的 MIT 许可。

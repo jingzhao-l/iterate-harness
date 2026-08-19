@@ -6,7 +6,7 @@ PR adds a new feature, no files overlap with local changes.
 
 ```bash
 # Preferred: squash merge via GitHub (preserves author)
-gh pr merge 17 --repo HKUDS/OpenHarness --squash \
+gh pr merge 17 --repo jingzhao-l/iterate-harness --squash \
   --subject "feat(skills): add diagnose skill (#17)"
 
 # Result: author "Qu Zhi" appears in git log

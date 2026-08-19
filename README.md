@@ -46,11 +46,11 @@ one of **three interchangeable components** that share the same
 | **iterate-harness** | A standalone headless engine (`ih`, npm: `iterate-harness`) | **This repo** — runs the same loop in terminal / CI / git hooks, no conversational assistant needed |
 | **iterate-plugin** | A dsh desktop-client plugin | Surface the iterate dashboard / review progress inside the dsh UI |
 
-It is a focused fork of [OpenHarness](https://github.com/HKUDS/OpenHarness)
-(v0.1.9, MIT): the kernel agent loop, React TUI, tool/skill/plugin systems
-and permission layer are inherited; the iterate semantic layer (ported from
-the iterate skill's TypeScript implementation) plus the engine-level
-convergence policy are layered on top.
+It is a **standalone agent harness** built around the iterate review/fix
+loop: the kernel agent loop, React TUI, tool/skill/plugin systems and
+permission layer are iterate-native, with the iterate semantic layer (ported
+from the iterate skill's TypeScript implementation) plus the engine-level
+convergence policy at its core.
 
 > ⭐ If this project helps you, please consider giving it a GitHub star — it means a lot to open-source maintenance!
 
@@ -200,10 +200,8 @@ python -m pytest -q                      # full suite
 
 ## 📄 License & Attribution
 
-MIT — same as upstream. iterate-harness is a fork of
-[OpenHarness](https://github.com/HKUDS/OpenHarness) maintained at
-[jingzhao-l/iterate-harness](https://github.com/jingzhao-l/iterate-harness);
-upstream receives full credit for the agent kernel, TUI and extension system.
+MIT. iterate-harness is maintained at
+[jingzhao-l/iterate-harness](https://github.com/jingzhao-l/iterate-harness).
 The iterate semantic layer originates from the
 [iterate-skill](https://github.com/jingzhao-l/iterate-skill) project.
 

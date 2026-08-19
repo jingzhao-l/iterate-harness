@@ -345,10 +345,10 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			if (!delta) {
 				return;
 			}
-			const isCodexStyle = String(statusRef.current.output_style ?? 'default') === 'codex';
-			if (isCodexStyle) {
+			const isCompactStyle = String(statusRef.current.output_style ?? 'default') === 'compact';
+			if (isCompactStyle) {
 				// Keep collecting text for assistant_complete fallback, but avoid
-				// token-level rerenders in compact codex mode.
+				// token-level rerenders in compact mode.
 				assistantBufferRef.current += delta;
 				return;
 			}
@@ -371,8 +371,8 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 				assistantFlushTimerRef.current = null;
 			}
 			flushTranscriptItems();
-			const isCodexStyle = String(statusRef.current.output_style ?? 'default') === 'codex';
-			if (isCodexStyle) {
+			const isCompactStyle = String(statusRef.current.output_style ?? 'default') === 'compact';
+			if (isCompactStyle) {
 				if (pendingAssistantDeltaRef.current) {
 					assistantBufferRef.current += pendingAssistantDeltaRef.current;
 					pendingAssistantDeltaRef.current = '';

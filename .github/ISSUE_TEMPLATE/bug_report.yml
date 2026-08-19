@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem in OpenHarness
+description: Report a reproducible problem in iterate-harness
 title: "[Bug]: "
 labels:
   - bug
@@ -21,7 +21,7 @@ body:
       label: Steps to reproduce
       description: Include commands, prompts, or config that reliably reproduces the issue.
       placeholder: |
-        1. Run `uv run oh ...`
+        1. Run `uv run ih ...`
         2. Trigger ...
         3. Observe ...
     validations:

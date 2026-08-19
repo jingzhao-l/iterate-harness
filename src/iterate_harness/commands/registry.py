@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Literal, get_args, Iterab
 
 import pyperclip
 
-from iterate_harness.autopilot import RepoAutopilotStore
 from iterate_harness.auth.manager import AuthManager
 from iterate_harness.config.paths import (
     get_config_dir,
@@ -224,7 +223,6 @@ def _rewind_turns(messages: list[ConversationMessage], turns: int) -> list[Conve
     return updated
 
 
-
 _SECRET_KEY_PARTS = (
     "api_key",
     "apikey",
@@ -361,7 +359,7 @@ def lookup_skill_slash_command(raw_input: str, context: CommandContext) -> tuple
     """Resolve a user-invocable skill slash command for the active context.
 
     This is a runtime fallback for skills that are only visible after the
-    active cwd, ohmo workspace, or plugin roots are known. Unknown slash
+    active cwd, iterate workspace, or plugin roots are known. Unknown slash
     commands still fall through to the normal agent prompt path.
     """
     if not raw_input.startswith("/"):
@@ -388,7 +386,7 @@ def _register_user_invocable_skill_commands(registry: CommandRegistry) -> None:
     """Register loaded skills as slash commands.
 
     Skills are loaded at command execution time because the active command
-    context supplies cwd, ohmo extra skill dirs, and plugin roots.
+    context supplies cwd, extra skill dirs, and plugin roots.
     """
 
     for skill in load_skill_registry().list_skills():
@@ -584,8 +582,6 @@ def create_default_command_registry(
             return CommandResult(message=f"Memory entry not found: {rest.strip()}")
         return CommandResult(message="Usage: /memory [list|show NAME|add TITLE :: CONTENT|remove NAME]")
 
-    async def _hooks_handler(_: str, context: CommandContext) -> CommandResult:
-        return CommandResult(message=context.hooks_summary or "No hooks configured.")
 
     async def _resume_handler(args: str, context: CommandContext) -> CommandResult:
         tokens = args.strip().split()
@@ -887,16 +883,6 @@ def create_default_command_registry(
             message="Usage: /bridge [show|encode API_BASE_URL TOKEN|decode SECRET|sdk API_BASE_URL SESSION_ID|spawn CMD|list|output SESSION_ID|stop SESSION_ID]"
         )
 
-    async def _reload_plugins_handler(_: str, context: CommandContext) -> CommandResult:
-        settings = load_settings()
-        plugins = load_plugins(settings, context.cwd, extra_roots=context.extra_plugin_roots)
-        if not plugins:
-            return CommandResult(message="No plugins discovered.")
-        lines = ["Reloaded plugins:"]
-        for plugin in plugins:
-            state = "enabled" if plugin.enabled else "disabled"
-            lines.append(f"- {plugin.manifest.name} [{state}]")
-        return CommandResult(message="\n".join(lines))
 
     async def _skills_handler(args: str, context: CommandContext) -> CommandResult:
         skill_registry = load_skill_registry(
@@ -1125,7 +1111,7 @@ def create_default_command_registry(
             message=(
                 "No active turn is running in this command handler. "
                 "While the TUI is running, type /stop or press Esc/Ctrl+C to interrupt the current turn. "
-                "In ohmo remote channels, send /stop."
+                "In remote channels, send /stop."
             )
         )
 
@@ -1180,84 +1166,6 @@ def create_default_command_registry(
             return CommandResult(message="No PR comments context to clear.")
         return CommandResult(message="Usage: /pr_comments [show|add FILE[:LINE] :: COMMENT|clear]")
 
-    async def _mcp_handler(args: str, context: CommandContext) -> CommandResult:
-        settings = load_settings()
-        tokens = args.split()
-        if tokens and tokens[0] == "auth" and len(tokens) >= 3:
-            server_name = tokens[1]
-            config = settings.mcp_servers.get(server_name)
-            if config is None:
-                return CommandResult(message=f"Unknown MCP server: {server_name}")
-
-            if len(tokens) == 3:
-                mode = "bearer"
-                key = None
-                value = tokens[2]
-            elif len(tokens) == 4:
-                mode = tokens[2]
-                key = None
-                value = tokens[3]
-            elif len(tokens) == 5:
-                mode = tokens[2]
-                key = tokens[3]
-                value = tokens[4]
-            else:
-                return CommandResult(
-                    message="Usage: /mcp auth SERVER TOKEN | /mcp auth SERVER [bearer|env] VALUE | /mcp auth SERVER header KEY VALUE"
-                )
-
-            if hasattr(config, "headers"):
-                if mode not in {"bearer", "header"}:
-                    return CommandResult(message="HTTP/WS MCP auth supports bearer or header modes.")
-                header_key = key or "Authorization"
-                header_value = (
-                    f"Bearer {value}" if mode == "bearer" and header_key == "Authorization" else value
-                )
-                headers = dict(getattr(config, "headers", {}) or {})
-                headers[header_key] = header_value
-                settings.mcp_servers[server_name] = config.model_copy(update={"headers": headers})
-            elif hasattr(config, "env"):
-                if mode not in {"bearer", "env"}:
-                    return CommandResult(message="stdio MCP auth supports bearer or env modes.")
-                env_key = key or "MCP_AUTH_TOKEN"
-                env_value = f"Bearer {value}" if mode == "bearer" else value
-                env = dict(getattr(config, "env", {}) or {})
-                env[env_key] = env_value
-                settings.mcp_servers[server_name] = config.model_copy(update={"env": env})
-            else:
-                return CommandResult(message=f"Server {server_name} does not support auth updates")
-            save_settings(settings)
-            return CommandResult(message=f"Saved MCP auth for {server_name}. Restart session to reconnect.")
-        return CommandResult(message=context.mcp_summary or "No MCP servers configured.")
-
-    async def _plugin_handler(args: str, context: CommandContext) -> CommandResult:
-        settings = load_settings()
-        tokens = args.split()
-        if not tokens or tokens[0] == "list":
-            return CommandResult(message=context.plugin_summary or "No plugins discovered.")
-        if tokens[0] == "enable" and len(tokens) == 2:
-            settings.enabled_plugins[tokens[1]] = True
-            save_settings(settings)
-            return CommandResult(message=f"Enabled plugin '{tokens[1]}'. Restart session to reload.")
-        if tokens[0] == "disable" and len(tokens) == 2:
-            settings.enabled_plugins[tokens[1]] = False
-            save_settings(settings)
-            return CommandResult(message=f"Disabled plugin '{tokens[1]}'. Restart session to reload.")
-        if tokens[0] == "install" and len(tokens) == 2:
-            path = install_plugin_from_path(tokens[1])
-            return CommandResult(message=f"Installed plugin to {path}")
-        if tokens[0] == "uninstall" and len(tokens) == 2:
-            try:
-                removed = uninstall_plugin(tokens[1])
-            except ValueError:
-                return CommandResult(message=f"Invalid plugin name '{tokens[1]}'")
-            if removed:
-                return CommandResult(message=f"Uninstalled plugin '{tokens[1]}'")
-            return CommandResult(message=f"Plugin '{tokens[1]}' not found")
-        plugins = load_plugins(settings, context.cwd, extra_roots=context.extra_plugin_roots)
-        if plugins:
-            return CommandResult(message=context.plugin_summary)
-        return CommandResult(message="Usage: /plugin [list|enable NAME|disable NAME|install PATH|uninstall NAME]")
 
     _MODE_LABELS = {"default": "Default", "plan": "Plan Mode", "full_auto": "Auto"}
 
@@ -1950,275 +1858,6 @@ def create_default_command_registry(
             )
         )
 
-    async def _autopilot_handler(args: str, context: CommandContext) -> CommandResult:
-        store = RepoAutopilotStore(context.cwd)
-        tokens = args.split()
-        action = tokens[0].lower() if tokens else "status"
-
-        def _render_card(card) -> str:
-            lines = [
-                f"{card.id} [{card.status}] score={card.score} {card.title}",
-                f"source={card.source_kind} ref={card.source_ref or '-'}",
-            ]
-            if card.labels:
-                lines.append(f"labels={', '.join(card.labels)}")
-            if card.score_reasons:
-                lines.append(f"reasons={', '.join(card.score_reasons[:4])}")
-            if card.body:
-                lines.append(_shorten_text(card.body, limit=220))
-            return "\n".join(lines)
-
-        if action == "status":
-            counts = store.stats()
-            active = store.pick_next_card()
-            lines = ["Autopilot queue status:"]
-            for status_name in (
-                "queued",
-                "accepted",
-                "preparing",
-                "running",
-                "verifying",
-                "pr_open",
-                "waiting_ci",
-                "repairing",
-                "completed",
-                "merged",
-                "failed",
-                "rejected",
-                "superseded",
-            ):
-                lines.append(f"- {status_name}: {counts.get(status_name, 0)}")
-            lines.append(f"- registry: {store.registry_path}")
-            lines.append(f"- journal: {store.journal_path}")
-            lines.append(f"- context: {store.context_path}")
-            if active is not None:
-                lines.append(f"- next: {active.id} {active.title} (score={active.score})")
-            return CommandResult(message="\n".join(lines))
-
-        if action == "list":
-            status = tokens[1].lower() if len(tokens) >= 2 else None
-            if status is not None and status not in {
-                "queued",
-                "accepted",
-                "preparing",
-                "running",
-                "verifying",
-                "pr_open",
-                "waiting_ci",
-                "repairing",
-                "completed",
-                "merged",
-                "failed",
-                "rejected",
-                "superseded",
-            }:
-                return CommandResult(message=f"Unknown autopilot status: {status}")
-            cards = store.list_cards(status=status)
-            if not cards:
-                return CommandResult(message="No autopilot cards.")
-            return CommandResult(message="\n\n".join(_render_card(card) for card in cards[:12]))
-
-        if action == "show" and len(tokens) >= 2:
-            card = store.get_card(tokens[1])
-            if card is None:
-                return CommandResult(message=f"No autopilot card found with ID: {tokens[1]}")
-            return CommandResult(message=_render_card(card))
-
-        if action == "next":
-            card = store.pick_next_card()
-            if card is None:
-                return CommandResult(message="No queued autopilot cards.")
-            return CommandResult(message=_render_card(card))
-
-        if action == "context":
-            content = store.load_active_context()
-            return CommandResult(message=content or "Active repo context is empty.")
-
-        if action == "journal":
-            limit = 8
-            if len(tokens) >= 2:
-                try:
-                    limit = max(1, min(30, int(tokens[1])))
-                except ValueError:
-                    return CommandResult(message="Usage: /autopilot journal [LIMIT]")
-            entries = store.load_journal(limit=limit)
-            if not entries:
-                return CommandResult(message="Repo journal is empty.")
-            lines = []
-            for entry in entries:
-                timestamp = datetime.fromtimestamp(entry.timestamp, tz=timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M UTC"
-                )
-                task_suffix = f" [{entry.task_id}]" if entry.task_id else ""
-                lines.append(f"{timestamp} {entry.kind}{task_suffix}: {entry.summary}")
-            return CommandResult(message="\n".join(lines))
-
-        if action == "add":
-            raw = args[len("add") :].strip()
-            if not raw:
-                return CommandResult(
-                    message=(
-                        "Usage: /autopilot add "
-                        "[idea|ohmo|issue|pr|claude] TITLE :: DETAILS"
-                    )
-                )
-            source_kind = "manual_idea"
-            source_map = {
-                "idea": "manual_idea",
-                "manual": "manual_idea",
-                "ohmo": "ohmo_request",
-                "issue": "github_issue",
-                "pr": "github_pr",
-                "claude": "claude_code_candidate",
-            }
-            if " " in raw:
-                first, remainder = raw.split(" ", 1)
-                mapped = source_map.get(first.lower())
-                if mapped is not None:
-                    source_kind = mapped
-                    raw = remainder.strip()
-            title, _, body = raw.partition("::")
-            if not title.strip():
-                return CommandResult(
-                    message=(
-                        "Usage: /autopilot add "
-                        "[idea|ohmo|issue|pr|claude] TITLE :: DETAILS"
-                    )
-                )
-            card, created = store.enqueue_card(
-                source_kind=source_kind,
-                title=title.strip(),
-                body=body.strip(),
-            )
-            status_word = "Queued" if created else "Refreshed"
-            return CommandResult(
-                message=f"{status_word} autopilot card {card.id} (score={card.score}): {card.title}"
-            )
-
-        if action in {"accept", "start", "complete", "reject", "fail"} and len(tokens) >= 2:
-            status_map = {
-                "accept": "accepted",
-                "start": "running",
-                "complete": "completed",
-                "fail": "failed",
-                "reject": "rejected",
-            }
-            note = ""
-            if len(tokens) >= 3:
-                note = args.split(maxsplit=2)[2]
-            try:
-                card = store.update_status(tokens[1], status=status_map[action], note=note or None)
-            except ValueError as exc:
-                return CommandResult(message=str(exc))
-            return CommandResult(message=f"{card.id} -> {card.status}: {card.title}")
-
-        if action == "run-next":
-            try:
-                result = await store.run_next()
-            except ValueError as exc:
-                return CommandResult(message=str(exc))
-            return CommandResult(
-                message=(
-                    f"{result.card_id} -> {result.status}\n"
-                    f"run report: {result.run_report_path}\n"
-                    f"verification report: {result.verification_report_path}"
-                )
-            )
-
-        if action == "tick":
-            try:
-                result = await store.tick()
-            except ValueError as exc:
-                return CommandResult(message=str(exc))
-            if result is None:
-                return CommandResult(message="Autopilot tick completed with no execution.")
-            return CommandResult(
-                message=(
-                    f"Autopilot tick executed {result.card_id} -> {result.status}\n"
-                    f"run report: {result.run_report_path}\n"
-                    f"verification report: {result.verification_report_path}"
-                )
-            )
-
-        if action == "install-cron":
-            names = store.install_default_cron()
-            return CommandResult(message="Installed autopilot cron jobs: " + ", ".join(names))
-
-        if action == "export-dashboard":
-            output = tokens[1] if len(tokens) >= 2 else None
-            path = store.export_dashboard(output)
-            return CommandResult(message=f"Exported autopilot dashboard: {path}")
-
-        if action == "scan":
-            if len(tokens) < 2:
-                return CommandResult(
-                    message="Usage: /autopilot scan [issues|prs|claude-code|all] [LIMIT]"
-                )
-            target = tokens[1].lower()
-            limit = 10
-            if len(tokens) >= 3:
-                try:
-                    limit = max(1, min(50, int(tokens[2])))
-                except ValueError:
-                    return CommandResult(
-                        message="Usage: /autopilot scan [issues|prs|claude-code|all] [LIMIT]"
-                    )
-            try:
-                if target == "issues":
-                    cards = store.scan_github_issues(limit=limit)
-                    return CommandResult(message=f"Scanned {len(cards)} GitHub issues into autopilot.")
-                if target == "prs":
-                    cards = store.scan_github_prs(limit=limit)
-                    return CommandResult(message=f"Scanned {len(cards)} GitHub PRs into autopilot.")
-                if target == "claude-code":
-                    cards = store.scan_claude_code_candidates(limit=limit)
-                    return CommandResult(
-                        message=f"Scanned {len(cards)} claude-code candidates into autopilot."
-                    )
-                if target == "all":
-                    counts = store.scan_all_sources(issue_limit=limit, pr_limit=limit)
-                    return CommandResult(message=f"Scanned all sources: {json.dumps(counts)}")
-            except ValueError as exc:
-                return CommandResult(message=str(exc))
-            return CommandResult(
-                message="Usage: /autopilot scan [issues|prs|claude-code|all] [LIMIT]"
-            )
-
-        return CommandResult(
-            message=(
-                "Usage: /autopilot "
-                "[status|list [STATUS]|show ID|next|context|journal [LIMIT]|"
-                "add [idea|ohmo|issue|pr|claude] TITLE :: DETAILS|"
-                "accept ID|start ID|complete ID [NOTE]|fail ID [NOTE]|reject ID [NOTE]|"
-                "run-next|tick|install-cron|export-dashboard [OUTPUT]|"
-                "scan [issues|prs|claude-code|all] [LIMIT]]"
-            )
-        )
-
-    async def _ship_handler(args: str, context: CommandContext) -> CommandResult:
-        raw = args.strip()
-        if not raw:
-            return CommandResult(message="Usage: /ship TITLE :: DETAILS")
-        title, _, body = raw.partition("::")
-        if not title.strip():
-            return CommandResult(message="Usage: /ship TITLE :: DETAILS")
-        store = RepoAutopilotStore(context.cwd)
-        card, _ = store.enqueue_card(
-            source_kind="ohmo_request",
-            title=title.strip(),
-            body=body.strip(),
-        )
-        try:
-            result = await store.run_card(card.id)
-        except ValueError as exc:
-            return CommandResult(message=str(exc))
-        return CommandResult(
-            message=(
-                f"{result.card_id} -> {result.status}\n"
-                f"run report: {result.run_report_path}\n"
-                f"verification report: {result.verification_report_path}"
-            )
-        )
 
     registry.register(SlashCommand("help", "Show available commands", _help_handler))
     registry.register(
@@ -2234,7 +1873,6 @@ def create_default_command_registry(
     registry.register(SlashCommand("usage", "Show usage and token estimates", _usage_handler))
     registry.register(SlashCommand("stats", "Show session statistics", _stats_handler))
     registry.register(SlashCommand("memory", "Inspect and manage project memory", _memory_handler))
-    registry.register(SlashCommand("hooks", "Show configured hooks", _hooks_handler))
     registry.register(SlashCommand("resume", "Restore the latest saved session", _resume_handler))
     registry.register(SlashCommand("session", "Inspect the current session storage", _session_handler))
     registry.register(SlashCommand("export", "Export the current transcript", _export_handler))
@@ -2293,33 +1931,6 @@ def create_default_command_registry(
     )
     registry.register(
         SlashCommand(
-            "mcp",
-            "Show MCP status",
-            _mcp_handler,
-            remote_invocable=False,
-            remote_admin_opt_in=True,
-        )
-    )
-    registry.register(
-        SlashCommand(
-            "plugin",
-            "Manage plugins",
-            _plugin_handler,
-            remote_invocable=False,
-            remote_admin_opt_in=True,
-        )
-    )
-    registry.register(
-        SlashCommand(
-            "reload-plugins",
-            "Reload plugin discovery for this workspace",
-            _reload_plugins_handler,
-            remote_invocable=False,
-            remote_admin_opt_in=True,
-        )
-    )
-    registry.register(
-        SlashCommand(
             "permissions",
             "Show or update permission mode; Tab in the TUI opens the mode picker",
             _permissions_handler,
@@ -2341,7 +1952,7 @@ def create_default_command_registry(
     registry.register(SlashCommand("passes", "Show or update reasoning pass count", _passes_handler))
     registry.register(SlashCommand("turns", "Show or update maximum agentic turn count", _turns_handler))
     registry.register(SlashCommand("continue", "Continue the previous tool loop if it was interrupted", _continue_handler))
-    registry.register(SlashCommand("stop", "Interrupt the running turn from TUI/ohmo channels", _stop_handler))
+    registry.register(SlashCommand("stop", "Interrupt the running turn", _stop_handler))
     registry.register(
         SlashCommand(
             "provider",
@@ -2378,16 +1989,6 @@ def create_default_command_registry(
     registry.register(SlashCommand("agents", "List or inspect agent and teammate tasks", _agents_handler))
     registry.register(SlashCommand("subagents", "Show subagent usage and inspect worker tasks", _agents_handler))
     registry.register(SlashCommand("tasks", "Manage background tasks", _tasks_handler))
-    registry.register(SlashCommand("autopilot", "Manage repo autopilot intake and context", _autopilot_handler))
-    registry.register(
-        SlashCommand(
-            "ship",
-            "Queue and execute an ohmo-driven repo task",
-            _ship_handler,
-            remote_invocable=False,
-            remote_admin_opt_in=True,
-        )
-    )
 
     for plugin_command in plugin_commands or ():
         if not plugin_command.user_invocable:

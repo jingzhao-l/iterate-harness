@@ -298,7 +298,7 @@ async def _rg_grep_file(
 
 
 def _timeout_marker(timeout_seconds: int) -> str:
-    return f"__OPENHARNESS_GREP_TIMEOUT__:{timeout_seconds}"
+    return f"__ITERATE_GREP_TIMEOUT__:{timeout_seconds}"
 
 
 async def _collect_rg_matches(

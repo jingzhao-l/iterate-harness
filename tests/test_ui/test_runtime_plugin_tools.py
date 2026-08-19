@@ -48,7 +48,7 @@ def _write_tool_plugin(plugins_root: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_build_runtime_registers_enabled_plugin_tools(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
     plugins_root = project / ".iterate-harness" / "plugins"
     plugins_root.mkdir(parents=True)

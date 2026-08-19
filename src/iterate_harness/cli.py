@@ -135,10 +135,8 @@ def _dry_run_command_behavior(name: str) -> dict[str, str]:
         "cost",
         "usage",
         "stats",
-        "hooks",
         "onboarding",
         "skills",
-        "mcp",
         "doctor",
         "diff",
         "branch",
@@ -165,8 +163,6 @@ def _dry_run_command_behavior(name: str) -> dict[str, str]:
         "logout",
         "feedback",
         "config",
-        "plugin",
-        "reload-plugins",
         "permissions",
         "plan",
         "fast",
@@ -186,8 +182,6 @@ def _dry_run_command_behavior(name: str) -> dict[str, str]:
         "agents",
         "subagents",
         "tasks",
-        "autopilot",
-        "ship",
         "memory",
     }
     if name in read_only:
@@ -754,7 +748,7 @@ def _version_callback(value: bool) -> None:
 app = typer.Typer(
     name="iterate_harness",
     help=(
-        "Oh my Harness! An AI-powered coding assistant.\n\n"
+        "iterate — the multi-round review & fix harness for AI coding workflows.\n\n"
         "Starts an interactive session by default, use -p/--print for non-interactive output."
     ),
     add_completion=False,
@@ -767,80 +761,15 @@ app = typer.Typer(
 # Subcommands
 # ---------------------------------------------------------------------------
 
-mcp_app = typer.Typer(name="mcp", help="Manage MCP servers")
-plugin_app = typer.Typer(name="plugin", help="Manage plugins")
 auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
-cron_app = typer.Typer(name="cron", help="Manage cron scheduler and jobs")
-autopilot_app = typer.Typer(name="autopilot", help="Manage repo autopilot")
 iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/report)")
 web_app = typer.Typer(name="web", help="WebUI management console (design §17)")
 
-app.add_typer(mcp_app)
-app.add_typer(plugin_app)
 app.add_typer(auth_app)
 app.add_typer(provider_app)
-app.add_typer(cron_app)
-app.add_typer(autopilot_app)
 app.add_typer(iterate_app)
 app.add_typer(web_app)
-
-
-# ---- mcp subcommands ----
-
-@mcp_app.command("list")
-def mcp_list() -> None:
-    """List configured MCP servers."""
-    from iterate_harness.config import load_settings
-    from iterate_harness.mcp.config import load_mcp_server_configs
-    from iterate_harness.plugins import load_plugins
-
-    settings = load_settings()
-    plugins = load_plugins(settings, str(Path.cwd()))
-    configs = load_mcp_server_configs(settings, plugins)
-    if not configs:
-        print("No MCP servers configured.")
-        return
-    for name, cfg in configs.items():
-        transport = cfg.get("transport", cfg.get("command", "unknown"))
-        print(f"  {name}: {transport}")
-
-
-@mcp_app.command("add")
-def mcp_add(
-    name: str = typer.Argument(..., help="Server name"),
-    config_json: str = typer.Argument(..., help="Server config as JSON string"),
-) -> None:
-    """Add an MCP server configuration."""
-    from iterate_harness.config import load_settings, save_settings
-
-    settings = load_settings()
-    try:
-        cfg = json.loads(config_json)
-    except json.JSONDecodeError as exc:
-        print(f"Invalid JSON: {exc}", file=sys.stderr)
-        raise typer.Exit(1)
-    if not isinstance(settings.mcp_servers, dict):
-        settings.mcp_servers = {}
-    settings.mcp_servers[name] = cfg
-    save_settings(settings)
-    print(f"Added MCP server: {name}")
-
-
-@mcp_app.command("remove")
-def mcp_remove(
-    name: str = typer.Argument(..., help="Server name to remove"),
-) -> None:
-    """Remove an MCP server configuration."""
-    from iterate_harness.config import load_settings, save_settings
-
-    settings = load_settings()
-    if not isinstance(settings.mcp_servers, dict) or name not in settings.mcp_servers:
-        print(f"MCP server not found: {name}", file=sys.stderr)
-        raise typer.Exit(1)
-    del settings.mcp_servers[name]
-    save_settings(settings)
-    print(f"Removed MCP server: {name}")
 
 
 # ---- iterate subcommands ----
@@ -1172,136 +1101,6 @@ def iterate_run(
         if prev_cwd is not None:
             import os
             os.chdir(prev_cwd)
-
-
-schedule_app = typer.Typer(help="Manage the scheduled changed-only quick review (cron)")
-
-hook_app = typer.Typer(help="Manage the pre-commit changed-only quick-review git hook")
-
-
-@hook_app.command("install")
-def iterate_hook_install(
-    fail_on: str = typer.Option(
-        "high", "--fail-on", help="Block the commit at this severity (none|low|medium|high|critical)"
-    ),
-) -> None:
-    """Install the managed pre-commit hook for this repo."""
-    from iterate_harness.iterate import git_hook
-
-    try:
-        target = git_hook.install_hook(str(Path.cwd()), fail_on=fail_on)
-    except git_hook.HookError as exc:
-        print(f"Rejected: {exc}", file=sys.stderr)
-        raise typer.Exit(1) from exc
-    print(f"Installed pre-commit hook: {target}")
-    print(f"  review: 1 round, changed-only vs HEAD, fail-on {fail_on}")
-    print("  skip once: ITERATE_SKIP_HOOK=1 git commit … (or --no-verify)")
-
-
-@hook_app.command("uninstall")
-def iterate_hook_uninstall() -> None:
-    """Remove the managed pre-commit hook (foreign hooks are refused)."""
-    from iterate_harness.iterate import git_hook
-
-    try:
-        removed = git_hook.uninstall_hook(str(Path.cwd()))
-    except git_hook.HookError as exc:
-        print(f"Rejected: {exc}", file=sys.stderr)
-        raise typer.Exit(1) from exc
-    print("Removed pre-commit hook." if removed else "No pre-commit hook installed.")
-
-
-@hook_app.command("status")
-def iterate_hook_status() -> None:
-    """Show whether the pre-commit hook is installed/managed."""
-    from iterate_harness.iterate import git_hook
-
-    info = git_hook.hook_status(str(Path.cwd()))
-    if info.get("error"):
-        print(info["error"])
-        return
-    if not info["installed"]:
-        print(f"pre-commit hook: not installed ({info.get('path', '?')})")
-        return
-    state = "managed" if info["managed"] else "FOREIGN (not managed by iterate)"
-    print(f"pre-commit hook: {state} — {info['path']}")
-    print(f"  skip once: {info['skippable']}")
-
-
-@schedule_app.command("add")
-def iterate_schedule_add(
-    schedule: str = typer.Argument(..., help="5-field cron expression"),
-    ref: str = typer.Option("HEAD", "--ref", help="Git ref used as the changed baseline"),
-    rounds: int = typer.Option(3, "--rounds", min=1, max=20, help="Review round cap"),
-    mode: str = typer.Option("dry-run", "--mode", help="dry-run|normal"),
-    timeout: int = typer.Option(
-        3600, "--timeout", min=1, max=7200, help="Per-run timeout in seconds"
-    ),
-    timezone: str = typer.Option(
-        "", "--timezone", help="IANA zone for the schedule (e.g. Asia/Shanghai); default UTC"
-    ),
-) -> None:
-    """Register the scheduled quick-review cron job for this repo."""
-    from iterate_harness.iterate import batch as iterate_batch
-
-    try:
-        job = iterate_batch.install_schedule(
-            cwd=str(Path.cwd()),
-            schedule=schedule,
-            ref=ref,
-            rounds=rounds,
-            mode=mode,
-            timeout=timeout,
-            timezone=timezone or None,
-        )
-    except ValueError as exc:
-        print(f"Rejected: {exc}", file=sys.stderr)
-        raise typer.Exit(1) from exc
-    zone = job.get("timezone") or "UTC"
-    print(f"Scheduled {job['name']}: '{schedule}' ({zone})")
-    print(f"  command: {job['command']}")
-    print(f"  cwd: {job['cwd']}")
-    print(f"  next run: {job.get('next_run', '?')} (UTC-normalized)")
-    print("Start the scheduler with `ih cron start` if it is not running.")
-
-
-@schedule_app.command("remove")
-def iterate_schedule_remove() -> None:
-    """Remove the scheduled quick-review cron job."""
-    from iterate_harness.iterate import batch as iterate_batch
-
-    if iterate_batch.remove_schedule():
-        print("Scheduled quick-review job removed.")
-    else:
-        print("No scheduled quick-review job was registered.")
-        raise typer.Exit(1)
-
-
-@schedule_app.command("status")
-def iterate_schedule_status() -> None:
-    """Show the scheduled quick-review job and its last execution."""
-    from iterate_harness.iterate import batch as iterate_batch
-
-    info = iterate_batch.schedule_status()
-    if info is None:
-        print("No scheduled quick-review job registered (`ih iterate schedule add ...`).")
-        raise typer.Exit(1)
-    job = info["job"]
-    print(f"job: {job['name']}  enabled={job.get('enabled')}")
-    print(f"schedule: {job['schedule']} (UTC)  timeout: {job.get('timeout', 300)}s")
-    print(f"command: {job['command']}")
-    print(f"cwd: {job['cwd']}")
-    print(f"next run: {job.get('next_run', '?')}  last run: {job.get('last_run', '-')}")
-    last = info.get("lastRun")
-    if last:
-        print(
-            f"last execution: {last.get('status')} (rc={last.get('returncode')}) "
-            f"at {last.get('started_at')}"
-        )
-
-
-iterate_app.add_typer(schedule_app, name="schedule")
-iterate_app.add_typer(hook_app, name="hook")
 
 
 @iterate_app.command("batch")
@@ -1665,422 +1464,37 @@ def web_serve(
     )
 
 
-# ---- plugin subcommands ----
-
-@plugin_app.command("list")
-def plugin_list() -> None:
-    """List installed plugins."""
-    from iterate_harness.config import load_settings
-    from iterate_harness.plugins import load_plugins
-
-    settings = load_settings()
-    plugins = load_plugins(settings, str(Path.cwd()))
-    if not plugins:
-        print("No plugins installed.")
-        return
-    for plugin in plugins:
-        status = "enabled" if plugin.enabled else "disabled"
-        print(f"  {plugin.name} [{status}] - {plugin.description or ''}")
-
-
-@plugin_app.command("install")
-def plugin_install(
-    source: str = typer.Argument(..., help="Plugin source (path or URL)"),
-) -> None:
-    """Install a plugin from a source path."""
-    from iterate_harness.plugins.installer import install_plugin_from_path
-
-    result = install_plugin_from_path(source)
-    print(f"Installed plugin: {result}")
-
-
-@plugin_app.command("uninstall")
-def plugin_uninstall(
-    name: str = typer.Argument(..., help="Plugin name to uninstall"),
-) -> None:
-    """Uninstall a plugin."""
-    from iterate_harness.plugins.installer import uninstall_plugin
-
-    try:
-        uninstall_plugin(name)
-    except ValueError as exc:
-        raise typer.BadParameter("invalid plugin name") from exc
-    print(f"Uninstalled plugin: {name}")
-
-
-# ---- cron subcommands ----
-
-@cron_app.command("start")
-def cron_start() -> None:
-    """Start the cron scheduler daemon."""
-    from iterate_harness.services.cron_scheduler import is_scheduler_running, start_daemon
-
-    if is_scheduler_running():
-        print("Cron scheduler is already running.")
-        return
-    pid = start_daemon()
-    print(f"Cron scheduler started (pid={pid})")
-
-
-@cron_app.command("stop")
-def cron_stop() -> None:
-    """Stop the cron scheduler daemon."""
-    from iterate_harness.services.cron_scheduler import stop_scheduler
-
-    if stop_scheduler():
-        print("Cron scheduler stopped.")
-    else:
-        print("Cron scheduler is not running.")
-
-
-@cron_app.command("status")
-def cron_status_cmd() -> None:
-    """Show cron scheduler status and job summary."""
-    from iterate_harness.services.cron_scheduler import scheduler_status
-
-    status = scheduler_status()
-    state = "running" if status["running"] else "stopped"
-    print(f"Scheduler: {state}" + (f" (pid={status['pid']})" if status["pid"] else ""))
-    print(f"Jobs:      {status['enabled_jobs']} enabled / {status['total_jobs']} total")
-    print(f"Log:       {status['log_file']}")
-
-
-@cron_app.command("list")
-def cron_list_cmd() -> None:
-    """List all registered cron jobs with schedule and status."""
-    from iterate_harness.services.cron import load_cron_jobs
-
-    jobs = load_cron_jobs()
-    if not jobs:
-        print("No cron jobs configured.")
-        return
-    for job in jobs:
-        enabled = "on " if job.get("enabled", True) else "off"
-        last = job.get("last_run", "never")
-        if last != "never":
-            last = last[:19]  # trim to readable datetime
-        last_status = job.get("last_status", "")
-        status_indicator = f" [{last_status}]" if last_status else ""
-        print(f"  [{enabled}] {job['name']}  {job.get('schedule', '?')}")
-        print(f"        cmd: {job['command']}")
-        print(f"        last: {last}{status_indicator}  next: {job.get('next_run', 'n/a')[:19]}")
-
-
-@cron_app.command("toggle")
-def cron_toggle_cmd(
-    name: str = typer.Argument(..., help="Cron job name"),
-    enabled: bool = typer.Argument(..., help="true to enable, false to disable"),
-) -> None:
-    """Enable or disable a cron job."""
-    from iterate_harness.services.cron import set_job_enabled
-
-    if not set_job_enabled(name, enabled):
-        print(f"Cron job not found: {name}")
-        raise typer.Exit(1)
-    state = "enabled" if enabled else "disabled"
-    print(f"Cron job '{name}' is now {state}")
-
-
-@cron_app.command("history")
-def cron_history_cmd(
-    name: str | None = typer.Argument(None, help="Filter by job name"),
-    limit: int = typer.Option(20, "--limit", "-n", help="Number of entries"),
-) -> None:
-    """Show cron execution history."""
-    from iterate_harness.services.cron_scheduler import load_history
-
-    entries = load_history(limit=limit, job_name=name)
-    if not entries:
-        print("No execution history.")
-        return
-    for entry in entries:
-        ts = entry.get("started_at", "?")[:19]
-        status = entry.get("status", "?")
-        rc = entry.get("returncode", "?")
-        print(f"  {ts}  {entry.get('name', '?')}  {status} (rc={rc})")
-        stderr = entry.get("stderr", "").strip()
-        if stderr and status != "success":
-            for line in stderr.splitlines()[:3]:
-                print(f"    stderr: {line}")
-
-
-@cron_app.command("logs")
-def cron_logs_cmd(
-    lines: int = typer.Option(30, "--lines", "-n", help="Number of lines to show"),
-) -> None:
-    """Show recent cron scheduler log output."""
-    from iterate_harness.config.paths import get_logs_dir
-
-    log_path = get_logs_dir() / "cron_scheduler.log"
-    if not log_path.exists():
-        print("No scheduler log found. Start the scheduler with: ih cron start")
-        return
-    content = log_path.read_text(encoding="utf-8", errors="replace")
-    tail = content.splitlines()[-lines:]
-    for line in tail:
-        print(line)
-
-
-# ---- autopilot subcommands ----
-
-@autopilot_app.command("status")
-def autopilot_status_cmd(
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-) -> None:
-    """Show repo autopilot queue status."""
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    store = RepoAutopilotStore(cwd)
-    counts = store.stats()
-    print("Autopilot queue status:")
-    for status_name in (
-        "queued",
-        "accepted",
-        "preparing",
-        "running",
-        "verifying",
-        "pr_open",
-        "waiting_ci",
-        "repairing",
-        "completed",
-        "merged",
-        "failed",
-        "rejected",
-        "superseded",
-    ):
-        print(f"  {status_name}: {counts.get(status_name, 0)}")
-    next_card = store.pick_next_card()
-    if next_card is not None:
-        print(f"  next: {next_card.id} {next_card.title} (score={next_card.score})")
-    print(f"  registry: {store.registry_path}")
-    print(f"  journal: {store.journal_path}")
-    print(f"  context: {store.context_path}")
-
-
-@autopilot_app.command("list")
-def autopilot_list_cmd(
-    status: str | None = typer.Argument(None, help="Optional status filter"),
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-) -> None:
-    """List repo autopilot cards."""
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    store = RepoAutopilotStore(cwd)
-    cards = store.list_cards(status=status) if status else store.list_cards()
-    if not cards:
-        print("No autopilot cards.")
-        return
-    for card in cards[:20]:
-        print(f"{card.id} [{card.status}] score={card.score} {card.title}")
-        print(f"  source={card.source_kind} ref={card.source_ref or '-'}")
-        if card.body:
-            print(f"  {_safe_short(card.body)}")
-
-
-@autopilot_app.command("add")
-def autopilot_add_cmd(
-    source: str = typer.Argument("manual_idea", help="Source kind: idea, ohmo, issue, pr, claude"),
-    title: str = typer.Argument(..., help="Task title"),
-    body: str = typer.Option("", "--body", help="Task body/details"),
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-) -> None:
-    """Add one repo autopilot card."""
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    source_map = {
-        "idea": "manual_idea",
-        "manual": "manual_idea",
-        "manual_idea": "manual_idea",
-        "ohmo": "ohmo_request",
-        "ohmo_request": "ohmo_request",
-        "issue": "github_issue",
-        "github_issue": "github_issue",
-        "pr": "github_pr",
-        "github_pr": "github_pr",
-        "claude": "claude_code_candidate",
-        "claude_code_candidate": "claude_code_candidate",
-    }
-    source_kind = source_map.get(source.lower())
-    if source_kind is None:
-        print(f"Unknown source kind: {source}", file=sys.stderr)
-        raise typer.Exit(1)
-    store = RepoAutopilotStore(cwd)
-    card, created = store.enqueue_card(source_kind=source_kind, title=title, body=body)
-    state = "Queued" if created else "Refreshed"
-    print(f"{state} {card.id} (score={card.score}): {card.title}")
-
-
-@autopilot_app.command("context")
-def autopilot_context_cmd(
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-) -> None:
-    """Print the synthesized active repo context."""
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    store = RepoAutopilotStore(cwd)
-    print(store.load_active_context())
-
-
-@autopilot_app.command("journal")
-def autopilot_journal_cmd(
-    limit: int = typer.Option(12, "--limit", "-n", help="Number of entries"),
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-) -> None:
-    """Print the recent repo autopilot journal."""
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    store = RepoAutopilotStore(cwd)
-    entries = store.load_journal(limit=limit)
-    if not entries:
-        print("Repo journal is empty.")
-        return
-    for entry in entries:
-        print(f"{entry.kind} {entry.task_id or '-'} {entry.summary}")
-
-
-@autopilot_app.command("scan")
-def autopilot_scan_cmd(
-    target: str = typer.Argument(..., help="issues, prs, claude-code, or all"),
-    limit: int = typer.Option(10, "--limit", "-n", help="Number of items"),
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-) -> None:
-    """Scan one or more autopilot intake sources."""
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    store = RepoAutopilotStore(cwd)
-    if target == "issues":
-        print(f"Scanned {len(store.scan_github_issues(limit=limit))} GitHub issues.")
-        return
-    if target == "prs":
-        print(f"Scanned {len(store.scan_github_prs(limit=limit))} GitHub PRs.")
-        return
-    if target == "claude-code":
-        print(f"Scanned {len(store.scan_claude_code_candidates(limit=limit))} claude-code candidates.")
-        return
-    if target == "all":
-        print(json.dumps(store.scan_all_sources(issue_limit=limit, pr_limit=limit), ensure_ascii=False))
-        return
-    print(f"Unknown scan target: {target}", file=sys.stderr)
-    raise typer.Exit(1)
-
-
-@autopilot_app.command("run-next")
-def autopilot_run_next_cmd(
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-    model: str | None = typer.Option(None, "--model", help="Override execution model"),
-    max_turns: int | None = typer.Option(None, "--max-turns", help="Override execution max turns"),
-    permission_mode: str | None = typer.Option(None, "--permission-mode", help="Override execution permission mode"),
-) -> None:
-    """Run the highest-priority queued autopilot card end-to-end."""
-    import asyncio
-
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    try:
-        result = asyncio.run(
-            RepoAutopilotStore(cwd).run_next(
-                model=model,
-                max_turns=max_turns,
-                permission_mode=permission_mode,
-            )
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        raise typer.Exit(1)
-    print(f"{result.card_id} -> {result.status}")
-    print(f"run report: {result.run_report_path}")
-    print(f"verification report: {result.verification_report_path}")
-
-
-@autopilot_app.command("tick")
-def autopilot_tick_cmd(
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-    model: str | None = typer.Option(None, "--model", help="Override execution model"),
-    max_turns: int | None = typer.Option(None, "--max-turns", help="Override execution max turns"),
-    permission_mode: str | None = typer.Option(None, "--permission-mode", help="Override execution permission mode"),
-    limit: int = typer.Option(10, "--limit", "-n", help="Scan limit for issues/PRs"),
-) -> None:
-    """Scan sources and, if idle, run the next queued autopilot task."""
-    import asyncio
-
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    try:
-        result = asyncio.run(
-            RepoAutopilotStore(cwd).tick(
-                model=model,
-                max_turns=max_turns,
-                permission_mode=permission_mode,
-                issue_limit=limit,
-                pr_limit=limit,
-            )
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        raise typer.Exit(1)
-    if result is None:
-        print("Autopilot tick completed with no execution.")
-        return
-    print(f"{result.card_id} -> {result.status}")
-    print(f"run report: {result.run_report_path}")
-    print(f"verification report: {result.verification_report_path}")
-
-
-@autopilot_app.command("install-cron")
-def autopilot_install_cron_cmd(
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-) -> None:
-    """Install default cron jobs for repo autopilot scan/tick."""
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    names = RepoAutopilotStore(cwd).install_default_cron()
-    print("Installed cron jobs: " + ", ".join(names))
-
-
-@autopilot_app.command("export-dashboard")
-def autopilot_export_dashboard_cmd(
-    cwd: str = typer.Option(str(Path.cwd()), "--cwd", help="Repository root"),
-    output: str | None = typer.Option(None, "--output", help="Dashboard output directory"),
-) -> None:
-    """Export a static autopilot kanban site for GitHub Pages."""
-    from iterate_harness.autopilot import RepoAutopilotStore
-
-    path = RepoAutopilotStore(cwd).export_dashboard(output)
-    print(f"Exported autopilot dashboard: {path}")
-
-
 # ---- auth subcommands ----
 
 # Mapping from provider name to human-readable label for interactive prompts.
+# Aligned with the canonical provider names in api/registry.py — the iterate
+# review/fix loop only needs direct API-key providers (no subscription/OAuth flows).
 _PROVIDER_LABELS: dict[str, str] = {
     "anthropic": "Anthropic (Claude API)",
-    "anthropic_claude": "Claude subscription (Claude CLI)",
     "openai": "OpenAI / compatible",
-    "openai_codex": "OpenAI Codex subscription (Codex CLI)",
-    "copilot": "GitHub Copilot",
-    "dashscope": "Alibaba DashScope",
-    "bedrock": "AWS Bedrock",
-    "vertex": "Google Vertex AI",
+    "deepseek": "DeepSeek",
+    "dashscope": "Alibaba DashScope (Qwen)",
     "moonshot": "Moonshot (Kimi)",
     "gemini": "Google Gemini",
     "minimax": "MiniMax",
+    "zhipu": "Zhipu AI (GLM)",
+    "siliconflow": "SiliconFlow",
+    "nvidia": "NVIDIA NIM",
     "modelscope": "ModelScope",
-    "local": "Local (openai-compatible)",
     "ollama": "Ollama (local)",
 }
 
 _AUTH_SOURCE_LABELS: dict[str, str] = {
     "anthropic_api_key": "Anthropic API key",
     "openai_api_key": "OpenAI API key",
-    "codex_subscription": "Codex subscription",
-    "claude_subscription": "Claude subscription",
-    "copilot_oauth": "GitHub Copilot OAuth",
+    "deepseek_api_key": "DeepSeek API key",
     "dashscope_api_key": "DashScope API key",
-    "bedrock_api_key": "Bedrock credentials",
-    "vertex_api_key": "Vertex credentials",
     "moonshot_api_key": "Moonshot API key",
     "gemini_api_key": "Gemini API key",
     "minimax_api_key": "MiniMax API key",
+    "zhipu_api_key": "Zhipu AI API key",
+    "siliconflow_api_key": "SiliconFlow API key",
+    "nvidia_api_key": "NVIDIA API key",
     "modelscope_api_key": "ModelScope API key",
     "local": "Local endpoint (no API key)",
 }
@@ -2228,8 +1642,14 @@ def _select_setup_workflow(
 ) -> str:
     """Render the top-level `ih setup` workflow picker with richer hints."""
     hints = {
-        "claude-api": ("Claude / Kimi / GLM / MiniMax", "fg:#7aa2f7"),
-        "openai-compatible": ("OpenAI / OpenRouter", "fg:#9ece6a"),
+        "claude-api": ("Claude / Kimi / GLM", "fg:#7aa2f7"),
+        "openai-compatible": ("OpenAI / compatible", "fg:#9ece6a"),
+        "deepseek": ("DeepSeek", "fg:#4fd6be"),
+        "zhipu": ("Zhipu GLM", "fg:#7aa2f7"),
+        "siliconflow": ("SiliconFlow", "fg:#9ece6a"),
+        "qwen": ("Qwen / DashScope", "fg:#bb9af7"),
+        "modelscope": ("ModelScope", "fg:#e0af68"),
+        "ollama": ("Ollama / local", "fg:#4fd6be"),
     }
 
     if _can_use_questionary():
@@ -2480,108 +1900,54 @@ def _maybe_update_profile_auth(manager, profile_name: str) -> bool:
     return True
 
 
-def _maybe_update_default_model_for_provider(provider: str) -> None:
-    """Keep the active model in-family after switching auth providers."""
-    from iterate_harness.auth.manager import AuthManager
-
-    manager = AuthManager()
-    profile_name = {
-        "openai_codex": "codex",
-        "anthropic_claude": "claude-subscription",
-    }.get(provider)
-    if profile_name is None:
-        return
-    profile = manager.list_profiles()[profile_name]
-    model = profile.resolved_model.lower()
-    target_model = None
-    if provider == "openai_codex" and not model.startswith(("gpt-", "o1", "o3", "o4")):
-        target_model = "gpt-5.4"
-    elif provider == "anthropic_claude" and not model.startswith("claude-"):
-        target_model = "sonnet"
-    if not target_model:
-        return
-    manager.update_profile(profile_name, default_model=target_model, last_model=target_model)
-
-
-def _bind_external_provider(provider: str) -> None:
-    """Bind a provider to credentials managed by an external CLI."""
-    from iterate_harness.auth.external import default_binding_for_provider, load_external_credential
-    from iterate_harness.auth.storage import store_external_binding
-
-    binding = default_binding_for_provider(provider)
-    try:
-        credential = load_external_credential(
-            binding,
-            refresh_if_needed=(provider == "anthropic_claude"),
-        )
-    except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr, flush=True)
-        raise typer.Exit(1)
-
-    profile_label = credential.profile_label or binding.profile_label
-    store_external_binding(
-        binding.__class__(
-            provider=binding.provider,
-            source_path=binding.source_path,
-            source_kind=binding.source_kind,
-            managed_by=binding.managed_by,
-            profile_label=profile_label,
-        )
-    )
-
-    _maybe_update_default_model_for_provider(provider)
-    label = _PROVIDER_LABELS.get(provider, provider)
-    profile_name = {
-        "openai_codex": "codex",
-        "anthropic_claude": "claude-subscription",
-    }[provider]
-    print(f"{label} bound from {credential.source_path}.", flush=True)
-    print(f"Use `ih provider use {profile_name}` to activate it.", flush=True)
-
-
 def _login_provider(provider: str) -> None:
-    """Authenticate or bind the given provider."""
+    """Authenticate the given provider with its API key."""
     from iterate_harness.auth.flows import ApiKeyFlow
     from iterate_harness.auth.manager import AuthManager
     from iterate_harness.auth.storage import store_credential
 
     manager = AuthManager()
 
-    if provider == "copilot":
-        _run_copilot_login()
-        return
-
-    if provider in ("openai_codex", "anthropic_claude"):
-        _bind_external_provider(provider)
-        return
-
     if provider in ("local", "ollama"):
-        print(f"{provider} is a local endpoint; no API key required.", flush=True)
+        # Local endpoints (Ollama) need no API key — activate the profile and
+        # point the user at `ih setup` instead of leaving a dead-end.
+        if "ollama" in manager.list_profiles():
+            manager.use_profile("ollama")
+            print(
+                f"{provider} runs on a local endpoint (no API key required). "
+                "Activated profile 'ollama'. Run `ih setup ollama` to pick a model.",
+                flush=True,
+            )
+        else:
+            print(
+                f"{provider} runs on a local endpoint (no API key required). "
+                "Run `ih setup` to configure a local profile.",
+                flush=True,
+            )
         return
 
-    if provider in ("anthropic", "openai", "dashscope", "bedrock", "vertex", "moonshot", "gemini", "minimax", "modelscope"):
-        label = _PROVIDER_LABELS.get(provider, provider)
-        flow = ApiKeyFlow(provider=provider, prompt_text=f"Enter your {label} API key")
-        try:
-            key = flow.run()
-        except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            raise typer.Exit(1)
-        store_credential(provider, "api_key", key)
-        stored = False
-        try:
-            manager.store_credential(provider, "api_key", key)
-            stored = True
-        except Exception as exc:
-            log.error("AuthManager store failed for %s: %s", provider, exc)
-        if not stored:
-            print(f"Failed to save {label} API key.", file=sys.stderr)
-            raise typer.Exit(1)
-        print(f"{label} API key saved.", flush=True)
-        return
+    if provider not in _PROVIDER_LABELS:
+        print(f"Unknown provider: {provider!r}. Known: {', '.join(_PROVIDER_LABELS)}", file=sys.stderr)
+        raise typer.Exit(1)
 
-    print(f"Unknown provider: {provider!r}. Known: {', '.join(_PROVIDER_LABELS)}", file=sys.stderr)
-    raise typer.Exit(1)
+    label = _PROVIDER_LABELS[provider]
+    flow = ApiKeyFlow(provider=provider, prompt_text=f"Enter your {label} API key")
+    try:
+        key = flow.run()
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise typer.Exit(1)
+    store_credential(provider, "api_key", key)
+    stored = False
+    try:
+        manager.store_credential(provider, "api_key", key)
+        stored = True
+    except Exception as exc:
+        log.error("AuthManager store failed for %s: %s", provider, exc)
+    if not stored:
+        print(f"Failed to save {label} API key.", file=sys.stderr)
+        raise typer.Exit(1)
+    print(f"{label} API key saved.", flush=True)
 
 
 @app.command("setup")
@@ -2644,12 +2010,12 @@ def setup_cmd(
 
 @auth_app.command("login")
 def auth_login(
-    provider: Optional[str] = typer.Argument(None, help="Provider name (anthropic, openai, copilot, …)"),
+    provider: Optional[str] = typer.Argument(None, help="Provider name (anthropic, openai, deepseek, …)"),
 ) -> None:
     """Interactively authenticate with a provider.
 
     Run without arguments to choose a provider from a menu.
-    Supported providers: anthropic, anthropic_claude, openai, openai_codex, copilot, dashscope, bedrock, vertex, moonshot, minimax, modelscope.
+    Supported providers: anthropic, openai, deepseek, dashscope, moonshot, gemini, minimax, zhipu, siliconflow, nvidia, modelscope.
     """
     if provider is None:
         print("Select a provider to authenticate:", flush=True)
@@ -2731,77 +2097,6 @@ def auth_switch(
         print(f"Error: {exc}", file=sys.stderr)
         raise typer.Exit(1)
     print(f"Switched auth/profile to: {provider}", flush=True)
-
-
-# ---------------------------------------------------------------------------
-# Copilot login helper (kept as a named function for reuse and backward compat)
-# ---------------------------------------------------------------------------
-
-
-def _run_copilot_login() -> None:
-    """Run the GitHub Copilot device-code flow and persist the result."""
-    from iterate_harness.api.copilot_auth import save_copilot_auth
-    from iterate_harness.auth.flows import DeviceCodeFlow
-
-    print("Select GitHub deployment type:", flush=True)
-    print("  1. GitHub.com (public)", flush=True)
-    print("  2. GitHub Enterprise (data residency / self-hosted)", flush=True)
-    choice = typer.prompt("Enter choice", default="1")
-
-    enterprise_url: str | None = None
-    github_domain = "github.com"
-
-    if choice.strip() == "2":
-        raw_url = typer.prompt("Enter your GitHub Enterprise URL or domain (e.g. company.ghe.com)")
-        domain = raw_url.replace("https://", "").replace("http://", "").rstrip("/")
-        if not domain:
-            print("Error: domain cannot be empty.", file=sys.stderr, flush=True)
-            raise typer.Exit(1)
-        enterprise_url = domain
-        github_domain = domain
-
-    print(flush=True)
-    flow = DeviceCodeFlow(github_domain=github_domain, enterprise_url=enterprise_url)
-    try:
-        token = flow.run()
-    except RuntimeError as exc:
-        print(f"Error: {exc}", file=sys.stderr, flush=True)
-        raise typer.Exit(1)
-
-    save_copilot_auth(token, enterprise_url=enterprise_url)
-    print("GitHub Copilot authenticated successfully.", flush=True)
-    if enterprise_url:
-        print(f"  Enterprise domain: {enterprise_url}", flush=True)
-    print(flush=True)
-    print("To use Copilot as the provider, run:", flush=True)
-    print("  ih provider use copilot", flush=True)
-
-
-@auth_app.command("copilot-login")
-def auth_copilot_login() -> None:
-    """Authenticate with GitHub Copilot via device flow (alias for 'ih auth login copilot')."""
-    _run_copilot_login()
-
-
-@auth_app.command("codex-login")
-def auth_codex_login() -> None:
-    """Bind IterateHarness to a local Codex CLI subscription session."""
-    _bind_external_provider("openai_codex")
-
-
-@auth_app.command("claude-login")
-def auth_claude_login() -> None:
-    """Bind IterateHarness to a local Claude CLI subscription session."""
-    _bind_external_provider("anthropic_claude")
-
-
-@auth_app.command("copilot-logout")
-def auth_copilot_logout() -> None:
-    """Remove stored GitHub Copilot authentication."""
-    from iterate_harness.api.copilot_auth import clear_github_token
-
-    clear_github_token()
-    print("Copilot authentication cleared.")
 
 
 # ---- provider subcommands ----
@@ -3092,7 +2387,7 @@ def main(
     api_format: str | None = typer.Option(
         None,
         "--api-format",
-        help="API format: 'anthropic' (default), 'openai' (DashScope, GitHub Models, etc.), or 'copilot' (GitHub Copilot)",
+        help="API format: 'anthropic' (default) or 'openai' (OpenAI-compatible: DeepSeek, DashScope, SiliconFlow, etc.)",
         rich_help_panel="System & Context",
     ),
     theme: str | None = typer.Option(
@@ -3148,8 +2443,8 @@ def main(
             stream=sys.stderr,
         )
         logging.getLogger("iterate_harness").setLevel(logging.DEBUG)
-    elif os.environ.get("OPENHARNESS_LOG_LEVEL"):
-        lvl = getattr(logging, os.environ["OPENHARNESS_LOG_LEVEL"].upper(), logging.WARNING)
+    elif os.environ.get("ITERATE_LOG_LEVEL"):
+        lvl = getattr(logging, os.environ["ITERATE_LOG_LEVEL"].upper(), logging.WARNING)
         logging.basicConfig(level=lvl, format="%(asctime)s [%(name)s] %(levelname)s %(message)s", stream=sys.stderr)
 
     if dangerously_skip_permissions:

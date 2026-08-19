@@ -92,8 +92,8 @@ class HookExecutor:
                 stderr=asyncio.subprocess.PIPE,
                 env={
                     **os.environ,
-                    "OPENHARNESS_HOOK_EVENT": event.value,
-                    "OPENHARNESS_HOOK_PAYLOAD": json.dumps(payload),
+                    "ITERATE_HOOK_EVENT": event.value,
+                    "ITERATE_HOOK_PAYLOAD": json.dumps(payload),
                 },
             )
         except SandboxUnavailableError as exc:

@@ -243,9 +243,9 @@ class TestVisionModelConfig:
         assert not cfg.is_configured
 
     def test_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_VISION_MODEL", "gpt-4o")
-        monkeypatch.setenv("OPENHARNESS_VISION_API_KEY", "sk-env-key")
-        monkeypatch.setenv("OPENHARNESS_VISION_BASE_URL", "https://api.example.com/v1")
+        monkeypatch.setenv("ITERATE_VISION_MODEL", "gpt-4o")
+        monkeypatch.setenv("ITERATE_VISION_API_KEY", "sk-env-key")
+        monkeypatch.setenv("ITERATE_VISION_BASE_URL", "https://api.example.com/v1")
 
         cfg = VisionModelConfig.from_env()
         assert cfg.model == "gpt-4o"
@@ -254,8 +254,8 @@ class TestVisionModelConfig:
         assert cfg.is_configured
 
     def test_from_env_partial(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_VISION_MODEL", "gpt-4o")
-        monkeypatch.delenv("OPENHARNESS_VISION_API_KEY", raising=False)
+        monkeypatch.setenv("ITERATE_VISION_MODEL", "gpt-4o")
+        monkeypatch.delenv("ITERATE_VISION_API_KEY", raising=False)
 
         cfg = VisionModelConfig.from_env()
         assert not cfg.is_configured

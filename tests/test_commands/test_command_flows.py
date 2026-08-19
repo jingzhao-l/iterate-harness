@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -55,25 +54,10 @@ def _build_context(tmp_path: Path) -> CommandContext:
     )
 
 
-def _write_fixture_plugin(root: Path) -> Path:
-    plugin_dir = root / "fixture-plugin"
-    fixture_skill_dir = plugin_dir / "skills" / "fixture"
-    fixture_skill_dir.mkdir(parents=True)
-    (plugin_dir / "plugin.json").write_text(
-        json.dumps({"name": "fixture-plugin", "version": "1.0.0", "description": "Fixture plugin"}),
-        encoding="utf-8",
-    )
-    (fixture_skill_dir / "SKILL.md").write_text(
-        "# FixtureSkill\nFixture command plugin content.\n",
-        encoding="utf-8",
-    )
-    return plugin_dir
-
-
 @pytest.mark.asyncio
 async def test_command_flow_for_memory_modes_and_tasks(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_command_registry()
     context = _build_context(tmp_path)
 
@@ -125,48 +109,3 @@ async def test_command_flow_for_memory_modes_and_tasks(tmp_path: Path, monkeypat
     assert "- voice_mode: on" in doctor_result.message
     assert load_settings().fast_mode is True
     assert context.app_state.get().fast_mode is True
-
-
-@pytest.mark.asyncio
-async def test_plugin_command_lifecycle_flow(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    registry = create_default_command_registry()
-    context = _build_context(tmp_path)
-    plugin_source = _write_fixture_plugin(tmp_path / "plugin-source")
-
-    install_command, install_args = registry.lookup(f"/plugin install {plugin_source}")
-    install_result = await install_command.handler(install_args, context)
-    assert "Installed plugin" in install_result.message
-
-    disable_command, disable_args = registry.lookup("/plugin disable fixture-plugin")
-    disable_result = await disable_command.handler(disable_args, context)
-    assert "Disabled plugin" in disable_result.message
-    assert load_settings().enabled_plugins["fixture-plugin"] is False
-
-    enable_command, enable_args = registry.lookup("/plugin enable fixture-plugin")
-    enable_result = await enable_command.handler(enable_args, context)
-    assert "Enabled plugin" in enable_result.message
-    assert load_settings().enabled_plugins["fixture-plugin"] is True
-
-    uninstall_command, uninstall_args = registry.lookup("/plugin uninstall fixture-plugin")
-    uninstall_result = await uninstall_command.handler(uninstall_args, context)
-    assert "Uninstalled plugin" in uninstall_result.message
-
-
-@pytest.mark.asyncio
-async def test_plugin_command_rejects_traversal_uninstall_without_deleting_sibling(
-    tmp_path: Path, monkeypatch
-):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    registry = create_default_command_registry()
-    context = _build_context(tmp_path)
-    victim = tmp_path / "victim"
-    victim.mkdir()
-    (victim / "marker.txt").write_text("keep", encoding="utf-8")
-
-    uninstall_command, uninstall_args = registry.lookup("/plugin uninstall ../../victim")
-    uninstall_result = await uninstall_command.handler(uninstall_args, context)
-
-    assert "Invalid plugin name" in uninstall_result.message
-    assert victim.exists()
-    assert (victim / "marker.txt").read_text(encoding="utf-8") == "keep"

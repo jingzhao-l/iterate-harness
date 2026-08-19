@@ -2,7 +2,7 @@
 
 Settings are resolved with the following precedence (highest first):
 1. CLI arguments
-2. Environment variables (ANTHROPIC_API_KEY, OPENHARNESS_MODEL, etc.)
+2. Environment variables (ANTHROPIC_API_KEY, ITERATE_MODEL, etc.)
 3. Config file (~/.iterate-harness/settings.json)
 4. Defaults
 """
@@ -183,42 +183,33 @@ def normalize_anthropic_model_name(model: str) -> str:
 
 
 def default_provider_profiles() -> dict[str, ProviderProfile]:
-    """Return the built-in provider workflow catalog."""
+    """Return the built-in provider workflow catalog.
+
+    Iterate-exclusive: only direct API-key workflows. Subscription/OAuth
+    flows are intentionally not supported.
+    """
     return {
         "claude-api": ProviderProfile(
-            label="Anthropic-Compatible API",
+            label="Anthropic (Claude API)",
             provider="anthropic",
             api_format="anthropic",
             auth_source="anthropic_api_key",
             default_model="claude-sonnet-4-6",
         ),
-        "claude-subscription": ProviderProfile(
-            label="Claude Subscription",
-            provider="anthropic_claude",
-            api_format="anthropic",
-            auth_source="claude_subscription",
-            default_model="claude-sonnet-4-6",
-        ),
         "openai-compatible": ProviderProfile(
-            label="OpenAI-Compatible API",
+            label="OpenAI / compatible",
             provider="openai",
             api_format="openai",
             auth_source="openai_api_key",
             default_model="gpt-5.4",
         ),
-        "codex": ProviderProfile(
-            label="Codex Subscription",
-            provider="openai_codex",
+        "deepseek": ProviderProfile(
+            label="DeepSeek",
+            provider="deepseek",
             api_format="openai",
-            auth_source="codex_subscription",
-            default_model="gpt-5.4",
-        ),
-        "copilot": ProviderProfile(
-            label="GitHub Copilot",
-            provider="copilot",
-            api_format="copilot",
-            auth_source="copilot_oauth",
-            default_model="gpt-5.4",
+            auth_source="deepseek_api_key",
+            default_model="deepseek-chat",
+            base_url="https://api.deepseek.com/v1",
         ),
         "moonshot": ProviderProfile(
             label="Moonshot (Kimi)",
@@ -244,6 +235,22 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             default_model="MiniMax-M2.7",
             base_url="https://api.minimax.io/v1",
         ),
+        "zhipu": ProviderProfile(
+            label="Zhipu AI (GLM)",
+            provider="zhipu",
+            api_format="openai",
+            auth_source="zhipu_api_key",
+            default_model="glm-4.6",
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+        ),
+        "siliconflow": ProviderProfile(
+            label="SiliconFlow",
+            provider="siliconflow",
+            api_format="openai",
+            auth_source="siliconflow_api_key",
+            default_model="deepseek-ai/DeepSeek-V4-Flash",
+            base_url="https://api.siliconflow.cn/v1",
+        ),
         "nvidia": ProviderProfile(
             label="NVIDIA NIM",
             provider="nvidia",
@@ -267,14 +274,6 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             auth_source="modelscope_api_key",
             default_model="deepseek-ai/DeepSeek-V4-Flash",
             base_url="https://api-inference.modelscope.cn/v1",
-        ),
-        "local": ProviderProfile(
-            label="Local (openai-compatible)",
-            provider="local",
-            api_format="openai",
-            auth_source="local",
-            base_url="http://localhost:11434/v1",
-            default_model="local-model",
         ),
         "ollama": ProviderProfile(
             label="Ollama (local)",
@@ -306,7 +305,7 @@ def display_label_for_profile(profile_name: str, profile: ProviderProfile) -> st
 
 def is_claude_family_provider(provider: str) -> bool:
     """Return True when the provider is a Claude/Anthropic workflow."""
-    return provider in {"anthropic", "anthropic_claude"}
+    return provider == "anthropic"
 
 
 def display_model_setting(profile: ProviderProfile) -> str:
@@ -352,7 +351,7 @@ def resolve_model_setting(
             return _CLAUDE_ALIAS_TARGETS[normalized]
         return normalize_anthropic_model_name(configured)
 
-    if provider in {"openai", "openai_codex", "copilot"} and normalized in {"default", "best"}:
+    if provider == "openai" and normalized in {"default", "best"}:
         return "gpt-5.4"
 
     return configured
@@ -363,15 +362,13 @@ def auth_source_provider_name(auth_source: str) -> str:
     mapping = {
         "anthropic_api_key": "anthropic",
         "openai_api_key": "openai",
-        "codex_subscription": "openai_codex",
-        "claude_subscription": "anthropic_claude",
-        "copilot_oauth": "copilot",
+        "deepseek_api_key": "deepseek",
         "dashscope_api_key": "dashscope",
-        "bedrock_api_key": "bedrock",
-        "vertex_api_key": "vertex",
         "moonshot_api_key": "moonshot",
         "gemini_api_key": "gemini",
         "minimax_api_key": "minimax",
+        "zhipu_api_key": "zhipu",
+        "siliconflow_api_key": "siliconflow",
         "nvidia_api_key": "nvidia",
         "modelscope_api_key": "modelscope",
         "local": "local",
@@ -398,24 +395,20 @@ def credential_storage_provider_name(profile_name: str, profile: ProviderProfile
 
 def default_auth_source_for_provider(provider: str, api_format: str | None = None) -> str:
     """Infer the default auth source for a provider/backend."""
-    if provider == "anthropic_claude":
-        return "claude_subscription"
-    if provider == "openai_codex":
-        return "codex_subscription"
-    if provider == "copilot":
-        return "copilot_oauth"
     if provider == "dashscope":
         return "dashscope_api_key"
-    if provider == "bedrock":
-        return "bedrock_api_key"
-    if provider == "vertex":
-        return "vertex_api_key"
     if provider == "moonshot":
         return "moonshot_api_key"
     if provider == "gemini":
         return "gemini_api_key"
     if provider == "minimax":
         return "minimax_api_key"
+    if provider == "deepseek":
+        return "deepseek_api_key"
+    if provider == "zhipu":
+        return "zhipu_api_key"
+    if provider == "siliconflow":
+        return "siliconflow_api_key"
     if provider == "nvidia":
         return "nvidia_api_key"
     if provider == "modelscope":
@@ -436,12 +429,6 @@ def _slugify_profile_name(value: str) -> str:
 
 def _infer_profile_name_from_flat_settings(settings: "Settings") -> str:
     provider = (settings.provider or "").strip()
-    if provider == "openai_codex":
-        return "codex"
-    if provider == "anthropic_claude":
-        return "claude-subscription"
-    if provider == "copilot" or settings.api_format == "copilot":
-        return "copilot"
     if provider == "openai" and not settings.base_url:
         return "openai-compatible"
     if provider == "anthropic" and not settings.base_url:
@@ -471,7 +458,7 @@ def _profile_from_flat_settings(settings: "Settings") -> tuple[str, ProviderProf
         )
         return name, profile
 
-    provider = settings.provider or ("copilot" if settings.api_format == "copilot" else ("openai" if settings.api_format == "openai" else "anthropic"))
+    provider = settings.provider or ("openai" if settings.api_format == "openai" else "anthropic")
     profile = ProviderProfile(
         label=f"Imported {provider}",
         provider=provider,
@@ -505,9 +492,9 @@ class VisionModelConfig(BaseModel):
     def from_env(cls) -> "VisionModelConfig":
         """Load vision model config from environment variables."""
         return cls(
-            model=os.environ.get("OPENHARNESS_VISION_MODEL", "").strip(),
-            api_key=os.environ.get("OPENHARNESS_VISION_API_KEY", "").strip(),
-            base_url=os.environ.get("OPENHARNESS_VISION_BASE_URL", "").strip(),
+            model=os.environ.get("ITERATE_VISION_MODEL", "").strip(),
+            api_key=os.environ.get("ITERATE_VISION_API_KEY", "").strip(),
+            base_url=os.environ.get("ITERATE_VISION_BASE_URL", "").strip(),
         )
 
     @property
@@ -527,7 +514,7 @@ class Settings(BaseModel):
     timeout: float = 30.0
     context_window_tokens: int | None = None
     auto_compact_threshold_tokens: int | None = None
-    api_format: str = "anthropic"  # "anthropic", "openai", or "copilot"
+    api_format: str = "anthropic"  # "anthropic" or "openai"
     provider: str = ""
     active_profile: str = "claude-api"
     profiles: dict[str, ProviderProfile] = Field(default_factory=default_provider_profiles)
@@ -664,23 +651,10 @@ class Settings(BaseModel):
     def resolve_api_key(self) -> str:
         """Resolve API key with precedence: instance value > env var > empty.
 
-        For ``copilot`` api_format the key is managed separately via
-        ``ih auth copilot-login`` and this method is not called.
-
         Returns the API key string. Raises ValueError if no key is found.
         """
         profile_name, profile = self.resolve_profile()
-        del profile_name
-        if profile.provider == "openai_codex":
-            return self.resolve_auth().value
-        if profile.provider == "anthropic_claude":
-            raise ValueError(
-                "Current provider uses Anthropic auth tokens instead of API keys. "
-                "Use resolve_auth() for runtime credential resolution."
-            )
-        # Copilot format manages its own auth; skip normal key resolution.
-        if profile.api_format == "copilot":
-            return "copilot-managed"
+        del profile_name, profile
 
         if self.api_key:
             return self.api_key
@@ -701,48 +675,10 @@ class Settings(BaseModel):
         )
 
     def resolve_auth(self) -> ResolvedAuth:
-        """Resolve auth for the current provider, including subscription bridges."""
+        """Resolve auth for the current provider."""
         profile_name, profile = self.resolve_profile()
         provider = profile.provider.strip()
         auth_source = profile.auth_source.strip() or default_auth_source_for_provider(provider, profile.api_format)
-        if auth_source in {"codex_subscription", "claude_subscription"}:
-            from iterate_harness.auth.external import (
-                is_third_party_anthropic_endpoint,
-                load_external_credential,
-            )
-            from iterate_harness.auth.storage import load_external_binding
-
-            if auth_source == "claude_subscription" and is_third_party_anthropic_endpoint(profile.base_url):
-                raise ValueError(
-                    "Claude subscription auth only supports direct Anthropic/Claude endpoints. "
-                    "Use an API-key-backed Anthropic-compatible profile for third-party base URLs."
-                )
-            binding = load_external_binding(auth_source_provider_name(auth_source))
-            if binding is None:
-                raise ValueError(
-                    f"No external auth binding found for {auth_source}. Run 'ih auth "
-                    f"{'codex-login' if auth_source == 'codex_subscription' else 'claude-login'}' first."
-                )
-            credential = load_external_credential(
-                binding,
-                refresh_if_needed=(auth_source == "claude_subscription"),
-            )
-            return ResolvedAuth(
-                provider=provider,
-                auth_kind=credential.auth_kind,
-                value=credential.value,
-                source=f"external:{credential.source_path}",
-                state="configured",
-            )
-
-        if auth_source == "copilot_oauth":
-            return ResolvedAuth(
-                provider="copilot",
-                auth_kind="oauth_device",
-                value="copilot-managed",
-                source="copilot",
-                state="configured",
-            )
 
         if auth_source == "local":
             # Local openai-compatible endpoints (llama.cpp, lmstudio, vllm,
@@ -778,9 +714,12 @@ class Settings(BaseModel):
         env_var = {
             "anthropic_api_key": "ANTHROPIC_API_KEY",
             "openai_api_key": "OPENAI_API_KEY",
+            "deepseek_api_key": "DEEPSEEK_API_KEY",
             "dashscope_api_key": "DASHSCOPE_API_KEY",
             "moonshot_api_key": "MOONSHOT_API_KEY",
             "minimax_api_key": "MINIMAX_API_KEY",
+            "zhipu_api_key": "ZHIPUAI_API_KEY",
+            "siliconflow_api_key": "SILICONFLOW_API_KEY",
             "nvidia_api_key": "NVIDIA_API_KEY",
             "modelscope_api_key": "MODELSCOPE_API_KEY",
         }.get(auth_source)
@@ -853,7 +792,7 @@ def _apply_env_overrides(settings: Settings) -> Settings:
 
     Provider-scoped env vars (``ANTHROPIC_BASE_URL``, ``ANTHROPIC_MODEL``,
     ``OPENAI_BASE_URL``) only apply when the active profile does *not*
-    explicitly configure the corresponding field.  ``OPENHARNESS_*`` env vars
+    explicitly configure the corresponding field.  ``ITERATE_*`` env vars
     always override (explicit user intent).
     """
     updates: dict[str, Any] = {}
@@ -865,7 +804,7 @@ def _apply_env_overrides(settings: Settings) -> Settings:
     profile_has_explicit_model = bool(profile_explicit_model) and profile_explicit_model.lower() not in {"", "default"}
 
     # --- model ---
-    iterate_harness_model = os.environ.get("OPENHARNESS_MODEL")
+    iterate_harness_model = os.environ.get("ITERATE_MODEL")
     if iterate_harness_model:
         updates["model"] = strip_ansi_escape_sequences(iterate_harness_model)
     elif not profile_has_explicit_model:
@@ -874,7 +813,7 @@ def _apply_env_overrides(settings: Settings) -> Settings:
             updates["model"] = strip_ansi_escape_sequences(anthropic_model)
 
     # --- base_url ---
-    iterate_harness_base = os.environ.get("OPENHARNESS_BASE_URL")
+    iterate_harness_base = os.environ.get("ITERATE_BASE_URL")
     if iterate_harness_base:
         updates["base_url"] = iterate_harness_base
     elif not profile_has_base_url:
@@ -882,23 +821,23 @@ def _apply_env_overrides(settings: Settings) -> Settings:
         if generic_base:
             updates["base_url"] = generic_base
 
-    max_tokens = os.environ.get("OPENHARNESS_MAX_TOKENS")
+    max_tokens = os.environ.get("ITERATE_MAX_TOKENS")
     if max_tokens:
         updates["max_tokens"] = int(max_tokens)
 
-    timeout = os.environ.get("OPENHARNESS_TIMEOUT")
+    timeout = os.environ.get("ITERATE_TIMEOUT")
     if timeout:
         updates["timeout"] = float(timeout)
 
-    max_turns = os.environ.get("OPENHARNESS_MAX_TURNS")
+    max_turns = os.environ.get("ITERATE_MAX_TURNS")
     if max_turns:
         updates["max_turns"] = int(max_turns)
 
-    context_window_tokens = os.environ.get("OPENHARNESS_CONTEXT_WINDOW_TOKENS")
+    context_window_tokens = os.environ.get("ITERATE_CONTEXT_WINDOW_TOKENS")
     if context_window_tokens:
         updates["context_window_tokens"] = int(context_window_tokens)
 
-    auto_compact_threshold_tokens = os.environ.get("OPENHARNESS_AUTO_COMPACT_THRESHOLD_TOKENS")
+    auto_compact_threshold_tokens = os.environ.get("ITERATE_AUTO_COMPACT_THRESHOLD_TOKENS")
     if auto_compact_threshold_tokens:
         updates["auto_compact_threshold_tokens"] = int(auto_compact_threshold_tokens)
 
@@ -906,18 +845,18 @@ def _apply_env_overrides(settings: Settings) -> Settings:
     if api_key:
         updates["api_key"] = api_key
 
-    api_format = os.environ.get("OPENHARNESS_API_FORMAT")
+    api_format = os.environ.get("ITERATE_API_FORMAT")
     if api_format:
         updates["api_format"] = api_format
 
-    provider = os.environ.get("OPENHARNESS_PROVIDER")
+    provider = os.environ.get("ITERATE_PROVIDER")
     if provider:
         updates["provider"] = provider
 
-    sandbox_enabled = os.environ.get("OPENHARNESS_SANDBOX_ENABLED")
-    sandbox_fail = os.environ.get("OPENHARNESS_SANDBOX_FAIL_IF_UNAVAILABLE")
-    sandbox_backend = os.environ.get("OPENHARNESS_SANDBOX_BACKEND")
-    sandbox_docker_image = os.environ.get("OPENHARNESS_SANDBOX_DOCKER_IMAGE")
+    sandbox_enabled = os.environ.get("ITERATE_SANDBOX_ENABLED")
+    sandbox_fail = os.environ.get("ITERATE_SANDBOX_FAIL_IF_UNAVAILABLE")
+    sandbox_backend = os.environ.get("ITERATE_SANDBOX_BACKEND")
+    sandbox_docker_image = os.environ.get("ITERATE_SANDBOX_DOCKER_IMAGE")
     sandbox_updates: dict[str, Any] = {}
     if sandbox_enabled is not None:
         sandbox_updates["enabled"] = _parse_bool_env(sandbox_enabled)

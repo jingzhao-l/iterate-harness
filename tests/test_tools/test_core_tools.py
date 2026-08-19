@@ -130,7 +130,7 @@ async def test_tool_search_and_brief_tools(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_skill_todo_and_config_tools(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     skills_dir = tmp_path / "config" / "skills"
     skills_dir.mkdir(parents=True)
     pytest_dir = skills_dir / "pytest"
@@ -159,7 +159,7 @@ async def test_skill_todo_and_config_tools(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_skill_tool_rejects_user_only_skills(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
     skills_dir = tmp_path / "config" / "skills"
     skills_dir.mkdir(parents=True)
     deploy_dir = skills_dir / "deploy"
@@ -300,7 +300,7 @@ async def test_worktree_tools(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_cron_and_remote_trigger_tools(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     context = ToolExecutionContext(cwd=tmp_path)
 
     create_result = await CronCreateTool().execute(

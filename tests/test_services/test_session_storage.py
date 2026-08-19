@@ -16,7 +16,7 @@ from iterate_harness.services.session_storage import (
 
 
 def test_save_and_load_session_snapshot(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     project = tmp_path / "repo"
     project.mkdir()
 
@@ -42,7 +42,7 @@ def test_save_and_load_session_snapshot(tmp_path: Path, monkeypatch):
 
 
 def test_export_session_markdown(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     project = tmp_path / "repo"
     project.mkdir()
 
@@ -62,7 +62,7 @@ def test_export_session_markdown(tmp_path: Path, monkeypatch):
 
 
 def test_load_session_snapshot_sanitizes_legacy_empty_assistant_messages(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     project = tmp_path / "repo"
     project.mkdir()
 

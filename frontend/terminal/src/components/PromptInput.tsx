@@ -39,7 +39,7 @@ function MultilineTextInput({
 	// (tab completion, history recall, programmatic clear) and we should
 	// move the cursor to the end — otherwise the cursor stays wherever the
 	// user had it, which puts subsequent keystrokes in the middle of the
-	// newly-completed text. See HKUDS/OpenHarness#183.
+	// newly-completed text.
 	const lastInternalValueRef = useRef<string>(value);
 
 	useEffect(() => {

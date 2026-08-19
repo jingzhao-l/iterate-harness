@@ -14,7 +14,7 @@ export function ToolCallDisplay({
 	outputStyle?: string;
 }): React.JSX.Element {
 	const {theme} = useTheme();
-	const isCodexStyle = outputStyle === 'codex';
+	const isCompactStyle = outputStyle === 'compact';
 
 	if (item.role === 'tool') {
 		const toolName = item.tool_name ?? 'tool';
@@ -25,15 +25,15 @@ export function ToolCallDisplay({
 
 		if (resultItem) {
 			if (resultItem.is_error) {
-				statusNode = isCodexStyle
+				statusNode = isCompactStyle
 					? <Text color={theme.colors.error}> error</Text>
 					: <Text color={theme.colors.error}> {theme.icons.error.trim()}</Text>;
 				const lines = resultItem.text.split('\n').filter((l) => l.trim());
-				const maxErrLines = isCodexStyle ? 8 : 5;
+				const maxErrLines = isCompactStyle ? 8 : 5;
 				errorLines = lines.length > maxErrLines
 					? [...lines.slice(0, maxErrLines), `... (${lines.length - maxErrLines} more lines)`]
 					: lines;
-			} else if (!isCodexStyle) {
+			} else if (!isCompactStyle) {
 				const lineCount = resultItem.text.split('\n').filter((l) => l.trim()).length;
 				const resultLabel = lineCount > 0 ? `${lineCount}L` : theme.icons.success.trim();
 				statusNode = <Text dimColor> → {resultLabel}</Text>;
@@ -43,7 +43,7 @@ export function ToolCallDisplay({
 			}
 		}
 
-		if (isCodexStyle) {
+		if (isCompactStyle) {
 			return (
 				<Box marginLeft={0} flexDirection="column">
 					<Text dimColor>{`• Ran ${toolName}${summary ? ` ${summary}` : ''}`}{statusNode}</Text>
@@ -84,9 +84,9 @@ export function ToolCallDisplay({
 		const lines = item.text.length > 0
 			? item.text.split('\n').filter((l) => l.trim())
 			: [''];
-		const maxLines = isCodexStyle ? 8 : 5;
+		const maxLines = isCompactStyle ? 8 : 5;
 		const display = lines.length > maxLines ? [...lines.slice(0, maxLines), `... (${lines.length - maxLines} more lines)`] : lines;
-		if (isCodexStyle) {
+		if (isCompactStyle) {
 			return (
 				<Box marginLeft={0} flexDirection="column">
 					{display.map((line, i) => {

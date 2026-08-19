@@ -35,7 +35,6 @@ SENSITIVE_PATH_PATTERNS: tuple[str, ...] = (
     "*/.kube/config",
     # IterateHarness own credential stores
     "*/.iterate-harness/credentials.json",
-    "*/.iterate-harness/copilot_auth.json",
 )
 
 

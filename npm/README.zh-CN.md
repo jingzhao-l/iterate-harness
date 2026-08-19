@@ -73,6 +73,5 @@ rm -rf ~/.iterate-harness-npm   # 托管虚拟环境
 
 ## License / 许可证
 
-MIT —— 与 harness 相同。agent 内核源自
-[OpenHarness](https://github.com/HKUDS/OpenHarness)；iterate 语义层源自
+MIT —— 与 harness 相同。iterate 语义层源自
 [iterate-skill](https://github.com/jingzhao-l/iterate-skill)。

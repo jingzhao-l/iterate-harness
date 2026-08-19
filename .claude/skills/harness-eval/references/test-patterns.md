@@ -15,18 +15,18 @@ WORKSPACE = Path("/tmp/eval-workspace")  # unfamiliar project
 
 
 def make_anthropic_engine(system_prompt, cwd=None, extra_tools=None):
-    from openharness.api.client import AnthropicApiClient
-    from openharness.config.settings import PermissionSettings
-    from openharness.engine.query_engine import QueryEngine
-    from openharness.permissions.checker import PermissionChecker
-    from openharness.permissions.modes import PermissionMode
-    from openharness.tools.base import ToolRegistry
-    from openharness.tools.bash_tool import BashTool
-    from openharness.tools.file_read_tool import FileReadTool
-    from openharness.tools.file_write_tool import FileWriteTool
-    from openharness.tools.file_edit_tool import FileEditTool
-    from openharness.tools.glob_tool import GlobTool
-    from openharness.tools.grep_tool import GrepTool
+    from iterate_harness.api.client import AnthropicApiClient
+    from iterate_harness.config.settings import PermissionSettings
+    from iterate_harness.engine.query_engine import QueryEngine
+    from iterate_harness.permissions.checker import PermissionChecker
+    from iterate_harness.permissions.modes import PermissionMode
+    from iterate_harness.tools.base import ToolRegistry
+    from iterate_harness.tools.bash_tool import BashTool
+    from iterate_harness.tools.file_read_tool import FileReadTool
+    from iterate_harness.tools.file_write_tool import FileWriteTool
+    from iterate_harness.tools.file_edit_tool import FileEditTool
+    from iterate_harness.tools.glob_tool import GlobTool
+    from iterate_harness.tools.grep_tool import GrepTool
 
     api = AnthropicApiClient(api_key=API_KEY, base_url=BASE_URL)
     reg = ToolRegistry()
@@ -42,14 +42,14 @@ def make_anthropic_engine(system_prompt, cwd=None, extra_tools=None):
 
 
 def make_openai_engine(system_prompt, cwd=None, extra_tools=None):
-    from openharness.api.openai_client import OpenAICompatibleClient
+    from iterate_harness.api.openai_client import OpenAICompatibleClient
     # Same structure as above, but with:
     api = OpenAICompatibleClient(api_key=API_KEY, base_url=OPENAI_BASE)
     # ... rest identical
 
 
 def collect(events):
-    from openharness.engine.stream_events import (
+    from iterate_harness.engine.stream_events import (
         AssistantTextDelta, AssistantTurnComplete,
         ToolExecutionStarted, ToolExecutionCompleted,
     )
@@ -82,10 +82,10 @@ async def test_multi_turn_memory():
 
 ```python
 async def test_hook_blocks():
-    from openharness.hooks.events import HookEvent
-    from openharness.hooks.loader import HookRegistry
-    from openharness.hooks.schemas import CommandHookDefinition
-    from openharness.hooks.executor import HookExecutor, HookExecutionContext
+    from iterate_harness.hooks.events import HookEvent
+    from iterate_harness.hooks.loader import HookRegistry
+    from iterate_harness.hooks.schemas import CommandHookDefinition
+    from iterate_harness.hooks.executor import HookExecutor, HookExecutionContext
 
     hook_reg = HookRegistry()
     hook_reg.register(HookEvent.PRE_TOOL_USE, CommandHookDefinition(
@@ -99,7 +99,7 @@ async def test_hook_blocks():
 
 ```python
 async def test_skill_invocation():
-    from openharness.tools.skill_tool import SkillTool
+    from iterate_harness.tools.skill_tool import SkillTool
     engine = make_anthropic_engine(
         "Use the 'skill' tool to load instructions before working.",
         extra_tools=[SkillTool()],
@@ -115,9 +115,9 @@ async def test_skill_invocation():
 
 ```python
 async def test_concurrent_teammates():
-    from openharness.swarm.in_process import start_in_process_teammate, TeammateAbortController
-    from openharness.swarm.types import TeammateSpawnConfig
-    from openharness.engine.query import QueryContext
+    from iterate_harness.swarm.in_process import start_in_process_teammate, TeammateAbortController
+    from iterate_harness.swarm.types import TeammateSpawnConfig
+    from iterate_harness.engine.query import QueryContext
 
     async def run_one(name, prompt):
         ctx = QueryContext(api_client=api, tool_registry=reg, ...)
@@ -135,8 +135,8 @@ async def test_concurrent_teammates():
 
 ```python
 async def test_session_resume():
-    from openharness.services.session_storage import save_session_snapshot, load_session_snapshot
-    from openharness.engine.messages import ConversationMessage
+    from iterate_harness.services.session_storage import save_session_snapshot, load_session_snapshot
+    from iterate_harness.engine.messages import ConversationMessage
 
     engine1 = make_anthropic_engine("Remember context.")
     [ev async for ev in engine1.submit_message("Project uses FastAPI + React.")]
