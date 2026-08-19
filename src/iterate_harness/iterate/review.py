@@ -341,12 +341,21 @@ def reviewer_task_prompt(
         )
     else:
         parts.append("This is round 1 — report every issue you find in this dimension.")
+    parts.append(
+        "EVIDENCE RULE (mandatory): read every file you report on with the "
+        "read_file tool BEFORE judging it. NEVER report a location you did not "
+        "actually read — speculation about code you never inspected is a "
+        "disqualifying failure, and fabricated line numbers are treated as "
+        "poisoned evidence. Anchor every finding to real code."
+    )
     parts.append('Return a JSON object: {"findings": [...]}.')
     parts.append(
         f'Each finding: dimension (must be "{dimension}"), file (relative path), '
-        "line (optional integer), severity (critical/high/medium/low), summary "
-        "(one line), failure_scenario (how/when it fails, specific evidence), "
-        "suggested_fix (the concrete fix), "
+        "line (REQUIRED positive integer — the exact line you READ for an "
+        "anchored, line-targeted issue; use 0 for whole-file/module-level "
+        "issues), severity (critical/high/medium/low), summary (one line), "
+        "failure_scenario (how/when it fails, backed by the code you actually "
+        "read), suggested_fix (the concrete fix), "
         f"is_atomic (true if the fix is <= {atomic_max_lines} lines within a "
         "SINGLE file/function, else false)."
     )

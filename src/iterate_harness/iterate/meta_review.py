@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 
+from .evidence import EvidenceAudit
 from .review import ThresholdGateResult, sort_findings
 from .types import (
     FinalReviewReport,
@@ -263,12 +264,19 @@ def build_final_review_report(
     report: ReviewReport | None,
     *,
     threshold_result: ThresholdGateResult | None = None,
+    evidence: EvidenceAudit | None = None,
 ) -> FinalReviewReport:
     """Pair the source report with its meta-review verdict and summary.
 
     ``threshold_result`` (from project ``thresholds`` config) is folded in
     as one ``THRESHOLD_EXCEEDED`` issue per violation; a failed gate flips
     the verdict to ``needs_revision`` regardless of the consistency checks.
+
+    ``evidence`` (an :class:`EvidenceAudit` produced against the real repo) is
+    the hard code-evidence gate: every finding whose ``file``/``line`` does not
+    resolve to existing code is emitted as a critical ``EVIDENCE_VIOLATION``
+    and flips the verdict to ``needs_revision``. The audit itself reads the
+    filesystem; this function only folds the (pure, precomputed) result in.
     Pure and deterministic.
     """
     meta = meta_review_report(report)
@@ -289,6 +297,28 @@ def build_final_review_report(
             )
         meta.passed = False
         meta.verdict = "revise"
+    if evidence is not None:
+        meta.checks_run += 1
+        if not evidence.passed:
+            for violation in evidence.results:
+                if violation.error is None:
+                    continue
+                detail = (
+                    f"{violation.line} is beyond this file's {violation.line_total} lines"
+                    if violation.error == "line_out_of_range"
+                    else f"{violation.file} does not exist at all (verifiable read required)"
+                )
+                meta.issues.append(
+                    _issue(
+                        "EVIDENCE_VIOLATION",
+                        "critical",
+                        f"Finding references non-existent code: "
+                        f"{violation.file}" + (f":{violation.line}" if violation.line else ""),
+                        detail + ". Review results must anchor to real, read code.",
+                    )
+                )
+            meta.passed = False
+            meta.verdict = "revise"
     summary = report.summary if report is not None else None
     convergence = report.convergence if report is not None else None
     verdict: str = "approved" if meta.passed else "needs_revision"

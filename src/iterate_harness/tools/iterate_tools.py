@@ -26,7 +26,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ..iterate import config_loader, decision_log, meta_review, personalization, review, trend_store
+from ..iterate import config_loader, decision_log, evidence, meta_review, personalization, review, trend_store
 from ..iterate import types as itypes
 from ..iterate import validate as validate_mod
 from ..iterate.loop_policy import ITERATE_STATE_KEY
@@ -115,7 +115,10 @@ class IterateConfigTool(BaseTool):
                     "commands": cfg.validation.commands,
                     "commandWhitelist": cfg.validation.command_whitelist,
                 },
-                "reviewer": {"outputSchemaValidation": cfg.reviewer.output_schema_validation},
+                "reviewer": {
+                    "outputSchemaValidation": cfg.reviewer.output_schema_validation,
+                    "evidenceValidation": cfg.reviewer.evidence_validation,
+                },
             }
         )
 
@@ -340,10 +343,20 @@ class IterateReviewTool(BaseTool):
         if not args.report:
             return _json_output({"error": "meta-review requires report"}, error=True)
         parsed = review.report_from_dict(args.report)
-        thresholds = config_loader.load_effective_config(context.cwd).config.thresholds
+        effective = config_loader.load_effective_config(context.cwd)
+        thresholds = effective.config.thresholds
         gate = review.evaluate_threshold_gates(thresholds, parsed.findings)
+        evidence_audit = None
+        if effective.config.reviewer.evidence_validation:
+            evidence_audit = evidence.verify_findings(
+                context.cwd,
+                findings=parsed.findings,
+                read_set=evidence.read_set_from_metadata(context.metadata),
+            )
         final = meta_review.build_final_review_report(
-            parsed, threshold_result=None if gate.passed else gate
+            parsed,
+            threshold_result=None if gate.passed else gate,
+            evidence=evidence_audit,
         )
         final_payload: dict[str, Any] = {
             "verdict": final.verdict,
@@ -374,6 +387,8 @@ class IterateReviewTool(BaseTool):
             },
             "report": review.report_to_dict(final.source),
         }
+        if evidence_audit is not None:
+            final_payload["evidence"] = evidence_audit.to_dict()
         if not thresholds.is_empty():
             final_payload["thresholdGate"] = gate.to_dict()
         return _json_output({"finalReport": final_payload})

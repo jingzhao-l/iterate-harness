@@ -101,7 +101,10 @@ def _default_config_dict() -> dict[str, object]:
             "command_whitelist": list(cfg.validation.command_whitelist),
             "commands": dict(cfg.validation.commands),
         },
-        "reviewer": {"output_schema_validation": cfg.reviewer.output_schema_validation},
+        "reviewer": {
+            "output_schema_validation": cfg.reviewer.output_schema_validation,
+            "evidence_validation": cfg.reviewer.evidence_validation,
+        },
         "dimension_resources": {
             name: resources_to_dict(res) for name, res in cfg.dimension_resources.items()
         },
@@ -386,7 +389,10 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
         reviewer = ReviewerConfig(
             output_schema_validation=reviewer_raw.get(
                 "output_schema_validation", defaults.reviewer.output_schema_validation
-            )
+            ),
+            evidence_validation=reviewer_raw.get(
+                "evidence_validation", defaults.reviewer.evidence_validation
+            ),
         )
     else:
         reviewer = defaults.reviewer

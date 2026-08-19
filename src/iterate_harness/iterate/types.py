@@ -183,6 +183,9 @@ class ValidationConfig:
 @dataclass
 class ReviewerConfig:
     output_schema_validation: bool = True
+    #: Hard evidence gate: every finding's file/line is validated against real
+    #: files on disk; a fabricated or out-of-range location flips the audit.
+    evidence_validation: bool = True
 
 
 @dataclass

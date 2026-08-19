@@ -161,6 +161,11 @@ class TestIterateReviewTool:
     async def test_meta_review_audits_report(self, tmp_path):
         from iterate_harness.tools.iterate_tools import IterateReviewInput
 
+        # Evidence gate (default on) requires the finding's file+line to exist.
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.py").write_text("\n".join(f"line{i}" for i in range(1, 12)), encoding="utf-8")
+
         report_dict = {
             "mode": "dry-run",
             "goal": "g",
