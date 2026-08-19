@@ -4,6 +4,29 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.12.0] - 2026-08-19
+
+Forced evidence-based review: sub-agents must actually read files before judging, and fabricated locations fail the run.
+
+### Added
+
+- **Hard code-evidence gate** (`iterate/evidence.py`): new module validating every review finding's `file`/`line` against real files on disk (file existence, line bounds, whole-file/`0` lines, optional read-set cross-check, traversal-path rejection).
+- **Evidence folding into meta-review** (`iterate/meta_review.py`): `build_final_review_report` now folds evidence results in — any fabricated path or out-of-range line becomes a critical `EVIDENCE_VIOLATION` and flips the verdict to `revise`.
+- **Config switch** (`iterate/types.py`, `iterate/config_loader.py`): new `reviewer.evidence_validation` (default `true`); disabled via `false`.
+
+### Changed
+
+- **Reviewer prompt** (`iterate/review.py`): injected mandatory `EVIDENCE RULE` — reviewers must `read_file` every file they report on before judging, never report locations they did not read, and treat fabricated line numbers as poisoned evidence. `line` is now required for anchored, line-targeted findings (0 = whole-file/module-level).
+- **Runtime wiring** (`tools/iterate_tools.py`): the meta-review path now runs the evidence audit against the real repo and threads the result through the final report.
+
+### Security
+
+- Evidence gate prevents hallucinated file paths / invented line numbers from entering the report as credible issues.
+
+### Tests
+
+- Added evidence module tests (existence, line bounds, whole-file, read-set, traversal) and meta-review evidence folding tests; full suite passes.
+
 ## [1.11.3] - 2026-08-18
 
 Full implementation audit (code + UX) closing all remaining gaps with tests; worktree metadata no longer pollutes git state.
