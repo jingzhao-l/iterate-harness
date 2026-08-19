@@ -172,6 +172,17 @@ class TestMultiRoundConvergence:
         assert c.converged is False
         assert c.stopped_reason == "no_rounds"
 
+    def test_non_contiguous_round_numbers_are_indexed_by_round_not_position(self):
+        # Resumed/failed runs may skip a round number. Findings_by_round must be
+        # sized to the highest present round and indexed by the actual round
+        # number so nothing is dropped (mirrors the plugin's aggregateRounds).
+        c = compute_convergence([
+            ReviewRound(round=1, findings=[f(summary="a")]),
+            ReviewRound(round=3, findings=[f(summary="b")]),
+        ])
+        assert c.findings_by_round == [1, 0, 1]
+        assert c.converged is False  # last present round (3) produced a new finding
+
 
 class TestBuildReviewReport:
     def test_assembles_full_report_with_filter_dedupe_sort_summary(self):
@@ -226,13 +237,26 @@ class TestReviewerTasksAndSchema:
     def test_findings_schema_object_rooted_with_required_fields(self):
         schema = findings_schema()
         assert schema["type"] == "object"
-        assert schema["required"] == ["findings"]
+        assert schema["required"] == ["findings", "readFiles"]
+        assert "readFiles" in schema["properties"]  # type: ignore[index]
         item = schema["properties"]["findings"]["items"]  # type: ignore[index]
         for key in [
             "dimension", "file", "severity", "summary",
             "failure_scenario", "suggested_fix", "is_atomic",
         ]:
             assert key in item["required"], f"missing required {key}"
+
+    def test_reviewer_prompt_injects_coverage_rule_with_inventory(self):
+        prompt = reviewer_task_prompt(
+            dimension="security", goal="g", scope="full",
+            mode="dry-run", output_language="English",
+            scope_files=["src/a.py", "src/b.ts"],
+        )
+        assert "COVERAGE RULE" in prompt
+        assert "readFiles" in prompt
+        assert "- src/a.py" in prompt
+        assert "- src/b.ts" in prompt
+        assert "EVERY file" in prompt
 
     def test_dry_run_prompt_forbids_changes_and_mentions_round_1(self):
         prompt = reviewer_task_prompt(
@@ -265,3 +289,28 @@ class TestBuildReviewPlan:
         for d in plan.dimensions:
             assert f'"{d.id}"' in d.reviewer_prompt
             assert d.findings_schema
+
+    def test_full_scope_batches_inventory_into_dimension_chunk_tasks(self):
+        # 2 dimensions × 2 chunks (chunk size 2, 4 files) → 4 reviewer tasks,
+        # each owning only its own file inventory via the COVERAGE RULE.
+        cfg = base_config()
+        cfg.reviewer.scope_chunk_size = 2
+        inventory = ["src/a.py", "src/b.py", "src/c.py", "src/d.py"]
+        plan = build_review_plan(
+            config=cfg, mode="dry-run", max_review_rounds=4, scope_files=inventory
+        )
+        assert plan.scope == "full"
+        assert [d.id for d in plan.dimensions] == [
+            "correctness#1", "correctness#2", "security#1", "security#2",
+        ]
+        inventory_tasks = [d for d in plan.dimensions if d.id.startswith("correctness")]
+        assert "- src/a.py" in inventory_tasks[0].reviewer_prompt
+        assert "- src/b.py" in inventory_tasks[0].reviewer_prompt
+        assert "- src/c.py" in inventory_tasks[1].reviewer_prompt
+        assert "- src/d.py" in inventory_tasks[1].reviewer_prompt
+        assert "COVERAGE RULE" in inventory_tasks[0].reviewer_prompt
+
+    def test_full_scope_without_inventory_stays_unbatched(self):
+        plan = build_review_plan(config=base_config(), mode="dry-run", max_review_rounds=4)
+        assert [d.id for d in plan.dimensions] == ["correctness", "security"]
+        assert "COVERAGE RULE" not in plan.dimensions[0].reviewer_prompt

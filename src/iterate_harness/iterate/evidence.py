@@ -170,7 +170,7 @@ def verify_finding(
         )
 
     try:
-        text = resolved.read_text(encoding="utf-8", errors="replace")
+        raw = resolved.read_bytes()
     except OSError:
         # Unreadable (permissions, broken link...) — treat as missing evidence.
         return FindingEvidence(
@@ -182,6 +182,20 @@ def verify_finding(
             error="file_not_found",
         )
 
+    # A file is not line-addressable if it contains a NUL byte (binary payload).
+    # Anchored line numbers on a binary file cannot be trusted, so treat them
+    # the same as an out-of-range line rather than credulously accepting them.
+    if b"\x00" in raw:
+        return FindingEvidence(
+            file=rel_file,
+            line=line,
+            line_total=None,
+            resolved_path=str(resolved),
+            verified=False,
+            error="line_out_of_range",
+        )
+
+    text = raw.decode("utf-8", errors="replace")
     in_bounds, total = verify_line_bounds(line, text)
     if not in_bounds:
         return FindingEvidence(

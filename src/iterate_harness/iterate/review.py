@@ -30,6 +30,7 @@ import re
 from dataclasses import dataclass, field
 
 from .config_loader import resources_to_dict
+from .review_scope import chunk_files
 from .types import (
     SEVERITY_METRICS,
     ConvergenceInfo,
@@ -146,8 +147,14 @@ def aggregate_rounds(rounds: list[ReviewRound]) -> AggregateResult:
             first_round_by_key[key] = round_.round
             merged.append(f)
 
+    # `findings_by_round` is indexed by the ACTUAL round number (round r →
+    # index r-1), sized to the highest present round. Sizing by `len(rounds)`
+    # would silently drop findings first-seen in a non-contiguous round
+    # (e.g. a resumed run skipping round 2); sizing by the max round number
+    # mirrors `iterate-plugin/src/review.ts` aggregateRounds.
+    max_round = max((r.round for r in rounds), default=0)
     findings_by_round: list[int] = []
-    for r in range(1, len(rounds) + 1):
+    for r in range(1, max_round + 1):
         count = sum(1 for first in first_round_by_key.values() if first == r)
         findings_by_round.append(count)
 
@@ -162,7 +169,13 @@ def compute_convergence(rounds: list[ReviewRound]) -> ConvergenceInfo:
     """Compute convergence statistics for a multi-round review."""
     result = aggregate_rounds(rounds)
     total_rounds = len(rounds)
-    last_round_count = result.findings_by_round[total_rounds - 1] if total_rounds > 0 else 0
+    # Read the LAST PRESENT round's count by its reported round number, not
+    # `total_rounds - 1` (only valid for contiguous 1..N round numbers) —
+    # mirrors the plugin's `computeConvergence`.
+    last_round = rounds[-1].round if total_rounds > 0 else 0
+    last_round_count = (
+        result.findings_by_round[last_round - 1] if last_round > 0 else 0
+    )
     converged = total_rounds > 0 and last_round_count == 0
     if total_rounds == 0:
         stopped_reason = "no_rounds"
@@ -291,8 +304,17 @@ def findings_schema() -> dict[str, object]:
                     ],
                 },
             },
+            "readFiles": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Every file you actually opened with read_file while reviewing "
+                    "your assigned scope. Used to audit coverage; files you never "
+                    "opened count as un-reviewed."
+                ),
+            },
         },
-        "required": ["findings"],
+        "required": ["findings", "readFiles"],
     }
 
 
@@ -306,6 +328,7 @@ def reviewer_task_prompt(
     already_known: list[ReviewFinding] | None = None,
     atomic_max_lines: int = DEFAULT_ATOMIC_MAX_LINES,
     changed_files: list[str] | None = None,
+    scope_files: list[str] | None = None,
 ) -> str:
     """Build the task prompt for one dimension's reviewer subagent.
 
@@ -313,18 +336,37 @@ def reviewer_task_prompt(
     rounds) so the reviewer hunts for NEW issues only — that is what makes
     "反复审查" converge. Pass ``changed_files`` for changed-only quick
     reviews: the reviewer then restricts itself to the listed delta.
+
+    ``scope_files`` carries the file inventory the reviewer is RESPONSIBLE
+    for. When provided, a mandatory COVERAGE RULE is injected: the reviewer
+    must actually open every listed file with read_file and return a
+    ``readFiles`` array of what it opened. This is the enforcement half of
+    "每个子 agent 必须逐文件读取自己负责的审查范围" — files never opened
+    lower the meta-review coverage score.
     """
     parts: list[str] = [
         f'You are the "{dimension}" reviewer for the iterate review.',
         f"Goal: {goal}",
         f"Scope: {'entire codebase' if scope == 'full' else 'changed files only'}.",
     ]
-    if changed_files:
-        listing = "\n".join(f"- {path}" for path in changed_files)
+    if scope_files:
+        listing = "\n".join(f"- {path}" for path in scope_files if isinstance(path, str))
+        parts.append(
+            "COVERAGE RULE (mandatory): below is the exact file inventory you are "
+            "assigned to review. You MUST open EVERY file in this inventory with "
+            "the read_file tool before judging it — do not skip, skim-declare, or "
+            "assume any file without reading it. Files you did not actually open "
+            "are considered un-reviewed and will lower your coverage score. "
+            f"Return a ``readFiles`` array listing every file you actually opened.\n"
+            f"Assigned file inventory:\n{listing}"
+        )
+    elif changed_files:
+        listing = "\n".join(f"- {path}" for path in changed_files if isinstance(path, str))
         parts.append(
             "Changed files in this quick review (review ONLY these files; "
             "touch other files solely when directly implicated by a change "
-            f"above):\n{listing}"
+            "above). You MUST open EVERY listed file with read_file before "
+            f"judging it — never skip or assume a file.\n{listing}"
         )
     if mode == "dry-run":
         parts.append(
@@ -348,7 +390,7 @@ def reviewer_task_prompt(
         "disqualifying failure, and fabricated line numbers are treated as "
         "poisoned evidence. Anchor every finding to real code."
     )
-    parts.append('Return a JSON object: {"findings": [...]}.')
+    parts.append('Return a JSON object: {"findings": [...], "readFiles": [...]}.')
     parts.append(
         f'Each finding: dimension (must be "{dimension}"), file (relative path), '
         "line (REQUIRED positive integer — the exact line you READ for an "
@@ -510,6 +552,7 @@ def build_review_plan(
     max_review_rounds: int,
     known_intentional: list[KnownIntentional] | None = None,
     changed_files: list[str] | None = None,
+    scope_files: list[str] | None = None,
 ) -> ReviewPlan:
     """Build a review plan: rounds, dimensions, and per-dimension prompts.
 
@@ -519,32 +562,59 @@ def build_review_plan(
     reviewer prompt (changed-only quick review). Per-dimension resource
     overrides (model / concurrency / token budget) are attached both to the
     dimension spec and as an explicit clause inside the reviewer prompt.
+
+    Scope batching (coverage enforcement):
+    - ``changed-only``: a single batch carrying the full delta — every file
+      is injected into ``reviewer_task_prompt`` via ``scope_files``.
+    - ``full``: ``scope_files`` (pre-collected by the caller) is split with
+      :func:`chunk_files` into ``config.reviewer.scope_chunk_size`` batches;
+      every (dimension × batch) pair gets its own reviewer task so each
+      reviewer only owns a bounded, complete inventory it must open
+      file-by-file. When no inventory is supplied a full-scope plan falls
+      back to unbounded prompts (backwards compatible).
     """
     language = "Chinese (中文)" if config.language == "zh" else "English"
     safe_changed = [f for f in (changed_files or []) if isinstance(f, str) and f.strip()]
     scope: Scope = "changed-only" if safe_changed else config.review.scope
+
+    if scope == "changed-only":
+        # changed-only: a single reviewer owning the full delta — handled by
+        # the prompt's changed_files branch (COVERAGE RULE inventory is for the
+        # batch-split full-scope case), so scope_files stays None here.
+        batches: list[list[str] | None] = [None]
+    elif scope_files:
+        batches = [b for b in chunk_files(scope_files, config.reviewer.scope_chunk_size) if b]
+    else:
+        batches = [None]
+
+    dimensions: list[DimensionPlan] = []
+    for d in config.dimensions:
+        for index, batch in enumerate(batches):
+            dimension_id = d if len(batches) == 1 else f"{d}#{index + 1}"
+            dimensions.append(
+                DimensionPlan(
+                    id=dimension_id,
+                    reviewer_prompt=reviewer_task_prompt(
+                        dimension=d,
+                        goal=config.goal,
+                        scope=scope,
+                        mode=mode,
+                        already_known=[],
+                        output_language=language,
+                        atomic_max_lines=config.atomic.max_lines,
+                        changed_files=safe_changed or None,
+                        scope_files=batch,
+                    )
+                    + _resource_prompt_clause(config.dimension_resources.get(d)),
+                    resources=config.dimension_resources.get(d),
+                )
+            )
+
     return ReviewPlan(
         mode=mode,
         goal=config.goal,
         scope=scope,
-        dimensions=[
-            DimensionPlan(
-                id=d,
-                reviewer_prompt=reviewer_task_prompt(
-                    dimension=d,
-                    goal=config.goal,
-                    scope=scope,
-                    mode=mode,
-                    already_known=[],
-                    output_language=language,
-                    atomic_max_lines=config.atomic.max_lines,
-                    changed_files=safe_changed or None,
-                )
-                + _resource_prompt_clause(config.dimension_resources.get(d)),
-                resources=config.dimension_resources.get(d),
-            )
-            for d in config.dimensions
-        ],
+        dimensions=dimensions,
         max_review_rounds=max_review_rounds,
         known_intentional=known_intentional or [],
     )

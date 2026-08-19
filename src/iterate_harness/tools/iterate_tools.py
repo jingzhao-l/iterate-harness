@@ -26,7 +26,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ..iterate import config_loader, decision_log, evidence, meta_review, personalization, review, trend_store
+from ..iterate import config_loader, decision_log, evidence, meta_review, personalization, review, review_scope, trend_store
 from ..iterate import types as itypes
 from ..iterate import validate as validate_mod
 from ..iterate.loop_policy import ITERATE_STATE_KEY
@@ -118,6 +118,8 @@ class IterateConfigTool(BaseTool):
                 "reviewer": {
                     "outputSchemaValidation": cfg.reviewer.output_schema_validation,
                     "evidenceValidation": cfg.reviewer.evidence_validation,
+                    "coverageValidation": cfg.reviewer.coverage_validation,
+                    "scopeChunkSize": cfg.reviewer.scope_chunk_size,
                 },
             }
         )
@@ -261,12 +263,20 @@ class IterateReviewTool(BaseTool):
 
     def _plan(self, args: IterateReviewInput, context: ToolExecutionContext) -> ToolResult:
         effective = config_loader.load_effective_config(context.cwd)
+        root = Path(context.cwd)
+        # Full-codebase review: pre-collect the source inventory so
+        # build_review_plan can batch it into per-chunk reviewer tasks.
+        changed_only = bool(args.changed_files)
+        scope_files: list[str] | None = None
+        if not changed_only and effective.config.review.scope == "full":
+            scope_files = review_scope.collect_scope_files(root, scope="full")
         plan = review.build_review_plan(
             config=effective.config,
             mode=args.mode,  # type: ignore[arg-type]
             max_review_rounds=min(args.max_review_rounds, effective.config.max_rounds),
             known_intentional=_load_known_intentional(context),
             changed_files=args.changed_files,
+            scope_files=scope_files,
         )
         return _json_output({"plan": review.plan_to_dict(plan)})
 
@@ -353,10 +363,25 @@ class IterateReviewTool(BaseTool):
                 findings=parsed.findings,
                 read_set=evidence.read_set_from_metadata(context.metadata),
             )
+        # Prompt-informative coverage: when the aggregate report carries the
+        # reviewers' merged readFiles, compare the self-reported reads against
+        # the assigned scope inventory. Never flips the verdict.
+        coverage_result = None
+        raw_read_files = (args.report or {}).get("readFiles")
+        if (
+            effective.config.reviewer.coverage_validation
+            and isinstance(raw_read_files, list)
+            and raw_read_files
+        ):
+            assigned = review_scope.collect_scope_files(
+                Path(context.cwd), scope=effective.config.review.scope
+            )
+            coverage_result = review_scope.compute_coverage(assigned, raw_read_files)
         final = meta_review.build_final_review_report(
             parsed,
             threshold_result=None if gate.passed else gate,
             evidence=evidence_audit,
+            coverage=coverage_result,
         )
         final_payload: dict[str, Any] = {
             "verdict": final.verdict,
@@ -389,6 +414,8 @@ class IterateReviewTool(BaseTool):
         }
         if evidence_audit is not None:
             final_payload["evidence"] = evidence_audit.to_dict()
+        if coverage_result is not None:
+            final_payload["coverage"] = coverage_result.to_dict()
         if not thresholds.is_empty():
             final_payload["thresholdGate"] = gate.to_dict()
         return _json_output({"finalReport": final_payload})

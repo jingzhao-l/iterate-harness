@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from iterate_harness.iterate.config_loader import (
+    _default_config_dict,
+    config_from_dict,
     default_config,
     flatten_commands,
     is_command_allowed,
@@ -42,6 +44,32 @@ class TestDefaultConfig:
         assert c.validation.command_whitelist == []
         assert c.validation.commands == {}
         assert c.reviewer.output_schema_validation is True
+        assert c.reviewer.evidence_validation is True
+        assert c.reviewer.coverage_validation is True
+        assert c.reviewer.scope_chunk_size == 25
+
+
+class TestReviewerCoverageConfig:
+    def test_parses_coverage_and_chunk_size_overrides(self):
+        override = {
+            "reviewer": {
+                "coverage_validation": False,
+                "scope_chunk_size": 7,
+            }
+        }
+        raw = merge_config(_default_config_dict(), override)
+        cfg = config_from_dict(raw)
+        assert cfg.reviewer.coverage_validation is False
+        assert cfg.reviewer.scope_chunk_size == 7
+        assert cfg.reviewer.evidence_validation is True
+
+    def test_invalid_chunk_size_falls_back(self):
+        for bad in ("x", 0, -3, "full", None):
+            raw = merge_config(
+                _default_config_dict(), {"reviewer": {"scope_chunk_size": bad}}
+            )
+            cfg = config_from_dict(raw)
+            assert cfg.reviewer.scope_chunk_size == 25
 
 
 class TestMergeConfig:

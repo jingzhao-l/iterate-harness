@@ -20,6 +20,7 @@ import json
 
 from .evidence import EvidenceAudit
 from .review import ThresholdGateResult, sort_findings
+from .review_scope import CoverageResult
 from .types import (
     FinalReviewReport,
     FinalReviewSummary,
@@ -30,6 +31,10 @@ from .types import (
 
 #: Number of distinct consistency checks performed by :func:`meta_review_report`.
 META_REVIEW_CHECKS = 6
+
+#: How many uncovered scope files are listed in a COVERAGE_GAP hint before the
+#: remainder is folded into a "+N more" suffix.
+COVERAGE_LIST_TRUNCATE = 10
 
 
 def _issue(
@@ -265,6 +270,7 @@ def build_final_review_report(
     *,
     threshold_result: ThresholdGateResult | None = None,
     evidence: EvidenceAudit | None = None,
+    coverage: CoverageResult | None = None,
 ) -> FinalReviewReport:
     """Pair the source report with its meta-review verdict and summary.
 
@@ -278,8 +284,34 @@ def build_final_review_report(
     and flips the verdict to ``needs_revision``. The audit itself reads the
     filesystem; this function only folds the (pure, precomputed) result in.
     Pure and deterministic.
+
+    ``coverage`` (a :class:`CoverageResult`) is a *prompt-informative* check: a
+    scope whose reviewer never reported reading a meaningful share of its
+    assigned files surfaces a medium ``COVERAGE_GAP`` hint (it does NOT flip
+    the verdict — the subagent's actual tool-call trace is not aggregated
+    here, so coverage can only advise, never adjudicate).
     """
     meta = meta_review_report(report)
+    if coverage is not None:
+        meta.checks_run += 1
+        if coverage.uncovered:
+            meta.issues.append(
+                _issue(
+                    "COVERAGE_GAP",
+                    "medium",
+                    f"{len(coverage.uncovered)} of {len(coverage.assigned)} scope files "
+                    "were not (self-)reported as read",
+                    "The reviewer reported reading "
+                    f"{len(coverage.covered)}/{len(coverage.assigned)} assigned files. "
+                    "Uncovered: " + ", ".join(coverage.uncovered[:COVERAGE_LIST_TRUNCATE])
+                    + (
+                        f" (+{len(coverage.uncovered) - COVERAGE_LIST_TRUNCATE} more)"
+                        if len(coverage.uncovered) > COVERAGE_LIST_TRUNCATE
+                        else ""
+                    )
+                    + ". Best-effort coverage hint — verify these files were actually opened.",
+                )
+            )
     if threshold_result is not None and not threshold_result.passed:
         for violation in threshold_result.violations:
             meta.issues.append(
@@ -304,18 +336,33 @@ def build_final_review_report(
                 if violation.error is None:
                     continue
                 detail = (
-                    f"{violation.line} is beyond this file's {violation.line_total} lines"
+                    (
+                        f"{violation.line} is beyond this file's {violation.line_total} lines"
+                        if violation.line_total is not None
+                        else f"{violation.file} is a binary/unreadable file not line-addressable"
+                    )
                     if violation.error == "line_out_of_range"
                     else f"{violation.file} does not exist at all (verifiable read required)"
                 )
+                round_hint = ""
+                if report is not None and violation.file is not None:
+                    # Try to attribute the poisoned finding to the round that
+                    # first surfaced it (best-effort; report rounds carry it).
+                    for r in report.rounds or []:
+                        matched = any(
+                            fnd.file == violation.file and fnd.line == violation.line
+                            for fnd in r.findings
+                        )
+                        if matched:
+                            round_hint = f" (round {r.round})"
+                            break
+                summary = (
+                    f"Finding references non-existent code: "
+                    f"{violation.file}" + (f":{violation.line}" if violation.line else "") + round_hint
+                )
                 meta.issues.append(
-                    _issue(
-                        "EVIDENCE_VIOLATION",
-                        "critical",
-                        f"Finding references non-existent code: "
-                        f"{violation.file}" + (f":{violation.line}" if violation.line else ""),
-                        detail + ". Review results must anchor to real, read code.",
-                    )
+                    _issue("EVIDENCE_VIOLATION", "critical", summary,
+                           detail + ". Review results must anchor to real, read code.",)
                 )
             meta.passed = False
             meta.verdict = "revise"
@@ -339,4 +386,5 @@ def build_final_review_report(
         meta_review=meta,
         summary=final_summary,
         threshold_gate=threshold_result,
+        coverage=coverage,
     )

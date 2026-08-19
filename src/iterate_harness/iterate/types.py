@@ -186,6 +186,12 @@ class ReviewerConfig:
     #: Hard evidence gate: every finding's file/line is validated against real
     #: files on disk; a fabricated or out-of-range location flips the audit.
     evidence_validation: bool = True
+    #: Prompt-informative scope coverage check (default on): meta-review emits
+    #: a medium COVERAGE_GAP hint when a reviewer's self-reported readFiles do
+    #: not cover its assigned inventory. Never flips the final verdict.
+    coverage_validation: bool = True
+    #: Batch size for a `full`-scope review (files per reviewer chunk).
+    scope_chunk_size: int = 25
 
 
 @dataclass
@@ -303,6 +309,9 @@ class FinalReviewReport:
     # Project threshold-gate outcome (None when no thresholds configured or
     # the gate passed cleanly with nothing to fold into the meta-review).
     threshold_gate: object | None = None
+    # Prompt-informative scope coverage result (None when coverage validation
+    # is disabled or there is nothing to compare). Never flips the verdict.
+    coverage: object | None = None
 
 
 def finding_to_dict(finding: ReviewFinding) -> dict[str, object]:

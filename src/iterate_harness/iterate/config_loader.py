@@ -104,6 +104,8 @@ def _default_config_dict() -> dict[str, object]:
         "reviewer": {
             "output_schema_validation": cfg.reviewer.output_schema_validation,
             "evidence_validation": cfg.reviewer.evidence_validation,
+            "coverage_validation": cfg.reviewer.coverage_validation,
+            "scope_chunk_size": cfg.reviewer.scope_chunk_size,
         },
         "dimension_resources": {
             name: resources_to_dict(res) for name, res in cfg.dimension_resources.items()
@@ -222,6 +224,17 @@ def parse_worktree_isolation(raw: object) -> tuple[bool, list[str]]:
     if isinstance(raw, bool):
         return raw, []
     return False, ["worktree_isolation must be a boolean"]
+
+
+def _parse_scope_chunk_size(raw: object, fallback: int) -> int:
+    """Parse ``reviewer.scope_chunk_size`` defensively (positive int).
+
+    Anything that is not a positive integer falls back to ``fallback`` so a
+    typo in the yaml never crashes the review-plan build.
+    """
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    return fallback
 
 
 def _parse_threshold_metric(
@@ -392,6 +405,13 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
             ),
             evidence_validation=reviewer_raw.get(
                 "evidence_validation", defaults.reviewer.evidence_validation
+            ),
+            coverage_validation=reviewer_raw.get(
+                "coverage_validation", defaults.reviewer.coverage_validation
+            ),
+            scope_chunk_size=_parse_scope_chunk_size(
+                reviewer_raw.get("scope_chunk_size"),
+                defaults.reviewer.scope_chunk_size,
             ),
         )
     else:

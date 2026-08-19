@@ -49,6 +49,10 @@ class TestIterateConfigTool:
         assert result.is_error is False
         assert payload["source"] == "defaults"
         assert payload["validation"]["commands"] == {}
+        # Reviewer sub-config exposes both evidence + coverage settings (L5).
+        assert payload["reviewer"]["evidenceValidation"] is True
+        assert payload["reviewer"]["coverageValidation"] is True
+        assert payload["reviewer"]["scopeChunkSize"] == 25
 
     async def test_read_override_merges(self, tmp_path):
         write_config(tmp_path, 'goal: "g2"\ndimensions:\n  - correctness\n')

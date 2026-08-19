@@ -19,6 +19,7 @@ from iterate_harness.iterate.meta_review import (
     build_final_review_report,
 )
 from iterate_harness.iterate.review import build_review_report
+from iterate_harness.iterate.review_scope import CoverageResult
 from iterate_harness.iterate.types import ReviewFinding, ReviewRound
 
 
@@ -244,4 +245,57 @@ class TestMetaReviewEvidenceGate:
                 ],
             ),
         )
+        assert final.meta_review.checks_run == META_REVIEW_CHECKS + 1
+
+
+class TestMetaReviewCoverageHint:
+    @staticmethod
+    def _report():
+        return build_review_report(
+            mode="dry-run",
+            goal="improve",
+            dimensions=["correctness"],
+            max_review_rounds=1,
+            rounds=[ReviewRound(round=1, findings=[f(line=1)])],
+        )
+
+    def test_gap_emits_medium_hint_without_flipping_verdict(self):
+        gap = CoverageResult(
+            assigned=["src/a.py", "src/b.py", "src/c.py"],
+            read=["src/a.py"],
+            covered=["src/a.py"],
+            uncovered=["src/b.py", "src/c.py"],
+            ratio=1 / 3,
+        )
+        final = build_final_review_report(self._report(), coverage=gap)
+        codes = {i.code for i in final.meta_review.issues}
+        assert "COVERAGE_GAP" in codes
+        hint = next(i for i in final.meta_review.issues if i.code == "COVERAGE_GAP")
+        assert hint.severity == "medium"
+        assert "2 of 3" in hint.summary
+        # Prompt-informative only: the verdict and passed flag stay clean.
+        assert final.verdict == "approved"
+        assert final.meta_review.passed is True
+
+    def test_full_coverage_emits_no_gap(self):
+        covered = CoverageResult(
+            assigned=["src/a.py"],
+            read=["src/a.py"],
+            covered=["src/a.py"],
+            uncovered=[],
+            ratio=1.0,
+        )
+        final = build_final_review_report(self._report(), coverage=covered)
+        assert "COVERAGE_GAP" not in {i.code for i in final.meta_review.issues}
+        assert final.verdict == "approved"
+
+    def test_coverage_increments_checks_run(self):
+        covered = CoverageResult(
+            assigned=["src/a.py"],
+            read=["src/a.py"],
+            covered=["src/a.py"],
+            uncovered=[],
+            ratio=1.0,
+        )
+        final = build_final_review_report(self._report(), coverage=covered)
         assert final.meta_review.checks_run == META_REVIEW_CHECKS + 1
