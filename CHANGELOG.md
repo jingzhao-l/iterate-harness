@@ -4,6 +4,25 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.12.1] - 2026-08-19
+
+Force reviewers to open every file in their assigned review scope and surface a coverage gap hint.
+
+### Added
+
+- **Scope inventory + coverage** (`iterate/review_scope.py`): `collect_scope_files` gathers the sorted relative-path inventory for a `full` scope, `chunk_files` batches it by `reviewer.scope_chunk_size` (default 25) while keeping directory runs together, and `compute_coverage` scores self-reported reads against the assigned inventory.
+- **Scope batching in plan** (`iterate/review.py`): `build_review_plan` splits a `full` scope into per-chunk reviewer tasks when `scope_files` is supplied; `changed-only` stays a single batch owning the full delta.
+- **Coverage hint in meta-review** (`iterate/meta_review.py`): new prompt-informative `COVERAGE_GAP` (medium severity) when reviewers' self-reported `readFiles` don't cover their assigned scope; never flips the verdict.
+- **Config switches** (`iterate/types.py`, `iterate/config_loader.py`): `reviewer.coverage_validation` (default `true`) and `reviewer.scope_chunk_size` (default `25`).
+
+### Changed
+
+- **Reviewer prompt** (`iterate/review.py`): injected mandatory `COVERAGE RULE` — reviewers must `read_file` EVERY file in the assigned inventory before judging and return a `readFiles` array listing every file actually opened.
+- **Evidence binary detection** (`iterate/evidence.py`): files containing a NUL byte are treated as not line-addressable (binary payload), same as an out-of-range line.
+- **Violation attribution** (`iterate/meta_review.py`): `EVIDENCE_VIOLATION` now reports the round that first surfaced the poisoned finding.
+- **Non-contiguous round convergence** (`iterate/review.py`): `aggregate_rounds` sizes `findings_by_round` by the max round number (not `len(rounds)`), and `compute_convergence` reads the last present round by its reported round number.
+- **Runtime wiring** (`tools/iterate_tools.py`): the plan tool collects scope files and batches them; the meta-review tool computes coverage and threads it through the final report; `IterateConfigTool` exposes `coverageValidation`/`scopeChunkSize`.
+
 ## [1.12.0] - 2026-08-19
 
 Forced evidence-based review: sub-agents must actually read files before judging, and fabricated locations fail the run.
