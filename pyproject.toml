@@ -31,6 +31,7 @@ dependencies = [
     "questionary>=2.0.1",
     "watchfiles>=0.20.0",
     "croniter>=2.0.0",
+    "cryptography==50.0.0",
     "fastapi==0.115.12",
     "uvicorn==0.52.3",
 ]
