@@ -7,15 +7,18 @@ const assert = require("node:assert/strict");
 const path = require("path");
 
 const {
+  DEFAULT_ARTIFACT_EXT,
   BootstrapError,
   HOME_ENV_VAR,
   INSTALL_URL_ENV_VAR,
   MAX_DOWNLOAD_REDIRECTS,
   PYTHON_ENV_VAR,
+  artifactExtensionFor,
   curlDownload,
   downloadCachePath,
   downloadFile,
   downloadTarballTo,
+  installFallbackUrl,
   installHarness,
   installUrl,
   isRemoteHttpUrl,
@@ -26,6 +29,8 @@ const {
   pythonCandidates,
   releaseTarballUrl,
   venvExecutablePaths,
+  wheelAssetName,
+  wheelAssetUrl,
 } = require("../lib/bootstrap");
 
 test("parsePythonVersion extracts major/minor/patch from mixed output", () => {
@@ -84,20 +89,47 @@ test("venvExecutablePaths resolves platform-specific venv layout", () => {
   assert.equal(posix.ih, path.join("home", "venv", "bin", "ih"));
 });
 
-test("releaseTarballUrl pins the tag matching the wrapper version", () => {
+test("releaseTarballUrl pins the archive tag matching the wrapper version", () => {
   assert.equal(
     releaseTarballUrl("1.6.0"),
     "https://github.com/jingzhao-l/iterate-harness/archive/refs/tags/v1.6.0.tar.gz"
   );
 });
 
-test("installUrl prefers the env override over the pinned tarball", () => {
+test("wheelAssetName / wheelAssetUrl target the pre-built release wheel", () => {
+  assert.equal(wheelAssetName("1.6.0"), "iterate_harness-1.6.0-py3-none-any.whl");
+  assert.equal(
+    wheelAssetUrl("1.6.0"),
+    "https://github.com/jingzhao-l/iterate-harness/releases/download/v1.6.0/iterate_harness-1.6.0-py3-none-any.whl"
+  );
+});
+
+test("installUrl prefers the env override over the pinned wheel", () => {
   const override = "git+https://github.com/jingzhao-l/iterate-harness.git@main";
   assert.equal(installUrl("1.6.0", { [INSTALL_URL_ENV_VAR]: override }), override);
   assert.equal(
     installUrl("1.6.0", {}),
+    "https://github.com/jingzhao-l/iterate-harness/releases/download/v1.6.0/iterate_harness-1.6.0-py3-none-any.whl"
+  );
+});
+
+test("installFallbackUrl returns the source archive; null when URL is overridden", () => {
+  assert.equal(
+    installFallbackUrl("1.6.0", {}),
     "https://github.com/jingzhao-l/iterate-harness/archive/refs/tags/v1.6.0.tar.gz"
   );
+  assert.equal(
+    installFallbackUrl("1.6.0", { [INSTALL_URL_ENV_VAR]: "git+https://x.git@main" }),
+    null
+  );
+});
+
+test("artifactExtensionFor maps whl and tar.gz, defaulting otherwise", () => {
+  assert.equal(artifactExtensionFor("https://x/y.whl"), ".whl");
+  assert.equal(artifactExtensionFor("https://x/y.WHL"), ".whl");
+  assert.equal(artifactExtensionFor("https://x/y.tar.gz"), ".tar.gz");
+  assert.equal(artifactExtensionFor("git+https://x/y.git@main"), DEFAULT_ARTIFACT_EXT);
+  assert.equal(artifactExtensionFor(""), DEFAULT_ARTIFACT_EXT);
 });
 
 test("needsBootstrap ignores surrounding whitespace and requires exact match", () => {
@@ -257,6 +289,126 @@ test("installHarness propagates the second pip failure untouched", async () => {
     (error) => error === cacheFailure
   );
   assert.equal(pipCalls, 2);
+});
+
+// ---------------------------------------------------------------------------
+// Wheel-first install (pre-built release wheel, archive as last-resort)
+// ---------------------------------------------------------------------------
+
+test("installHarness downloads a wheel to a .whl cache file on a TLS failure", async () => {
+  const wheelUrl =
+    "https://github.com/jingzhao-l/iterate-harness/releases/download/v1.9.1/iterate_harness-1.9.1-py3-none-any.whl";
+  const cache = downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl");
+  const pipCalls = [];
+  const downloads = [];
+  await installHarness({
+    python: "/venv/bin/python",
+    url: wheelUrl,
+    homeDir: path.join("home", "npm"),
+    version: "1.9.1",
+    runStepFn: (command, args) => {
+      pipCalls.push([command, args]);
+      if (pipCalls.length === 1) {
+        throw new BootstrapError("pip exited with code 1: CERTIFICATE_VERIFY_FAILED");
+      }
+    },
+    downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
+  });
+  assert.equal(pipCalls.length, 2);
+  assert.deepEqual(pipCalls[1][1], pipInstallArgs(cache));
+  assert.deepEqual(downloads, [[wheelUrl, cache]]);
+});
+
+test("installHarness falls back to the source archive when the wheel is missing", async () => {
+  const wheelUrl =
+    "https://github.com/jingzhao-l/iterate-harness/releases/download/v1.9.1/iterate_harness-1.9.1-py3-none-any.whl";
+  const archiveUrl = releaseTarballUrl("1.9.1");
+  const pipCalls = [];
+  const archiveDownloads = [];
+  await installHarness({
+    python: "/venv/bin/python",
+    url: wheelUrl,
+    homeDir: path.join("home", "npm"),
+    version: "1.9.1",
+    runStepFn: (command, args) => {
+      pipCalls.push([command, args]);
+      throw new BootstrapError("pip exited with code 1");
+    },
+    // Wheel download also fails → the archive fallback is exercised.
+    downloader: async () => {
+      throw new BootstrapError("downloading .whl failed: exit code 22");
+    },
+    fallback: {
+      python: "/venv/bin/python",
+      url: archiveUrl,
+      homeDir: path.join("home", "npm"),
+      version: "1.9.1",
+      // The archive pip attempt succeeds — no further fallback.
+      runStepFn: (command, args) => pipCalls.push([command, args]),
+      downloader: async (downloadUrl, dest) => archiveDownloads.push([downloadUrl, dest]),
+    },
+  });
+  assert.deepEqual(pipCalls.map(([, args]) => args), [
+    pipInstallArgs(wheelUrl),
+    pipInstallArgs(archiveUrl),
+  ]);
+  assert.equal(archiveDownloads.length, 0);
+});
+
+test("installHarness surfaces the combined error when both wheel and archive fail", async () => {
+  const wheelUrl =
+    "https://github.com/jingzhao-l/iterate-harness/releases/download/v1.9.1/iterate_harness-1.9.1-py3-none-any.whl";
+  await assert.rejects(
+    installHarness({
+      python: "/venv/bin/python",
+      url: wheelUrl,
+      homeDir: path.join("home", "npm"),
+      version: "1.9.1",
+      runStepFn: () => {
+        throw new BootstrapError("pip exited with code 1");
+      },
+      downloader: async () => {
+        throw new BootstrapError("wheel missing");
+      },
+      fallback: {
+        python: "/venv/bin/python",
+        url: releaseTarballUrl("1.9.1"),
+        homeDir: path.join("home", "npm"),
+        version: "1.9.1",
+        // The archive pip build fails, then its downloader dies too.
+        runStepFn: () => {
+          throw new BootstrapError("pip exited with code 1: build failed");
+        },
+        downloader: async () => {
+          throw new BootstrapError("archive unreachable");
+        },
+      },
+    }),
+    (error) =>
+      error instanceof BootstrapError &&
+      error.message.includes("build failed") &&
+      error.message.includes("archive unreachable")
+  );
+});
+
+test("installHarness ignores the fallback when the URL is an explicit override", async () => {
+  const url = "git+https://github.com/jingzhao-l/iterate-harness.git@main";
+  const primary = new BootstrapError("pip exited with code 1: bad ref");
+  await assert.rejects(
+    installHarness({
+      python: "/venv/bin/python",
+      url,
+      homeDir: path.join("home", "npm"),
+      version: "1.9.1",
+      runStepFn: () => {
+        throw primary;
+      },
+      downloader: async () => {
+        throw new Error("should not download for a non-http url");
+      },
+    }),
+    (error) => error === primary
+  );
 });
 
 test("downloadFile rejects immediately when the redirect budget is exhausted", async () => {

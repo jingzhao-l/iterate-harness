@@ -1,0 +1,76 @@
+name: Release publish
+
+# Builds and uploads the pre-built wheel so the npm wrapper can install the
+# harness without compiling from source. The wheel carries the compiled
+# frontend assets (force-included by pyproject.toml: terminal source +
+# frontend/web/dist), which the GitHub source archive does not contain. The
+# npm wrapper (npm/lib/bootstrap.js) downloads exactly this asset:
+#   https://github.com/jingzhao-l/iterate-harness/releases/download/v<tag>/iterate_harness-<tag>-py3-none-any.whl
+#
+# Ordering note: the wheel is built and uploaded by THIS job asynchronously
+# after the release is published. Do NOT run `npm publish` until this job has
+# finished uploading the wheel — otherwise the npm wrapper cannot download it
+# and would fall back to the source archive (which lacks the built frontend
+# and consequently fails to build).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-wheel-upload:
+    name: Build wheel and upload to release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged tree
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install terminal frontend dependencies
+        # Only package.json/tsconfig/src are force-included into the wheel;
+        # npm deps are needed so the bundled TypeScript source stays intact,
+        # which mirrors how CI typechecks it.
+        working-directory: frontend/terminal
+        run: npm ci
+
+      - name: Install and build web frontend (produces dist baked into wheel)
+        working-directory: frontend/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify web dist produced
+        run: test -n "$(ls -A frontend/web/dist)" && echo "frontend/web/dist present"
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      - name: Inspect built wheel
+        run: |
+          ls -la dist
+          echo "---"
+          python -m zipfile -l dist/*.whl | { grep -E "_frontend_web/|_frontend/" | head -20 || true; }
+
+      - name: Upload wheel to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl

@@ -7,12 +7,18 @@
  *
  * 1. Resolve a Python interpreter >= 3.10 (env override first).
  * 2. Create/reuse the venv at ~/.iterate-harness-npm/venv.
- * 3. pip-install the harness release tarball pinned to THIS npm package's
- *    version (lockstep: npm 1.6.0 installs harness v1.6.0). When pip cannot
- *    fetch the tarball (typically a broken Python TLS trust store on macOS
- *    python.org builds), the wrapper retries by downloading the tarball with
- *    Node's own https stack — and, failing that, with curl (system trust
- *    store) — then pip-installs the local file.
+ * 3. pip-install the harness release pinned to THIS npm package's version
+ *    (lockstep: npm 1.12.6 installs harness v1.12.6). The preferred artifact is
+ *    the pre-built wheel uploaded to the GitHub release (it already contains
+ *    the compiled frontend assets, exactly like iterate-skill-installer ships
+ *    pre-wrapped assets). pip-installing the wheel avoids building from source,
+ *    which previously failed because the source archive has no frontend/web/
+ *    dist for pyproject.toml's force-include. When pip cannot fetch the wheel
+ *    (typically a broken Python TLS trust store on macOS python.org builds),
+ *    the wrapper retries by downloading the wheel with Node's own https stack
+ *    — and, failing that, with curl (system trust store) — then pip-installs
+ *    the local file. If the wheel is missing from the release entirely, the
+ *    wrapper falls back to the pinned source archive as a last resort.
  * 4. Stamp the installed version; a mismatch (npm upgrade) triggers a
  *    re-install on the next run.
  * 5. Spawn the venv's `ih` with argv/stdio/signals forwarded and the exit
@@ -48,7 +54,15 @@ const HOME_ENV_VAR = "ITERATE_HARNESS_NPM_HOME";
 const INSTALL_URL_ENV_VAR = "ITERATE_HARNESS_INSTALL_URL";
 const SKIP_INSTALL_ENV_VAR = "ITERATE_HARNESS_SKIP_INSTALL";
 
-const HARNESS_REPO_ARCHIVE_URL = "https://github.com/jingzhao-l/iterate-harness/archive/refs/tags";
+const HARNESS_GITHUB_REPO = "jingzhao-l/iterate-harness";
+const HARNESS_RELEASE_DOWNLOAD_URL = `https://github.com/${HARNESS_GITHUB_REPO}/releases/download`;
+const HARNESS_REPO_ARCHIVE_URL = `https://github.com/${HARNESS_GITHUB_REPO}/archive/refs/tags`;
+
+// Preferred installable artifact: the pre-built wheel (frontend dist baked in).
+const WHEEL_ASSET_SUFFIX = "-py3-none-any.whl";
+// Last-resort artifact: the pinned source archive (pip builds from source).
+const DEFAULT_ARTIFACT_EXT = ".tar.gz";
+const WHEEL_ARTIFACT_EXT = ".whl";
 
 const MIN_PYTHON_MAJOR = 3;
 const MIN_PYTHON_MINOR = 10;
@@ -62,6 +76,16 @@ class BootstrapError extends Error {}
 // Pure helpers (unit-tested in test/bootstrap.test.js)
 // ---------------------------------------------------------------------------
 
+function wheelAssetName(version) {
+  return `iterate_harness-${version}${WHEEL_ASSET_SUFFIX}`;
+}
+
+// Preferred installable source: the pre-built wheel (frontend dist baked in).
+function wheelAssetUrl(version) {
+  return `${HARNESS_RELEASE_DOWNLOAD_URL}/v${version}/${wheelAssetName(version)}`;
+}
+
+// Last-resort installable source: the pinned source archive (builds on pip).
 function releaseTarballUrl(version) {
   return `${HARNESS_REPO_ARCHIVE_URL}/v${version}.tar.gz`;
 }
@@ -125,8 +149,19 @@ function isRemoteHttpUrl(target) {
   return /^https?:\/\//i.test(String(target || ""));
 }
 
-function downloadCachePath(homeDir, version) {
-  return path.join(homeDir, TARBALL_CACHE_DIR_NAME, `iterate-harness-${version}.tar.gz`);
+// Infer the on-disk extension (for the cache file) from a download URL so
+// pip-installing the local copy keeps a correct .whl / .tar.gz suffix.
+function artifactExtensionFor(url) {
+  const match = /\.(tar\.gz|whl)$/i.exec(String(url || ""));
+  if (!match) {
+    return DEFAULT_ARTIFACT_EXT;
+  }
+  return match[1].toLowerCase() === "whl" ? WHEEL_ARTIFACT_EXT : DEFAULT_ARTIFACT_EXT;
+}
+
+function downloadCachePath(homeDir, version, extension) {
+  const ext = extension || DEFAULT_ARTIFACT_EXT;
+  return path.join(homeDir, TARBALL_CACHE_DIR_NAME, `iterate-harness-${version}${ext}`);
 }
 
 function pipInstallArgs(target) {
@@ -225,16 +260,29 @@ function runStep(command, args, options) {
   }
 }
 
+// Preferred install URL: the pre-built wheel pinned to this npm version.
+// An explicit env override always wins (e.g. a local dev wheel or git ref).
 function installUrl(version, env) {
   const override = env ? env[INSTALL_URL_ENV_VAR] : undefined;
   if (override) {
     return override;
   }
+  return wheelAssetUrl(version);
+}
+
+// Last-resort fallback URL: the pinned source archive. Only relevant when the
+// user did not override the install URL (an explicit override means they own
+// the source and no archive fallback should kick in).
+function installFallbackUrl(version, env) {
+  const override = env ? env[INSTALL_URL_ENV_VAR] : undefined;
+  if (override) {
+    return null;
+  }
   return releaseTarballUrl(version);
 }
 
 // ---------------------------------------------------------------------------
-// Tarball download fallback (Node-side TLS — survives broken pip trust stores)
+// Artifact download fallback (Node-side TLS — survives broken pip trust stores)
 // ---------------------------------------------------------------------------
 
 function downloadFile(url, dest, redirectBudget) {
@@ -353,14 +401,19 @@ async function downloadTarballTo(url, dest, deps) {
 }
 
 // ---------------------------------------------------------------------------
-// Install chain: pip from URL first, Node-download + local pip as fallback
+// Install chain: pip from URL (pre-built wheel) first, Node-download + local
+// pip as TLS fallback; missing wheel falls back to the source archive.
 // ---------------------------------------------------------------------------
 
 async function installHarness(options) {
   const python = options.python;
   const url = options.url;
+  const homeDir = options.homeDir;
+  const version = options.version;
   const runStepFn = options.runStepFn || runStep;
   const downloader = options.downloader || downloadTarballTo;
+  // Optional terminal fallback (e.g. the source archive if the wheel is missing).
+  const fallback = options.fallback;
 
   try {
     runStepFn(python, pipInstallArgs(url));
@@ -372,10 +425,17 @@ async function installHarness(options) {
     process.stderr.write(
       `[iterate-harness] pip install from ${url} failed; retrying via direct download ...\n`
     );
-    const cachePath = downloadCachePath(options.homeDir, options.version);
+    const cachePath = downloadCachePath(homeDir, version, artifactExtensionFor(url));
     try {
       await downloader(url, cachePath);
     } catch (downloadError) {
+      if (fallback) {
+        process.stderr.write(
+          `[iterate-harness] primary artifact unavailable (${downloadError.message}); ` +
+            `falling back to source archive ${fallback.url} ...\n`
+        );
+        return installHarness(fallback);
+      }
       throw new BootstrapError(
         `${primaryError.message}\n\n(direct-download fallback also failed: ${downloadError.message})`
       );
@@ -404,8 +464,18 @@ async function bootstrap(homeDir, version, env) {
   }
 
   const url = installUrl(version, env);
-  process.stderr.write(`[iterate-harness] pip installing iterate-harness ${version} ...\n`);
-  await installHarness({ python: executable.python, url, homeDir, version });
+  const fallbackUrl = installFallbackUrl(version, env);
+  process.stderr.write(`[iterate-harness] installing iterate-harness ${version} ...\n`);
+  await installHarness({
+    python: executable.python,
+    url,
+    homeDir,
+    version,
+    fallback:
+      fallbackUrl != null
+        ? { python: executable.python, url: fallbackUrl, homeDir, version }
+        : undefined,
+  });
 
   const stampPath = path.join(homeDir, STAMP_FILE_NAME);
   fs.writeFileSync(stampPath, `${version}\n`, "utf8");
@@ -489,6 +559,7 @@ async function runHarness(args, env) {
 
 module.exports = {
   BootstrapError,
+  DEFAULT_ARTIFACT_EXT,
   MAX_DOWNLOAD_REDIRECTS,
   MIN_PYTHON_MAJOR,
   MIN_PYTHON_MINOR,
@@ -496,12 +567,15 @@ module.exports = {
   HOME_ENV_VAR,
   INSTALL_URL_ENV_VAR,
   SKIP_INSTALL_ENV_VAR,
+  WHEEL_ASSET_SUFFIX,
+  artifactExtensionFor,
   detectPython,
   curlDownload,
   downloadCachePath,
   downloadFile,
   downloadTarballTo,
   ensureRuntime,
+  installFallbackUrl,
   installHarness,
   installUrl,
   isRemoteHttpUrl,
@@ -515,4 +589,6 @@ module.exports = {
   reportBootstrapFailure,
   runHarness,
   venvExecutablePaths,
+  wheelAssetName,
+  wheelAssetUrl,
 };

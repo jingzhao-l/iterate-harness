@@ -26,10 +26,14 @@ On first run the wrapper:
    overridable via `ITERATE_HARNESS_PYTHON`).
 2. Creates a managed virtualenv at `~/.iterate-harness-npm/venv`
    (overridable via `ITERATE_HARNESS_NPM_HOME`).
-3. `pip install`s the harness **release tarball pinned to this npm package's
-   version** — npm `1.6.0` always installs harness `v1.6.0`. Upgrading the npm
-   package automatically re-installs the matching harness version on the next
-   run.
+3. `pip install`s the harness **pinned to this npm package's version** — npm
+   `1.6.0` always installs harness `v1.6.0`. Upgrading the npm package
+   automatically re-installs the matching harness version on the next run.
+   The preferred artifact is the **pre-built wheel** uploaded to the GitHub
+   release (`iterate_harness-<version>-py3-none-any.whl`, which already bundles
+   the compiled frontend assets — exactly like iterate-skill-installer ships
+   pre-wrapped assets). If the wheel is missing, the wrapper falls back to the
+   pinned **source archive** as a last resort.
 4. Delegates to the venv's real `ih` executable with argv, stdio, signals and
    exit codes forwarded.
 
@@ -50,7 +54,7 @@ have Node, so the TUI always works.
 | --- | --- |
 | `ITERATE_HARNESS_PYTHON` | Use this interpreter instead of auto-detection |
 | `ITERATE_HARNESS_NPM_HOME` | Runtime dir (default `~/.iterate-harness-npm`) |
-| `ITERATE_HARNESS_INSTALL_URL` | Install from this pip URL instead of the pinned release tarball (e.g. a git branch for testing) |
+| `ITERATE_HARNESS_INSTALL_URL` | Install from this pip URL instead of the pinned release wheel (e.g. a git branch for testing) |
 | `ITERATE_HARNESS_SKIP_INSTALL=1` | Skip bootstrap entirely; just run the already-installed `ih` |
 
 ## npx (no global install)

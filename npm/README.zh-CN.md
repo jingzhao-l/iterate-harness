@@ -25,8 +25,11 @@ harness 本身是**一个 Python 包**。这个 npm 包是一个薄分发包装�
    可通过 `ITERATE_HARNESS_PYTHON` 覆盖）。
 2. 在 `~/.iterate-harness-npm/venv` 创建托管虚拟环境
    （可通过 `ITERATE_HARNESS_NPM_HOME` 覆盖）。
-3. `pip install` **与本 npm 包版本锁定的** harness 发布 tarball —— npm 的 `1.6.0`
+3. `pip install` **与本 npm 包版本锁定的** harness 发布版本 —— npm 的 `1.6.0`
    总会安装 harness `v1.6.0`。升级 npm 包会在下次运行时自动重装对应的 harness 版本。
+   优先下载 GitHub 发布里的**预构建 wheel**（`iterate_harness-<version>-py3-none-any.whl`，
+   已内置编译好的前端资源——和 iterate-skill-installer 分发预打包资源一致）。
+   若 wheel 缺失，再兑底使用锁定的**源码归档**。
 4. 代理调用 venv 里真正的 `ih` 可执行文件，转发 argv、stdio、信号与退出码。
 
 React TUI 的前端依赖（`node_modules`）会在首次启动 TUI 时由 harness 自动安装——
@@ -44,7 +47,7 @@ npm 用户必然有 Node，所以 TUI 始终可用。
 | --- | --- |
 | `ITERATE_HARNESS_PYTHON` | 使用该解释器，而非自动检测 |
 | `ITERATE_HARNESS_NPM_HOME` | 运行时目录（默认 `~/.iterate-harness-npm`） |
-| `ITERATE_HARNESS_INSTALL_URL` | 从这个 pip URL 安装，而非锁定的发布 tarball（例如测试用的 git 分支） |
+| `ITERATE_HARNESS_INSTALL_URL` | 从这个 pip URL 安装，而非锁定的发布 wheel（例如测试用的 git 分支） |
 | `ITERATE_HARNESS_SKIP_INSTALL=1` | 完全跳过引导安装，直接运行已装好的 `ih` |
 
 ## npx（免全局安装）

@@ -4,6 +4,19 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.12.6] - 2026-08-20
+
+npm first-run install fixed: the wrapper no longer tries to build the harness from the GitHub source archive (which lacks `frontend/web/dist`, so pip's source build always failed). It now downloads the **pre-built wheel** uploaded to the GitHub release and pip-installs that — mirroring how `iterate-skill-installer` ships pre-wrapped assets — with the source archive demoted to a last-resort fallback.
+
+### Changed
+
+- **npm wrapper install source** (`npm/lib/bootstrap.js`): `installUrl` defaults to the pre-built release wheel `iterate_harness-<version>-py3-none-any.whl` instead of the source archive. New `wheelAssetUrl` / `wheelAssetName` helpers build the pinned asset URL; new `installHarness` fallback path `pip from wheel URL → Node/curl download + local pip → (missing wheel) source archive`. New `installFallbackUrl` returns the archive URL only when the user did not override `ITERATE_HARNESS_INSTALL_URL`. Cache files keep the correct `.whl` / `.tar.gz` extension (`artifactExtensionFor`, `downloadCachePath` ext param).
+- **Release distribution** (`.github/workflows/release.yml`, new): on a published harness release, installs frontend deps, builds `frontend/web/dist`, runs `uv build --wheel`, and uploads the wheel to the release. Ordering note: `npm publish` must wait for this job so the wrapper can fetch the wheel.
+
+### Docs
+
+- `npm/README.md` / `npm/README.zh-CN.md`: first-run step 3 and the `ITERATE_HARNESS_INSTALL_URL` table row now describe the wheel-first install with the source archive as fallback.
+
 ## [1.12.5] - 2026-08-20
 
 Provider refresh + self-update + WebUI UX review: replaced ModelScope with OpenAI as a first-class provider, added an automatic update mechanism with an `ih update` command, and fixed a set of WebUI UX issues found in a full frontend pass.
