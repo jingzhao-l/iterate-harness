@@ -15,23 +15,21 @@
 "use strict";
 
 const { ensureRuntime, reportBootstrapFailure, SKIP_INSTALL_ENV_VAR } = require("../lib/bootstrap");
+const ui = require("../lib/ui");
 
 async function main() {
   if (process.env[SKIP_INSTALL_ENV_VAR] === "1") {
-    process.stderr.write(
-      `[iterate-harness] skipped install during npm install (${SKIP_INSTALL_ENV_VAR}=1); ` +
-        "the harness will be installed on the first `ih` run.\n"
-    );
+    ui.warning(`Skipped install during npm install (${SKIP_INSTALL_ENV_VAR}=1); harness installs on the first \`ih\` run.`);
     return;
   }
   try {
     await ensureRuntime();
-    process.stderr.write("[iterate-harness] harness installed during npm install.\n");
+    ui.success("iterate-harness installed during npm install — `ih` is ready to use.");
   } catch (error) {
     reportBootstrapFailure(error);
-    process.stderr.write(
-      "[iterate-harness] could not install the harness during npm install " +
-        "(see above). It will be retried automatically on the first `ih` run.\n"
+    ui.warning(
+      "Could not install the harness during npm install (see above). " +
+        "It will be retried automatically on the first `ih` run."
     );
   }
 }

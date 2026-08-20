@@ -37,6 +37,20 @@ harness 本身是**一个 Python 包**。这个 npm 包是一个薄分发包装�
 `ITERATE_HARNESS_SKIP_INSTALL=1`），钩子只会打印提示而不让 npm 安装失败，
 `ih` 会在首次运行时补装——惰性兑底保证两种情况下包都可用。
 
+## 交互式体验
+
+每次运行 `ih`，都会出现青色 **ITERATE** ASCII 横幅（claude-code 风格）；首次安装
+会像 iterate-skill-installer 一样进入**交互式向导**：
+
+- 先打印 "Installing" 信息框，包含锁定的版本号与运行时目录。
+- 下载前询问 `Install iterate-harness vX.Y.Z ...? [Y/n]`——选否会以 0 退出码
+  干净退出而不是报错。
+- 装完打印 "Done" 信息框，附上快速上手提示（`ih --help`、`ih status`、
+  `ih iterate --help`）。
+
+所有交互输出都写到 **stderr**，所以 `ih --version | jq '...'` 得到的 stdout
+依旧干净、可机器解析。
+
 React TUI 的前端依赖（`node_modules`）会在首次启动 TUI 时由 harness 自动安装——
 npm 用户必然有 Node，所以 TUI 始终可用。
 

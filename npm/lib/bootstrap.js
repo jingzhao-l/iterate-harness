@@ -36,6 +36,8 @@ const https = require("https");
 const os = require("os");
 const path = require("path");
 
+const ui = require("./ui");
+
 // ---------------------------------------------------------------------------
 // Constants (no magic strings below — everything is named here)
 // ---------------------------------------------------------------------------
@@ -71,6 +73,10 @@ const PYTHON_VERSION_PATTERN = /Python\s+(\d+)\.(\d+)\.(\d+)/;
 const IS_WINDOWS = process.platform === "win32";
 
 class BootstrapError extends Error {}
+
+// Thrown when the user declines the interactive install wizard. Treated as a
+// graceful "nothing to do" exit (code 0), never as a failure.
+class CancelledError extends Error {}
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested in test/bootstrap.test.js)
@@ -467,13 +473,13 @@ async function bootstrap(homeDir, version, env) {
     fs.rmSync(venvDir, { recursive: true, force: true });
   }
   if (!fs.existsSync(activateMarker)) {
-    process.stderr.write(`[iterate-harness] creating virtualenv at ${venvDir} ...\n`);
+    ui.step(`Creating virtualenv at ${venvDir}`);
     runStep(interpreter.command, [...interpreter.preArgs, "-m", "venv", venvDir]);
   }
 
   const url = installUrl(version, env);
   const fallbackUrl = installFallbackUrl(version, env);
-  process.stderr.write(`[iterate-harness] installing iterate-harness ${version} ...\n`);
+  ui.step(`Installing iterate-harness ${version}`);
   await installHarness({
     python: executable.python,
     url,
@@ -487,10 +493,12 @@ async function bootstrap(homeDir, version, env) {
 
   const stampPath = path.join(homeDir, STAMP_FILE_NAME);
   fs.writeFileSync(stampPath, `${version}\n`, "utf8");
+  ui.success(`iterate-harness ${version} installed`);
 }
 
-async function ensureRuntime(env) {
+async function ensureRuntime(env, options) {
   const environment = env || process.env;
+  const opts = options || {};
   const version = packageVersion();
   const homeDir = runtimeHomeDir(environment);
   const venvDir = path.join(homeDir, VENV_DIR_NAME);
@@ -503,7 +511,30 @@ async function ensureRuntime(env) {
     : "";
 
   if (!skipInstall && needsBootstrap(stampContent, version)) {
+    if (opts.interactive) {
+      // Interactive install wizard: ask the user before downloading.
+      const confirmed = await ui.askYesNo(
+        `Install iterate-harness v${version} into ${homeDir}?`,
+        true
+      );
+      if (!confirmed) {
+        throw new CancelledError(
+          "Skipped installing iterate-harness. Re-run `ih` whenever you are ready."
+        );
+      }
+      ui.frameSection("Installing", [
+        `\x1b[36m◆\x1b[0m Version: v${version}`,
+        `\x1b[36m◆\x1b[0m Runtime:  ${homeDir}`,
+      ]);
+    }
     await bootstrap(homeDir, version, environment);
+    if (opts.interactive) {
+      ui.frameSection("Done", [
+        `\x1b[32m✓\x1b[0m iterate-harness v${version} installed`,
+        `  Run \x1b[36mih --help\x1b[0m to see all commands.`,
+        `  Try \x1b[36mih status\x1b[0m or \x1b[36mih iterate --help\x1b[0m to get started.`,
+      ]);
+    }
   }
 
   if (!fs.existsSync(executable.ih)) {
@@ -530,10 +561,19 @@ function reportBootstrapFailure(error) {
 }
 
 async function runHarness(args, env) {
+  // Print the banner on every run (claude-code style). Skipped automatically
+  // when stderr is not a TTY (e.g. piped output), so `ih --version | jq` stays clean.
+  ui.printBanner();
+
   let target;
   try {
-    target = await ensureRuntime(env);
+    target = await ensureRuntime(env, { interactive: true });
   } catch (error) {
+    if (error instanceof CancelledError) {
+      ui.info(error.message);
+      process.exit(0);
+      return;
+    }
     reportBootstrapFailure(error);
     process.exit(1);
     return;
@@ -567,6 +607,7 @@ async function runHarness(args, env) {
 
 module.exports = {
   BootstrapError,
+  CancelledError,
   DEFAULT_ARTIFACT_EXT,
   MAX_DOWNLOAD_REDIRECTS,
   MIN_PYTHON_MAJOR,

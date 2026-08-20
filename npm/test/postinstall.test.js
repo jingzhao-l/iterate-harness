@@ -30,7 +30,7 @@ test("postinstall respects ITERATE_HARNESS_SKIP_INSTALL=1 and exits 0", async ()
     ITERATE_HARNESS_SKIP_INSTALL: "1",
   });
   assert.equal(code, 0);
-  assert.match(stderr, /skipped install during npm install/);
+  assert.match(stderr, /Skipped install during npm install/);
   assert.equal(fs.existsSync(path.join(home, "venv")), false);
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -44,7 +44,7 @@ test("postinstall delegates to bootstrap ensureRuntime", async () => {
   // Regardless of whether the full install succeeds in this sandbox, the hook
   // must never crash: it either reports success or swallows the failure.
   assert.equal(code, 0);
-  assert.match(stderr, /harness installed during npm install|could not install the harness/);
+  assert.match(stderr, /installed during npm install|could not install the harness/i);
   fs.rmSync(home, { recursive: true, force: true });
 });
 

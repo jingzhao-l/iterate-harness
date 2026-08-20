@@ -4,6 +4,17 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.12.9] - 2026-08-20
+
+Interactive installer experience, mirroring iterate-skill-installer's banner + wizard.
+
+### Added
+
+- **Terminal UI helpers** (`npm/lib/ui.js`, new): `ITERATE` ASCII banner (cyan), colored `step/success/warning/error/info/hint` prefixes, a `frameSection` summary box, and an `askYesNo` interactive prompt — all written to **stderr**, so piped stdout stays clean.
+- **Banner on every run** (`npm/lib/bootstrap.js`): `runHarness` prints the banner each time `ih` runs (skipped automatically when stderr is not a TTY, e.g. `ih --version | jq`).
+- **Interactive install wizard** (`npm/lib/bootstrap.js`): on the first run, after `EnsureRuntime` detects the harness isn't installed, it asks `Install iterate-harness vX.Y.Z ...? [Y/n]` before downloading, then prints an "Installing" box with the version/runtime, and a "Done" box with getting-started tips. Declining the prompt exits cleanly (code 0) with a `CancelledError` message instead of erroring.
+- **UI tests** (`npm/test/ui.test.js`, new): covers the banner shape, `stripAnsi`, `frameSection` alignment, and `CancelledError`.
+
 ## [1.12.8] - 2026-08-20
 
 `ih` is now installed during `npm install` itself, not lazily on the first run.

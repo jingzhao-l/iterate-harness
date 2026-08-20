@@ -44,6 +44,21 @@ If the install during `npm install` can't complete (no Python, no network, or
 the npm install, and `ih` still installs on its first run — a lazy fallback
 keeps the package usable either way.
 
+## Interactive experience
+
+`ih` greets you with a cyan **ITERATE** ASCII banner on every run (claude-code
+style), and the first install runs an **interactive wizard** like
+iterate-skill-installer:
+
+- It prints an "Installing" box with the pinned version and runtime location.
+- It asks `Install iterate-harness vX.Y.Z ...? [Y/n]` before downloading —
+  decline and it exits cleanly (code 0) instead of failing.
+- When done, it prints a "Done" box with getting-started tips (`ih --help`,
+  `ih status`, `ih iterate --help`).
+
+All UI output goes to **stderr**, so `ih --version | jq '...'` still gives you
+clean machine-readable stdout.
+
 The React TUI's frontend dependencies (`node_modules`) are installed
 automatically by the harness itself on first TUI launch — npm users always
 have Node, so the TUI always works.
