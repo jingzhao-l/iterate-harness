@@ -86,7 +86,10 @@ jobs:
         # mirror, e.g. tuna). Publishing here on every release keeps PyPI in
         # sync. Best-effort: if the secret isn't configured, skip silently —
         # the GitHub wheel asset remains a working fallback.
-        if: ${{ secrets.PYPI_PASSWORD != '' }}
+        # Implicit non-empty check: `${{ secrets.X }}` is false when the secret
+        # is unset/empty and true otherwise, avoiding edge cases where an
+        # explicit `!= ''` comparison behaves unexpectedly on some runners.
+        if: ${{ secrets.PYPI_PASSWORD }}
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
