@@ -4,14 +4,18 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
-## [1.12.7] - 2026-08-20
+## [1.12.8] - 2026-08-20
 
-npm first-run install hardened for broken-Python-TLS environments: when pip can't fetch the release wheel (e.g. macOS python.org build with a broken certificate chain) and the wrapper downloads the wheel itself via Node/curl, the locally cached wheel now keeps a valid PEP 427 filename (`iterate_harness-<version>-py3-none-any.whl`) so pip accepts it instead of rejecting a bare `iterate-harness-<version>.whl`.
+`ih` is now installed during `npm install` itself, not lazily on the first run.
 
 ### Added
 
 - **Install-during-`npm install`** (`npm/scripts/postinstall.js`, new): an npm `postinstall` hook now creates the managed venv and pip-installs the harness right after `npm install`/`npm install -g` finishes — `ih` is ready immediately instead of waiting for the first run. It reuses the exact same `ensureRuntime` logic as the CLI entry point, never fails the npm install (it degrades to a runtime install on the first `ih` run when Python/network is unavailable or `ITERATE_HARNESS_SKIP_INSTALL=1`).
 - **postinstall tests** (`npm/test/postinstall.test.js`, new): covers the `SKIP_INSTALL` fast path, a successful bootstrap delegation, and the bootstrap module smoke load.
+
+## [1.12.7] - 2026-08-20
+
+npm first-run install hardened for broken-Python-TLS environments: when pip can't fetch the release wheel (e.g. macOS python.org build with a broken certificate chain) and the wrapper downloads the wheel itself via Node/curl, the locally cached wheel now keeps a valid PEP 427 filename (`iterate_harness-<version>-py3-none-any.whl`) so pip accepts it instead of rejecting a bare `iterate-harness-<version>.whl`.
 
 ### Fixed
 
