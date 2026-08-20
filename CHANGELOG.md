@@ -4,6 +4,22 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.12.5] - 2026-08-20
+
+Provider refresh + self-update + WebUI UX review: replaced ModelScope with OpenAI as a first-class provider, added an automatic update mechanism with an `ih update` command, and fixed a set of WebUI UX issues found in a full frontend pass.
+
+### Added
+
+- **OpenAI provider** (`api/registry.py`, `config/settings.py`): ModelScope removed from the provider registry and built-in profiles; OpenAI added as a standard provider with `OPENAI_API_KEY` env source, official base URL `https://api.openai.com/v1`, `gpt-5.4` default model, and the `gpt-5.4` / `gpt-5` / `gpt-4.1` / `o4-mini` model family for the `/model` picker; `ih auth login openai` and `ih setup` now offer OpenAI as a first-class choice.
+- **Self-update** (`update.py`, `cli.py`): new `ih update` command with `--check` (report without applying), `-y/--yes` (skip confirmation) and `--force` (reinstall even when current) options. Detects the install layout (npm-managed venv / source checkout / plain pip), discovers the latest release from the GitHub feed (with a raw-file fallback), applies the matching update, and verifies the live version afterwards. Version discovery falls back to the system `curl` when Python's CA store is broken or stale (`SSL: CERTIFICATE_VERIFY_FAILED`), matching the installer's strategy for machines behind corporate proxies / self-signed roots.
+- **Version-change notification**: `ih --version` now prints a one-line advisory hint when a newer release exists (cached for 24h, 3s timeout, never fatal; opt out with `ITERATE_HARNESS_UPDATE_CHECK=0`).
+
+### Fixed
+
+- **WebUI Runs page** (`frontend/web/src/pages/Runs.tsx`): changing the timeline type filter no longer keeps the stale pagination offset — the page resets to the newest page so a filtered result can never land on an empty later page.
+- **WebUI report preview sandbox** (`frontend/web/src/pages/Reports.tsx`): the preview iframe now runs with `sandbox="allow-scripts"` only; the previous `allow-same-origin allow-scripts` combination would have silently voided the sandbox and given report-derived HTML same-origin access to the WebUI API.
+- **WebUI dashboard layout** (`frontend/web/src/pages/Dashboard.tsx`, `styles.css`): the recent-reports / recent-audit pair moved off an inline fixed two-column grid onto a `.panels-grid` class that stacks to a single column on narrow viewports.
+
 ## [1.12.4] - 2026-08-20
 
 User-facing copy review sweep: verified CLI/TUI help, READMEs, report output, bundled skills, frontend and install scripts are iterate-only, and removed the last autopilot vestige left by the 1.12.2 subsystem removal.

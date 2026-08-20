@@ -215,6 +215,20 @@ pre {
   font-size: 16px;
 }
 
+/* Two-column panel pairs (e.g. dashboard recent reports + audit log) that
+   stack into a single column on narrow viewports. */
+.panels-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .panels-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 section.panel {
   background: var(--panel);
   border: 1px solid var(--border);

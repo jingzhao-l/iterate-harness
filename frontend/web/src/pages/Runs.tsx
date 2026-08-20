@@ -149,6 +149,12 @@ export default function Runs(): React.JSX.Element {
   // We request PAGE_SIZE+1 so an over-full response tells us older pages exist.
   const TIMELINE_PAGE_SIZE = 40;
   const [timelinePage, setTimelinePage] = useState(0);
+  // Changing the type filter must start from the newest page again; otherwise
+  // a user on page 2+ would land on the same stale offset of a filtered result
+  // and see an empty page.
+  useEffect(() => {
+    setTimelinePage(0);
+  }, [typeFilter]);
   const [timelineHasMore, setTimelineHasMore] = useState(false);
   // Retry nonces so an error state can trigger a clean refetch of each panel.
   const [timelineRetry, setTimelineRetry] = useState(0);

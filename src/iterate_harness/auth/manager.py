@@ -35,7 +35,6 @@ _KNOWN_PROVIDERS = [
     "zhipu",
     "siliconflow",
     "nvidia",
-    "modelscope",
 ]
 
 _AUTH_SOURCES = [
@@ -49,12 +48,11 @@ _AUTH_SOURCES = [
     "zhipu_api_key",
     "siliconflow_api_key",
     "nvidia_api_key",
-    "modelscope_api_key",
 ]
 
 _PROFILE_BY_PROVIDER = {
     "anthropic": "claude-api",
-    "openai": "openai-compatible",
+    "openai": "openai",
     "deepseek": "deepseek",
     "dashscope": "qwen",
     "moonshot": "moonshot",
@@ -63,7 +61,6 @@ _PROFILE_BY_PROVIDER = {
     "zhipu": "zhipu",
     "siliconflow": "siliconflow",
     "nvidia": "nvidia",
-    "modelscope": "modelscope",
     "ollama": "ollama",
 }
 
@@ -187,7 +184,6 @@ class AuthManager:
             "zhipu": "ZHIPUAI_API_KEY",
             "siliconflow": "SILICONFLOW_API_KEY",
             "nvidia": "NVIDIA_API_KEY",
-            "modelscope": "MODELSCOPE_API_KEY",
         }
 
         for provider in _KNOWN_PROVIDERS:

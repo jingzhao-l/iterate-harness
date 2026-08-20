@@ -158,7 +158,13 @@ export default function Reports(): React.JSX.Element {
                 <iframe
                   className="report-frame"
                   title={selected.name}
-                  sandbox="allow-same-origin allow-scripts"
+                  // Scripts run, but deliberately WITHOUT allow-same-origin: the
+                  // report HTML is derived from model output, so it must never
+                  // gain same-origin access to the WebUI API. The report is a
+                  // self-contained offline page, so it needs no same-origin
+                  // capabilities. (allow-same-origin + allow-scripts together
+                  // would silently void the sandbox.)
+                  sandbox="allow-scripts"
                   srcDoc={selected.content}
                 />
               </>

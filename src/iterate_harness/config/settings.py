@@ -267,13 +267,13 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             default_model="qwen-plus",
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
         ),
-        "modelscope": ProviderProfile(
-            label="ModelScope",
-            provider="modelscope",
+        "openai": ProviderProfile(
+            label="OpenAI (official)",
+            provider="openai",
             api_format="openai",
-            auth_source="modelscope_api_key",
-            default_model="deepseek-ai/DeepSeek-V4-Flash",
-            base_url="https://api-inference.modelscope.cn/v1",
+            auth_source="openai_api_key",
+            default_model="gpt-5.4",
+            base_url="https://api.openai.com/v1",
         ),
         "ollama": ProviderProfile(
             label="Ollama (local)",
@@ -370,7 +370,6 @@ def auth_source_provider_name(auth_source: str) -> str:
         "zhipu_api_key": "zhipu",
         "siliconflow_api_key": "siliconflow",
         "nvidia_api_key": "nvidia",
-        "modelscope_api_key": "modelscope",
         "local": "local",
     }
     return mapping.get(auth_source, auth_source)
@@ -411,8 +410,6 @@ def default_auth_source_for_provider(provider: str, api_format: str | None = Non
         return "siliconflow_api_key"
     if provider == "nvidia":
         return "nvidia_api_key"
-    if provider == "modelscope":
-        return "modelscope_api_key"
     if provider in {"local", "ollama"}:
         return "local"
     if provider == "openai" or api_format == "openai":
@@ -721,7 +718,6 @@ class Settings(BaseModel):
             "zhipu_api_key": "ZHIPUAI_API_KEY",
             "siliconflow_api_key": "SILICONFLOW_API_KEY",
             "nvidia_api_key": "NVIDIA_API_KEY",
-            "modelscope_api_key": "MODELSCOPE_API_KEY",
         }.get(auth_source)
         if env_var:
             env_value = os.environ.get(env_var, "")

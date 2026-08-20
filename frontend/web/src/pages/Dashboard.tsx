@@ -210,7 +210,7 @@ export default function Dashboard(): React.JSX.Element {
         </section>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="panels-grid">
         <section className="panel" style={{ margin: "16px 0 0" }}>
           <h2>最近报告</h2>
           {status.reports.length === 0 ? (

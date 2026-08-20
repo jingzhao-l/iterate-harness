@@ -744,65 +744,65 @@ class TestQwenProvider:
         assert materialized.api_format == "openai"
 
 
-class TestModelScopeProvider:
-    """Tests for ModelScope provider profile and auth integration."""
+class TestOpenAIProvider:
+    """Tests for the OpenAI (official) provider profile and auth integration."""
 
-    def test_modelscope_in_default_provider_profiles(self):
+    def test_openai_in_default_provider_profiles(self):
         from iterate_harness.config.settings import default_provider_profiles
 
         profiles = default_provider_profiles()
-        assert "modelscope" in profiles
-        profile = profiles["modelscope"]
-        assert profile.provider == "modelscope"
+        assert "openai" in profiles
+        profile = profiles["openai"]
+        assert profile.provider == "openai"
         assert profile.api_format == "openai"
-        assert profile.auth_source == "modelscope_api_key"
-        assert profile.default_model == "deepseek-ai/DeepSeek-V4-Flash"
-        assert profile.base_url == "https://api-inference.modelscope.cn/v1"
+        assert profile.auth_source == "openai_api_key"
+        assert profile.default_model == "gpt-5.4"
+        assert profile.base_url == "https://api.openai.com/v1"
 
-    def test_auth_source_provider_name_modelscope(self):
-        from iterate_harness.config.settings import auth_source_provider_name
+    def test_modelscope_removed_from_default_provider_profiles(self):
+        from iterate_harness.config.settings import default_provider_profiles
 
-        assert auth_source_provider_name("modelscope_api_key") == "modelscope"
+        assert "modelscope" not in default_provider_profiles()
 
-    def test_default_auth_source_for_modelscope_provider(self):
+    def test_default_auth_source_for_openai_provider(self):
         from iterate_harness.config.settings import default_auth_source_for_provider
 
-        assert default_auth_source_for_provider("modelscope") == "modelscope_api_key"
+        assert default_auth_source_for_provider("openai") == "openai_api_key"
 
-    def test_resolve_auth_reads_modelscope_api_key_env(self, monkeypatch):
-        monkeypatch.setenv("MODELSCOPE_API_KEY", "modelscope-test-key")
+    def test_resolve_auth_reads_openai_api_key_env(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
         settings = Settings(
-            active_profile="modelscope",
+            active_profile="openai",
             profiles={
-                "modelscope": ProviderProfile(
-                    label="ModelScope",
-                    provider="modelscope",
+                "openai": ProviderProfile(
+                    label="OpenAI (official)",
+                    provider="openai",
                     api_format="openai",
-                    auth_source="modelscope_api_key",
-                    default_model="deepseek-ai/DeepSeek-V4-Flash",
-                    base_url="https://api-inference.modelscope.cn/v1",
+                    auth_source="openai_api_key",
+                    default_model="gpt-5.4",
+                    base_url="https://api.openai.com/v1",
                 )
             },
         )
         resolved = settings.resolve_auth()
-        assert resolved.value == "modelscope-test-key"
-        assert "MODELSCOPE_API_KEY" in resolved.source
+        assert resolved.value == "openai-test-key"
+        assert "OPENAI_API_KEY" in resolved.source
 
-    def test_modelscope_profile_materializes_default_model(self):
+    def test_openai_profile_materializes_default_model(self):
         settings = Settings(
-            active_profile="modelscope",
+            active_profile="openai",
             profiles={
-                "modelscope": ProviderProfile(
-                    label="ModelScope",
-                    provider="modelscope",
+                "openai": ProviderProfile(
+                    label="OpenAI (official)",
+                    provider="openai",
                     api_format="openai",
-                    auth_source="modelscope_api_key",
-                    default_model="deepseek-ai/DeepSeek-V4-Flash",
-                    base_url="https://api-inference.modelscope.cn/v1",
+                    auth_source="openai_api_key",
+                    default_model="gpt-5.4",
+                    base_url="https://api.openai.com/v1",
                 )
             },
         )
         materialized = settings.materialize_active_profile()
-        assert materialized.model == "deepseek-ai/DeepSeek-V4-Flash"
-        assert materialized.provider == "modelscope"
+        assert materialized.model == "gpt-5.4"
+        assert materialized.provider == "openai"
         assert materialized.api_format == "openai"

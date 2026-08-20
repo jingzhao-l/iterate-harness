@@ -22,6 +22,9 @@ from iterate_harness.iterate.decision_log import DecisionLogEntry
 
 log = logging.getLogger(__name__)
 
+#: Set to "0" to disable the best-effort "new version available" hint on --version.
+_UPDATE_CHECK_ENV_VAR = "ITERATE_HARNESS_UPDATE_CHECK"
+
 _PREVIEW_STOPWORDS = {
     "a",
     "an",
@@ -742,6 +745,10 @@ def _format_dry_run_preview(preview: dict[str, object]) -> str:
 def _version_callback(value: bool) -> None:
     if value:
         print(f"iterate_harness {__version__}")
+        if os.environ.get(_UPDATE_CHECK_ENV_VAR, "1") == "1":
+            from iterate_harness.update import maybe_print_update_hint
+
+            maybe_print_update_hint(current=__version__)
         raise typer.Exit()
 
 
@@ -1460,7 +1467,6 @@ _PROVIDER_LABELS: dict[str, str] = {
     "zhipu": "Zhipu AI (GLM)",
     "siliconflow": "SiliconFlow",
     "nvidia": "NVIDIA NIM",
-    "modelscope": "ModelScope",
     "ollama": "Ollama (local)",
 }
 
@@ -1475,7 +1481,6 @@ _AUTH_SOURCE_LABELS: dict[str, str] = {
     "zhipu_api_key": "Zhipu AI API key",
     "siliconflow_api_key": "SiliconFlow API key",
     "nvidia_api_key": "NVIDIA API key",
-    "modelscope_api_key": "ModelScope API key",
     "local": "Local endpoint (no API key)",
 }
 
@@ -1623,12 +1628,12 @@ def _select_setup_workflow(
     """Render the top-level `ih setup` workflow picker with richer hints."""
     hints = {
         "claude-api": ("Claude / Kimi / GLM", "fg:#7aa2f7"),
+        "openai": ("OpenAI (official)", "fg:#9ece6a"),
         "openai-compatible": ("OpenAI / compatible", "fg:#9ece6a"),
         "deepseek": ("DeepSeek", "fg:#4fd6be"),
         "zhipu": ("Zhipu GLM", "fg:#7aa2f7"),
         "siliconflow": ("SiliconFlow", "fg:#9ece6a"),
         "qwen": ("Qwen / DashScope", "fg:#bb9af7"),
-        "modelscope": ("ModelScope", "fg:#e0af68"),
         "ollama": ("Ollama / local", "fg:#4fd6be"),
     }
 
@@ -1988,6 +1993,69 @@ def setup_cmd(
     )
 
 
+@app.command("update")
+def update_cmd(
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Check for a newer release without applying it",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Apply the update without asking for confirmation",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Reinstall even when the installed version is already the latest",
+    ),
+) -> None:
+    """Check for a newer iterate-harness release and apply it."""
+    from iterate_harness import update as update_module
+
+    home = Path.home()
+    method = update_module.current_install_method()
+    method_label = update_module.INSTALL_METHOD_LABELS.get(method, method)
+
+    print(f"iterate-harness {__version__} (install: {method_label})", flush=True)
+
+    latest = update_module.fetch_latest_version()
+    if latest is None:
+        print(
+            "Could not reach the release feed. Check your network connection and retry.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    if update_module.compare_versions(__version__, latest) <= 0 and not force:
+        print(f"Already up to date (latest release: {latest}).", flush=True)
+        return
+
+    print(f"New version available: {__version__} -> {latest}", flush=True)
+    if check:
+        return
+
+    if not yes:
+        proceed = _confirm_prompt(f"Apply the update to iterate-harness {latest}?", default=False)
+        if not proceed:
+            print("Update cancelled.", flush=True)
+            raise typer.Exit(1)
+
+    result = update_module.perform_update(
+        current=__version__,
+        home=home,
+        method=method,
+        latest=latest,
+    )
+    if result.success:
+        print(f"Updated: {result.message}", flush=True)
+    else:
+        print(f"Update failed: {result.message}", file=sys.stderr)
+        raise typer.Exit(1)
+
+
 @auth_app.command("login")
 def auth_login(
     provider: Optional[str] = typer.Argument(None, help="Provider name (anthropic, openai, deepseek, …)"),
@@ -1995,7 +2063,7 @@ def auth_login(
     """Interactively authenticate with a provider.
 
     Run without arguments to choose a provider from a menu.
-    Supported providers: anthropic, openai, deepseek, dashscope, moonshot, gemini, minimax, zhipu, siliconflow, nvidia, modelscope.
+    Supported providers: anthropic, openai, deepseek, dashscope, moonshot, gemini, minimax, zhipu, siliconflow, nvidia.
     """
     if provider is None:
         print("Select a provider to authenticate:", flush=True)
