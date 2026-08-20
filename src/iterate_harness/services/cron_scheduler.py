@@ -152,8 +152,8 @@ def stop_scheduler() -> bool:
     # Force kill
     try:
         os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("SIGKILL failed for scheduler pid=%d: %s", pid, exc)
     remove_pid()
     return True
 
@@ -186,8 +186,8 @@ async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         try:
             process.kill()
             await process.wait()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - best-effort process cleanup
+            logger.debug("Could not kill timed-out job process %r: %s", name, exc)
         entry = {
             "name": name,
             "command": command,
@@ -311,6 +311,7 @@ async def run_scheduler_loop(*, once: bool = False) -> None:
             try:
                 await asyncio.wait_for(shutdown.wait(), timeout=TICK_INTERVAL_SECONDS)
             except asyncio.TimeoutError:
+                # Expected: wake every tick to re-check jobs and shutdown flag.
                 pass
     finally:
         remove_pid()

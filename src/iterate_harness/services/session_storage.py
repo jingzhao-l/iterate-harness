@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from hashlib import sha1
 from pathlib import Path
@@ -13,6 +14,8 @@ from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.config.paths import get_sessions_dir
 from iterate_harness.engine.messages import ConversationMessage, sanitize_conversation_messages
 from iterate_harness.utils.fs import atomic_write_text
+
+log = logging.getLogger(__name__)
 
 
 _PERSISTED_TOOL_METADATA_KEYS = (
@@ -186,8 +189,8 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
                     "model": data.get("model", ""),
                     "created_at": data.get("created_at", latest_path.stat().st_mtime),
                 })
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as exc:
+            log.debug("Skipping unreadable latest session file %s: %s", latest_path, exc)
 
     # Sort by created_at descending
     sessions.sort(key=lambda s: s.get("created_at", 0), reverse=True)

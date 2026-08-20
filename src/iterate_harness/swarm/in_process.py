@@ -309,8 +309,8 @@ async def _drain_mailbox(
     for msg in pending:
         try:
             await mailbox.mark_read(msg.id)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - best-effort mark-read
+            logger.debug("[in_process] %s: could not mark message %s read: %s", ctx.agent_id, msg.id, exc)
 
         if msg.type == "shutdown":
             logger.debug("[in_process] %s: received shutdown message", ctx.agent_id)

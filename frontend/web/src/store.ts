@@ -13,7 +13,7 @@ import type {
   SseStatusPayload,
   StatusResponse,
 } from "./types";
-import { api } from "./api";
+import { api, webuiToken } from "./api";
 
 interface Toast {
   id: number;
@@ -341,7 +341,7 @@ export function subscribeToStatus(projectRoot: string): () => void {
     useWebUi.getState().setConnectionState("connecting");
     const url = `/api/v1/events?stream=all${
       projectRoot ? `&project_root=${encodeURIComponent(projectRoot)}` : ""
-    }`;
+    }${webuiToken() ? `&token=${encodeURIComponent(webuiToken())}` : ""}`;
     source = new EventSource(url);
     source.addEventListener("status", (event) => {
       const payload = parseJson(event);

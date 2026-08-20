@@ -7,17 +7,22 @@ via hatch force-include) under ``/`` when present.
 
 Security defaults (design §17.4):
 - CORS allow-list: loopback origins only (see :func:`.security.is_loopback_origin`).
-- No auth token: this is a local single-user console bound to 127.0.0.1.
+- Access token: :func:`serve` issues a random token and protects every
+  ``/api/v1`` route behind it (``Authorization: Bearer <token>`` header or
+  ``?token=<token>`` query parameter, compared in constant time). Static
+  frontend assets stay unauthenticated — they carry no secrets.
 - Every mutating route enforces ``confirm=true`` + audit logging.
 """
 
 from __future__ import annotations
 
 import logging
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import routes as route_modules
@@ -51,13 +56,44 @@ def _frontend_dir() -> Path | None:
     return None
 
 
-def create_app(project_root: str | Path | None = None) -> FastAPI:
+def _extract_request_token(request: "Request") -> str:
+    """Return the access token from the request, if any.
+
+    Accepts ``Authorization: Bearer <token>`` (used by the frontend fetch
+    wrapper) and the ``?token=<token>`` query parameter (required for the
+    EventSource stream, which cannot set custom headers).
+    """
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return request.query_params.get("token", "")
+
+
+def _guard_api(token: str, request: "Request") -> JSONResponse | None:
+    """Return a 401 response when ``token`` is set and the request lacks it."""
+    if not token:
+        return None
+    provided = _extract_request_token(request)
+    if not provided or not secrets.compare_digest(provided, token):
+        log.info("WebUI API request rejected: missing or invalid access token (%s %s)", request.method, request.url.path)
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or missing access token. Start the WebUI again via 'ih web serve'."},
+        )
+    return None
+
+
+def create_app(project_root: str | Path | None = None, *, token: str | None = None) -> FastAPI:
     """Build the WebUI ASGI app.
 
     Args:
         project_root: The iterate project to operate on. When omitted, each
             route falls back to the current working directory. Passing it
             explicitly makes every read/write target a fixed project.
+        token: The access token required for every ``/api/v1`` request. When
+            ``None``, API authentication is disabled (backwards-compatible
+            default for embedding and tests); :func:`serve` always passes a
+            generated token.
 
     Returns:
         A configured :class:`FastAPI` instance.
@@ -71,6 +107,17 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
     # Expose the resolved project root to routes via app state.
     resolved_root = str(Path(project_root).resolve()) if project_root else ""
     app.state.project_root = resolved_root
+    # Empty string means "authentication disabled"; serve() always sets it.
+    app.state.webui_token = token or ""
+
+    # Protect every /api/v1 route behind the access token (when one is set).
+    @app.middleware("http")
+    async def require_access_token(request: "Request", call_next):
+        if request.url.path.startswith(API_PREFIX):
+            denied = _guard_api(app.state.webui_token, request)
+            if denied is not None:
+                return denied
+        return await call_next(request)
 
     # Loopback-only CORS.
     app.add_middleware(
@@ -125,7 +172,12 @@ def serve(
 
     import uvicorn
 
-    app = create_app(project_root)
+    from .token import get_or_create_webui_token
+
+    # A random per-install access token protects every /api/v1 route from
+    # other local users/processes reaching the loopback server.
+    token = get_or_create_webui_token()
+    app = create_app(project_root, token=token)
 
     # Bind the socket ourselves and pass it to uvicorn so it never re-binds
     # (re-binding is what opened the TOCTOU window). This both selects an
@@ -165,7 +217,11 @@ def serve(
     server = uvicorn.Server(config)
 
     url = f"http://{host}:{port}"
-    print(f"iterate WebUI: {url}")
+    # The access token rides on the URL so the opened browser session (and any
+    # re-open via this printed link) can authenticate against the API.
+    url_with_token = f"{url}/?token={token}"
+    print(f"iterate WebUI: {url_with_token}")
+    print(f"Access token: {token}")
     print(f"Project root: {Path(project_root).resolve() if project_root else Path.cwd().resolve()}")
     print("Press Ctrl+C to stop the server.")
 
@@ -173,7 +229,7 @@ def serve(
         import webbrowser
 
         try:
-            webbrowser.open(url)
+            webbrowser.open(url_with_token)
         except Exception:  # noqa: BLE001 - best-effort browser open
             pass
 

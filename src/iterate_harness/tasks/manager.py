@@ -382,13 +382,13 @@ class BackgroundTaskManager:
             if stdin is not None and not stdin.is_closing():
                 try:
                     stdin.close()
-                except RuntimeError:
-                    pass
+                except RuntimeError as exc:
+                    log.debug("Could not close stdin for process %r: %s", process.pid, exc)
             if process.returncode is None:
                 try:
                     process.kill()
-                except (ProcessLookupError, RuntimeError):
-                    pass
+                except (ProcessLookupError, RuntimeError) as exc:
+                    log.debug("Could not kill process %r during cleanup: %s", process.pid, exc)
         self._processes.clear()
 
     async def aclose(self) -> None:
@@ -400,16 +400,16 @@ class BackgroundTaskManager:
             if process.returncode is None:
                 try:
                     process.kill()
-                except ProcessLookupError:
-                    pass
+                except ProcessLookupError as exc:
+                    log.debug("Could not kill process %r during aclose: %s", process.pid, exc)
             await _close_process_stdin(process)
 
         for process in processes:
             if process.returncode is None:
                 try:
                     await process.wait()
-                except ProcessLookupError:
-                    pass
+                except ProcessLookupError as exc:
+                    log.debug("Could not wait for process %r during aclose: %s", process.pid, exc)
 
         if waiters:
             await asyncio.gather(*waiters, return_exceptions=True)

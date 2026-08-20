@@ -97,8 +97,8 @@ def _get_retry_delay(attempt: int, exc: Exception | None = None) -> float:
             if val:
                 try:
                     return min(float(val), MAX_DELAY)
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as exc:
+                    log.debug("Ignoring invalid retry-after header %r: %s", val, exc)
 
     delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
     jitter = random.uniform(0, delay * 0.25)

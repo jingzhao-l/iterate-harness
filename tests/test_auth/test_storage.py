@@ -31,8 +31,10 @@ def _isolated_storage(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(storage_module, "_fernet_instance", None)
     monkeypatch.setattr(storage_module, "_fernet_broken", False)
     monkeypatch.setattr(storage_module, "_legacy_migration_attempted", False)
-    monkeypatch.setattr(storage_module, "_keyring_checked", False)
-    monkeypatch.setattr(storage_module, "_keyring_usable", False)
+    # The real OS keyring is machine-wide and cannot be isolated per test via
+    # env vars, so pin every test to the file backend by default. The keyring
+    # routing tests re-enable it explicitly through _install_fake_keyring.
+    monkeypatch.setattr(storage_module, "_keyring_available", lambda: False)
     yield
 
 

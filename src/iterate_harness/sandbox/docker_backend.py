@@ -190,8 +190,8 @@ class DockerSandboxSession:
                 capture_output=True,
                 timeout=10,
             )
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            logger.debug("Best-effort docker stop failed (container=%s): %s", self._container_name, exc)
         finally:
             self._running = False
 

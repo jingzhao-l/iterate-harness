@@ -86,8 +86,8 @@ def save_checkpoint(
         try:
             if temp.exists():
                 temp.unlink()
-        except OSError:
-            pass
+        except OSError as exc2:
+            log.debug("Could not remove failed checkpoint temp file %s: %s", temp, exc2)
         return None
     return target
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
@@ -18,6 +19,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from iterate_harness.swarm.lockfile import exclusive_file_lock
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -221,8 +224,8 @@ class TeammateMailbox:
                         continue
                     try:
                         path.unlink()
-                    except OSError:
-                        pass
+                    except OSError as exc:
+                        log.debug("Could not remove mailbox message %s: %s", path, exc)
 
         # Offload blocking I/O to thread pool
         loop = asyncio.get_event_loop()
@@ -411,8 +414,8 @@ def is_permission_request(msg: MailboxMessage) -> dict[str, Any] | None:
             parsed = json.loads(text)
             if isinstance(parsed, dict) and parsed.get("type") == "permission_request":
                 return parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            log.debug("Message text is not JSON; ignoring parsed payload: %s", exc)
     return None
 
 
@@ -426,8 +429,8 @@ def is_permission_response(msg: MailboxMessage) -> dict[str, Any] | None:
             parsed = json.loads(text)
             if isinstance(parsed, dict) and parsed.get("type") == "permission_response":
                 return parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            log.debug("Message text is not JSON; ignoring parsed payload: %s", exc)
     return None
 
 
@@ -441,8 +444,8 @@ def is_sandbox_permission_request(msg: MailboxMessage) -> dict[str, Any] | None:
             parsed = json.loads(text)
             if isinstance(parsed, dict) and parsed.get("type") == "sandbox_permission_request":
                 return parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            log.debug("Message text is not JSON; ignoring parsed payload: %s", exc)
     return None
 
 
@@ -456,8 +459,8 @@ def is_sandbox_permission_response(msg: MailboxMessage) -> dict[str, Any] | None
             parsed = json.loads(text)
             if isinstance(parsed, dict) and parsed.get("type") == "sandbox_permission_response":
                 return parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            log.debug("Message text is not JSON; ignoring parsed payload: %s", exc)
     return None
 
 
@@ -502,8 +505,8 @@ async def write_to_mailbox(
                 "idle_notification",
             ):
                 msg_type = t  # type: ignore[assignment]
-    except (json.JSONDecodeError, TypeError):
-        pass
+    except (json.JSONDecodeError, TypeError) as exc:
+        log.debug("Message text is not JSON; treating as plain text: %s", exc)
 
     msg = MailboxMessage(
         id=str(uuid.uuid4()),

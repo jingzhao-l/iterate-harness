@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import random
 import string
@@ -46,6 +47,8 @@ from iterate_harness.swarm.mailbox import (
 
 if TYPE_CHECKING:
     from iterate_harness.permissions.checker import PermissionChecker
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -537,8 +540,8 @@ def _sync_resolve_permission(
         os.replace(tmp_path, resolved_path)
         try:
             pending_path.unlink()
-        except OSError:
-            pass
+        except OSError as exc:
+            log.debug("Could not remove pending permission file %s: %s", pending_path, exc)
 
     return True
 
@@ -588,8 +591,8 @@ def _sync_cleanup_old_resolutions(team: str, max_age_seconds: float) -> int:
             try:
                 path.unlink()
                 cleaned += 1
-            except OSError:
-                pass
+            except OSError as exc:
+                log.debug("Could not remove stale resolution file %s: %s", path, exc)
 
     return cleaned
 

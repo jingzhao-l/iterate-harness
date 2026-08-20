@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from iterate_harness.config.paths import get_data_dir
 from iterate_harness.bridge.session_runner import SessionHandle, spawn_session
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -88,8 +91,8 @@ class BridgeSessionManager:
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - shutdown cleanup
-                pass
+            except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001 - shutdown cleanup
+                log.debug("Ignoring error while awaiting cancelled copy task %s: %s", session_id, exc)
         # Idempotent fallback cleanup in case the copy task never started.
         self._copy_tasks.pop(session_id, None)
         self._sessions.pop(session_id, None)

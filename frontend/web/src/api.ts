@@ -20,6 +20,36 @@ import type {
 
 const API_BASE = "/api/v1";
 
+// ---- WebUI access token (design §17.4) ----
+// The backend serve() opens the browser with `?token=<token>` in the URL and
+// protects every /api/v1 route with it. We capture it on first load, cache it
+// in sessionStorage (so reloads of the same tab keep working), strip it from
+// the address bar so it never lingers in history / share links, and attach it
+// to every request: `Authorization: Bearer` for fetch, `?token=` for the
+// EventSource stream (which cannot set custom headers).
+
+const TOKEN_STORAGE_KEY = "iterate.webui.token";
+
+function captureToken(): string {
+  const urlToken =
+    new URLSearchParams(window.location.search).get("token") ?? "";
+  if (urlToken) {
+    sessionStorage.setItem(TOKEN_STORAGE_KEY, urlToken);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("token");
+    window.history.replaceState({}, "", url.toString());
+    return urlToken;
+  }
+  return sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? "";
+}
+
+const WEBUI_TOKEN = captureToken();
+
+/** The WebUI access token, or "" when authentication is disabled. */
+export function webuiToken(): string {
+  return WEBUI_TOKEN;
+}
+
 export class ApiError extends Error {
   status: number;
   detail: unknown;
@@ -32,11 +62,15 @@ export class ApiError extends Error {
   }
 }
 
+function withAuth(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (WEBUI_TOKEN) headers.set("Authorization", `Bearer ${WEBUI_TOKEN}`);
+  return { ...init, headers };
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
+  const response = await fetch(`${API_BASE}${path}`, withAuth(init));
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
     let detail: unknown = undefined;

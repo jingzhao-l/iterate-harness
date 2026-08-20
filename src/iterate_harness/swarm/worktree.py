@@ -199,8 +199,8 @@ async def _symlink_common_dirs(repo_path: Path, worktree_path: Path) -> None:
             continue
         try:
             dst.symlink_to(src)
-        except OSError:
-            pass  # Non-fatal: disk full, unsupported fs, etc.
+        except OSError as exc:
+            logger.debug("Could not symlink %s -> %s: %s", dst, src, exc)  # Non-fatal
 
 
 async def _remove_symlinks(worktree_path: Path) -> None:
@@ -210,8 +210,8 @@ async def _remove_symlinks(worktree_path: Path) -> None:
         if dst.is_symlink():
             try:
                 dst.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.debug("Could not remove symlink %s: %s", dst, exc)
 
 
 # ---------------------------------------------------------------------------

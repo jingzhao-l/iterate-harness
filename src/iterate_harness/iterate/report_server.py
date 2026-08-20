@@ -150,11 +150,11 @@ def serve_report(
 
 
 def _try_open_browser(url: str) -> None:
-    """Open the browser; silently ignore failures in headless environments."""
+    """Open the browser; best-effort in headless environments."""
     try:
         webbrowser.open(url)
-    except Exception:  # noqa: BLE001 - best-effort browser open
-        pass
+    except Exception as exc:  # noqa: BLE001 - best-effort browser open
+        log.debug("Could not open browser at %s: %s", url, exc)
 
 
 __all__ = [

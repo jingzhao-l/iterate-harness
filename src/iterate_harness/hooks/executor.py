@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import json
+import logging
 import os
 import shlex
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from iterate_harness.hooks.schemas import (
 from iterate_harness.hooks.types import AggregatedHookResult, HookResult
 from iterate_harness.sandbox import SandboxUnavailableError
 from iterate_harness.utils.shell import create_shell_subprocess
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -234,8 +237,8 @@ def _parse_hook_json(text: str) -> dict[str, Any]:
         parsed = json.loads(text)
         if isinstance(parsed, dict) and isinstance(parsed.get("ok"), bool):
             return parsed
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        log.debug("Hook output is not JSON; falling back to text parsing: %s", exc)
     lowered = text.strip().lower()
     if lowered in {"ok", "true", "yes"}:
         return {"ok": True}

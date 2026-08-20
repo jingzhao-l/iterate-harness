@@ -379,10 +379,10 @@ def clear_provider_credentials(provider: str, *, use_keyring: bool | None = None
             for key in ("api_key", "token", "github_token"):
                 try:
                     keyring.delete_password(_KEYRING_SERVICE, _keyring_key(provider, key))
-                except (PasswordDeleteError, Exception):
-                    pass
+                except (PasswordDeleteError, Exception) as exc:  # noqa: BLE001 - best-effort cleanup
+                    log.debug("Could not delete keyring password for %s/%s: %s", provider, key, exc)
         except ImportError:
-            pass
+            log.debug("keyring not installed; skipping keyring credential deletion")
 
     with exclusive_file_lock(_creds_lock_path()):
         data = _load_creds_file()

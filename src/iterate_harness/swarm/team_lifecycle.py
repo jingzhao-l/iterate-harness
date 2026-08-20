@@ -414,6 +414,7 @@ def remove_hidden_pane_id(team_name: str, pane_id: str) -> bool:
         team_file.hidden_pane_ids.remove(pane_id)
         write_team_file(team_name, team_file)
     except ValueError:
+        # Not in the list (already removed): treat as success.
         pass
     return True
 
@@ -443,6 +444,7 @@ def remove_member_from_team(team_name: str, tmux_pane_id: str) -> bool:
     try:
         team_file.hidden_pane_ids.remove(tmux_pane_id)
     except ValueError:
+        # Not in the list (already removed): treat as success.
         pass
 
     write_team_file(team_name, team_file)
@@ -731,8 +733,8 @@ async def _destroy_worktree(worktree_path: str) -> None:
             worktree_git_dir = match.group(1)
             main_git_dir = Path(worktree_git_dir) / ".." / ".."
             main_repo_path = str(main_git_dir / "..")
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Could not read git worktree metadata %s: %s", git_file, exc)
 
     if main_repo_path:
         try:
@@ -747,13 +749,13 @@ async def _destroy_worktree(worktree_path: str) -> None:
                 return
             if "not a working tree" in (result.stderr or ""):
                 return
-        except (subprocess.SubprocessError, OSError):
-            pass
+        except (subprocess.SubprocessError, OSError) as exc:
+            logger.debug("git worktree remove failed for %s: %s", worktree_path, exc)
 
     try:
         shutil.rmtree(worktree_path, ignore_errors=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Could not remove worktree directory %s: %s", worktree_path, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -786,8 +788,8 @@ async def cleanup_team_directories(team_name: str) -> None:
     team_dir = get_team_dir(team_name)
     try:
         shutil.rmtree(team_dir, ignore_errors=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Could not remove team directory %s: %s", team_dir, exc)
 
 
 # ---------------------------------------------------------------------------

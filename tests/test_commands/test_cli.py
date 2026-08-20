@@ -19,6 +19,21 @@ from iterate_harness.mcp.types import McpStdioServerConfig
 app = cli.app
 
 
+@pytest.fixture(autouse=True)
+def _isolate_credential_backend(monkeypatch):
+    """Pin credential storage to the (per-test) file backend.
+
+    The real OS keyring is machine-wide and leaks configured state between
+    tests (e.g. a developer's actual ``deepseek`` key makes ``setup`` take the
+    interactive update path instead of the fresh-setup path). Every CLI test
+    isolates ``ITERATE_CONFIG_DIR`` already; forcing ``_keyring_available`` to
+    False routes all credential reads/writes through that isolated file.
+    """
+    from iterate_harness.auth import storage as storage_module
+
+    monkeypatch.setattr(storage_module, "_keyring_available", lambda: False)
+
+
 def test_cli_help():
     runner = CliRunner()
     result = runner.invoke(
