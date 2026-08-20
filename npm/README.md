@@ -20,7 +20,9 @@ The harness itself is a **Python package**. This npm package is a thin
 distribution wrapper: it does not re-implement anything, it just makes `ih`
 installable with npm and keeps it up to date.
 
-On first run the wrapper:
+Right after `npm install` finishes, a `postinstall` hook creates the managed
+venv and installs the harness — so `ih` is ready to use immediately. The
+delegation logic used at install time and at runtime is the same:
 
 1. Finds a Python interpreter >= 3.10 (`py -3` / `python` / `python3`,
    overridable via `ITERATE_HARNESS_PYTHON`).
@@ -28,14 +30,19 @@ On first run the wrapper:
    (overridable via `ITERATE_HARNESS_NPM_HOME`).
 3. `pip install`s the harness **pinned to this npm package's version** — npm
    `1.6.0` always installs harness `v1.6.0`. Upgrading the npm package
-   automatically re-installs the matching harness version on the next run.
-   The preferred artifact is the **pre-built wheel** uploaded to the GitHub
-   release (`iterate_harness-<version>-py3-none-any.whl`, which already bundles
-   the compiled frontend assets — exactly like iterate-skill-installer ships
+   automatically re-installs the matching harness version. The preferred
+   artifact is the **pre-built wheel** uploaded to the GitHub release
+   (`iterate_harness-<version>-py3-none-any.whl`, which already bundles the
+   compiled frontend assets — exactly like iterate-skill-installer ships
    pre-wrapped assets). If the wheel is missing, the wrapper falls back to the
    pinned **source archive** as a last resort.
 4. Delegates to the venv's real `ih` executable with argv, stdio, signals and
    exit codes forwarded.
+
+If the install during `npm install` can't complete (no Python, no network, or
+`ITERATE_HARNESS_SKIP_INSTALL=1`), the hook prints a notice without failing
+the npm install, and `ih` still installs on its first run — a lazy fallback
+keeps the package usable either way.
 
 The React TUI's frontend dependencies (`node_modules`) are installed
 automatically by the harness itself on first TUI launch — npm users always

@@ -8,6 +8,11 @@ The format is based on Keep a Changelog, and this project currently tracks chang
 
 npm first-run install hardened for broken-Python-TLS environments: when pip can't fetch the release wheel (e.g. macOS python.org build with a broken certificate chain) and the wrapper downloads the wheel itself via Node/curl, the locally cached wheel now keeps a valid PEP 427 filename (`iterate_harness-<version>-py3-none-any.whl`) so pip accepts it instead of rejecting a bare `iterate-harness-<version>.whl`.
 
+### Added
+
+- **Install-during-`npm install`** (`npm/scripts/postinstall.js`, new): an npm `postinstall` hook now creates the managed venv and pip-installs the harness right after `npm install`/`npm install -g` finishes — `ih` is ready immediately instead of waiting for the first run. It reuses the exact same `ensureRuntime` logic as the CLI entry point, never fails the npm install (it degrades to a runtime install on the first `ih` run when Python/network is unavailable or `ITERATE_HARNESS_SKIP_INSTALL=1`).
+- **postinstall tests** (`npm/test/postinstall.test.js`, new): covers the `SKIP_INSTALL` fast path, a successful bootstrap delegation, and the bootstrap module smoke load.
+
 ### Fixed
 
 - **npm wrapper wheel cache** (`npm/lib/bootstrap.js`): `downloadCachePath` now returns the real wheel asset name for the `.whl` extension instead of a generic `iterate-harness-<version>.whl`. Previously, in the fallback path (Node/curl download), the cached wheel could not be pip-installed because pip rejects any `*.whl` lacking the `{python}-{abi}-{platform}` tags with "not a valid wheel filename".

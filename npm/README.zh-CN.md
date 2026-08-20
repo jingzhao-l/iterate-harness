@@ -19,18 +19,23 @@ ih --version        # 首次运行引导安装 Python 端，随后打印版本
 harness 本身是**一个 Python 包**。这个 npm 包是一个薄分发包装器：它不重新实现任何
 逻辑，只是让 `ih` 可以通过 npm 安装并保持更新。
 
-首次运行时，包装器会：
+`npm install` 一结束，`postinstall` 钩子就会创建托管虚拟环境并安装 harness——
+所以 `ih` 装完即用。安装时与运行时共用同一套代理逻辑：
 
 1. 找到一个 >= 3.10 的 Python 解释器（`py -3` / `python` / `python3`，
    可通过 `ITERATE_HARNESS_PYTHON` 覆盖）。
 2. 在 `~/.iterate-harness-npm/venv` 创建托管虚拟环境
    （可通过 `ITERATE_HARNESS_NPM_HOME` 覆盖）。
 3. `pip install` **与本 npm 包版本锁定的** harness 发布版本 —— npm 的 `1.6.0`
-   总会安装 harness `v1.6.0`。升级 npm 包会在下次运行时自动重装对应的 harness 版本。
+   总会安装 harness `v1.6.0`。升级 npm 包会自动重装对应的 harness 版本。
    优先下载 GitHub 发布里的**预构建 wheel**（`iterate_harness-<version>-py3-none-any.whl`，
    已内置编译好的前端资源——和 iterate-skill-installer 分发预打包资源一致）。
    若 wheel 缺失，再兑底使用锁定的**源码归档**。
 4. 代理调用 venv 里真正的 `ih` 可执行文件，转发 argv、stdio、信号与退出码。
+
+若 `npm install` 期间无法完成安装（无 Python、无网络，或
+`ITERATE_HARNESS_SKIP_INSTALL=1`），钩子只会打印提示而不让 npm 安装失败，
+`ih` 会在首次运行时补装——惰性兑底保证两种情况下包都可用。
 
 React TUI 的前端依赖（`node_modules`）会在首次启动 TUI 时由 harness 自动安装——
 npm 用户必然有 Node，所以 TUI 始终可用。

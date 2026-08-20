@@ -1,7 +1,7 @@
 {
   "name": "iterate-harness",
   "version": "1.12.7",
-  "description": "npm distribution wrapper for iterate-harness — installs the Python harness (ih CLI) into a managed venv on first run and exposes it as a global command",
+  "description": "npm distribution wrapper for iterate-harness — installs the Python harness (ih CLI) into a managed venv on install and exposes it as a global command",
   "license": "MIT",
   "type": "commonjs",
   "repository": {
@@ -22,6 +22,7 @@
   "files": [
     "bin",
     "lib",
+    "scripts",
     "README.md",
     "LICENSE"
   ],
@@ -33,6 +34,7 @@
     "installer"
   ],
   "scripts": {
-    "test": "node --test test/bootstrap.test.js"
+    "test": "node --test test/bootstrap.test.js test/postinstall.test.js",
+    "postinstall": "node scripts/postinstall.js"
   }
 }
