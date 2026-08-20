@@ -4,6 +4,19 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.12.4] - 2026-08-20
+
+User-facing copy review sweep: verified CLI/TUI help, READMEs, report output, bundled skills, frontend and install scripts are iterate-only, and removed the last autopilot vestige left by the 1.12.2 subsystem removal.
+
+### Removed
+
+- **Vestigial "Active Repo Context" injection** (`config/paths.py`, `prompts/context.py`, `tests/test_prompts/test_claudemd.py`): dropped `get_project_autopilot_dir` / `get_project_active_repo_context_path` and the runtime system-prompt entry for `.iterate-harness/autopilot/active_repo_context.md` — nothing in the codebase ever writes that file, so the read-side injection was dead code left behind when the autopilot subsystem was removed.
+
+### Verified clean (no change needed)
+
+- `ih --help` / `ih iterate --help` and the TUI slash-command registry: no stale commands or legacy wording.
+- README / README.zh-CN, report text/CSV output, bundled skills, React TUI + web frontends, install scripts: no `ohmo` / `openclaw` / `openharness` / Slack / Feishu / Lark / webhook remnants.
+
 ## [1.12.3] - 2026-08-20
 
 Final legacy sweep: removed the remaining external-communication surface and confirmed dead code so `ih` is purely the iterate review/fix harness with no channel/notification leftover.

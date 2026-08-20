@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from iterate_harness.config.paths import (
-    get_project_active_repo_context_path,
     get_project_issue_file,
     get_project_pr_comments_file,
 )
@@ -75,21 +74,6 @@ def test_build_runtime_system_prompt_includes_project_context_and_fast_mode(tmp_
     assert "Need to fix flaky test" in prompt
     assert "Pull Request Comments" in prompt
     assert "Please simplify this branch" in prompt
-
-
-def test_build_runtime_system_prompt_includes_active_repo_context(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    get_project_active_repo_context_path(repo).write_text(
-        "# Active Repo Context\n\n- Current focus: fix issue #98\n",
-        encoding="utf-8",
-    )
-
-    prompt = build_runtime_system_prompt(Settings(), cwd=repo, latest_user_prompt="keep going")
-
-    assert "Active Repo Context" in prompt
-    assert "fix issue #98" in prompt
 
 
 def test_build_runtime_system_prompt_uses_coordinator_prompt_when_enabled(tmp_path: Path, monkeypatch):

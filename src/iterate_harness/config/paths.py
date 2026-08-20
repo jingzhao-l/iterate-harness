@@ -116,15 +116,3 @@ def get_project_pr_comments_file(cwd: str | Path) -> Path:
     return get_project_config_dir(cwd) / "pr_comments.md"
 
 
-def get_project_autopilot_dir(cwd: str | Path) -> Path:
-    """Return the per-project autopilot state directory."""
-    autopilot_dir = get_project_config_dir(cwd) / "autopilot"
-    autopilot_dir.mkdir(parents=True, exist_ok=True)
-    return autopilot_dir
-
-
-def get_project_active_repo_context_path(cwd: str | Path) -> Path:
-    """Return the synthesized active repo context path."""
-    return get_project_autopilot_dir(cwd) / "active_repo_context.md"
-
-

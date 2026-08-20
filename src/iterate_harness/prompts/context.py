@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Iterable
 
 from iterate_harness.config.paths import (
-    get_project_active_repo_context_path,
     get_project_issue_file,
     get_project_pr_comments_file,
 )
@@ -167,7 +166,6 @@ def build_runtime_system_prompt(
     for title, path in (
         ("Issue Context", get_project_issue_file(cwd)),
         ("Pull Request Comments", get_project_pr_comments_file(cwd)),
-        ("Active Repo Context", get_project_active_repo_context_path(cwd)),
     ):
         if path.exists():
             content = path.read_text(encoding="utf-8", errors="replace").strip()
