@@ -30,12 +30,14 @@ delegation logic used at install time and at runtime is the same:
    (overridable via `ITERATE_HARNESS_NPM_HOME`).
 3. `pip install`s the harness **pinned to this npm package's version** — npm
    `1.6.0` always installs harness `v1.6.0`. Upgrading the npm package
-   automatically re-installs the matching harness version. The preferred
-   artifact is the **pre-built wheel** uploaded to the GitHub release
-   (`iterate_harness-<version>-py3-none-any.whl`, which already bundles the
-   compiled frontend assets — exactly like iterate-skill-installer ships
-   pre-wrapped assets). If the wheel is missing, the wrapper falls back to the
-   pinned **source archive** as a last resort.
+   automatically re-installs the matching harness version on the next run.
+   The preferred source is the official **PyPI** index: pip resolves
+   `iterate-harness==X.Y.Z` against your configured mirror (e.g.
+   `pypi.tuna.tsinghua.edu.cn`), so installs work even when GitHub is
+   unreachable or its TLS cert fails to verify. If PyPI is unavailable, the
+   wrapper falls back to the pre-built **wheel** on the GitHub release
+   (frontend assets baked in, like iterate-skill-installer ships pre-wrapped
+   assets), then the pinned **source archive** as a final resort.
 4. Delegates to the venv's real `ih` executable with argv, stdio, signals and
    exit codes forwarded.
 

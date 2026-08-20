@@ -1,17 +1,22 @@
 name: Release publish
 
-# Builds and uploads the pre-built wheel so the npm wrapper can install the
-# harness without compiling from source. The wheel carries the compiled
-# frontend assets (force-included by pyproject.toml: terminal source +
-# frontend/web/dist), which the GitHub source archive does not contain. The
-# npm wrapper (npm/lib/bootstrap.js) downloads exactly this asset:
-#   https://github.com/jingzhao-l/iterate-harness/releases/download/v<tag>/iterate_harness-<tag>-py3-none-any.whl
+# Builds the pre-built wheel and ships it to BOTH channels the npm wrapper
+# can install from:
+#   1. PyPI (primary) — pip resolves `iterate-harness==X.Y.Z` against the
+#      user's configured mirror (e.g. pypi.tuna.tsinghua.edu.cn), so installs
+#      stay fast and stable even when GitHub is unreachable or its TLS cert
+#      fails to verify. Published via twine (gated on the PYPI_PASSWORD secret).
+#   2. GitHub release asset (fallback) — the npm wrapper can download
+#      `iterate_harness-<tag>-py3-none-any.whl` and pip-install it directly.
+#
+# The wheel carries the compiled frontend assets (force-included by
+# pyproject.toml: terminal source + frontend/web/dist), which the GitHub
+# source archive does not contain.
 #
 # Ordering note: the wheel is built and uploaded by THIS job asynchronously
 # after the release is published. Do NOT run `npm publish` until this job has
-# finished uploading the wheel — otherwise the npm wrapper cannot download it
-# and would fall back to the source archive (which lacks the built frontend
-# and consequently fails to build).
+# finished — otherwise the npm wrapper cannot download the wheel and would fall
+# back to the source archive (which lacks the built frontend and fails).
 
 on:
   release:
@@ -74,3 +79,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.whl
+
+      - name: Publish wheel to PyPI (iff token configured)
+        # Primary install channel for the npm wrapper is the official PyPI
+        # index (pip resolves `iterate-harness==X.Y.Z` against the user's
+        # mirror, e.g. tuna). Publishing here on every release keeps PyPI in
+        # sync. Best-effort: if the secret isn't configured, skip silently —
+        # the GitHub wheel asset remains a working fallback.
+        if: ${{ secrets.PYPI_PASSWORD != '' }}
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+        run: |
+          python -m pip install --upgrade twine
+          twine upload --non-interactive --skip-existing dist/*.whl

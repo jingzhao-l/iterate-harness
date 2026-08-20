@@ -18,14 +18,14 @@ const {
   downloadCachePath,
   downloadFile,
   downloadTarballTo,
-  installFallbackUrl,
+  installCandidates,
   installHarness,
-  installUrl,
   isRemoteHttpUrl,
   isSupportedPython,
   needsBootstrap,
   parsePythonVersion,
   pipInstallArgs,
+  pypiInstallSpec,
   pythonCandidates,
   releaseTarballUrl,
   venvExecutablePaths,
@@ -104,24 +104,21 @@ test("wheelAssetName / wheelAssetUrl target the pre-built release wheel", () => 
   );
 });
 
-test("installUrl prefers the env override over the pinned wheel", () => {
-  const override = "git+https://github.com/jingzhao-l/iterate-harness.git@main";
-  assert.equal(installUrl("1.6.0", { [INSTALL_URL_ENV_VAR]: override }), override);
-  assert.equal(
-    installUrl("1.6.0", {}),
-    "https://github.com/jingzhao-l/iterate-harness/releases/download/v1.6.0/iterate_harness-1.6.0-py3-none-any.whl"
-  );
+test("pypiInstallSpec pins the version to the PyPI index", () => {
+  assert.equal(pypiInstallSpec("1.12.9"), "iterate-harness==1.12.9");
 });
 
-test("installFallbackUrl returns the source archive; null when URL is overridden", () => {
-  assert.equal(
-    installFallbackUrl("1.6.0", {}),
-    "https://github.com/jingzhao-l/iterate-harness/archive/refs/tags/v1.6.0.tar.gz"
-  );
-  assert.equal(
-    installFallbackUrl("1.6.0", { [INSTALL_URL_ENV_VAR]: "git+https://x.git@main" }),
-    null
-  );
+test("installCandidates: PyPI first, then GitHub wheel, then source archive", () => {
+  assert.deepEqual(installCandidates("1.6.0", {}), [
+    "iterate-harness==1.6.0",
+    wheelAssetUrl("1.6.0"),
+    releaseTarballUrl("1.6.0"),
+  ]);
+});
+
+test("installCandidates returns only the override when ITERATE_HARNESS_INSTALL_URL is set", () => {
+  const override = "git+https://github.com/jingzhao-l/iterate-harness.git@main";
+  assert.deepEqual(installCandidates("1.6.0", { [INSTALL_URL_ENV_VAR]: override }), [override]);
 });
 
 test("artifactExtensionFor maps whl and tar.gz, defaulting otherwise", () => {
@@ -201,7 +198,9 @@ test("installHarness succeeds on the first pip attempt without downloading", asy
   const downloads = [];
   await installHarness({
     python: "/venv/bin/python",
-    url: "https://github.com/jingzhao-l/iterate-harness/archive/refs/tags/v1.9.1.tar.gz",
+    candidates: [
+      "https://github.com/jingzhao-l/iterate-harness/archive/refs/tags/v1.9.1.tar.gz",
+    ],
     homeDir: path.join("home", "npm"),
     version: "1.9.1",
     runStepFn: (command, args) => pipCalls.push([command, args]),
@@ -228,7 +227,7 @@ test("installHarness falls back to a local pip install after a TLS failure", asy
   };
   await installHarness({
     python: "/venv/bin/python",
-    url,
+    candidates: [url],
     homeDir: path.join("home", "npm"),
     version: "1.9.1",
     runStepFn,
@@ -248,7 +247,7 @@ test("installHarness wraps both failures when the download fallback dies too", a
   await assert.rejects(
     installHarness({
       python: "/venv/bin/python",
-      url: "https://github.com/x/y.tar.gz",
+      candidates: ["https://github.com/x/y.tar.gz"],
       homeDir: path.join("home", "npm"),
       version: "1.9.1",
       runStepFn,
@@ -258,29 +257,53 @@ test("installHarness wraps both failures when the download fallback dies too", a
     }),
     (error) =>
       error instanceof BootstrapError &&
-      error.message.includes("CERTIFICATE_VERIFY_FAILED") &&
-      error.message.includes("direct-download fallback also failed: socket hang up")
+      error.message.includes("all install candidates failed") &&
+      error.message.includes("socket hang up")
   );
   assert.equal(pipCalls.length, 1);
 });
 
-test("installHarness rethrows the primary error verbatim for non-http targets", async () => {
-  const downloads = [];
+test("installHarness rethrows the primary error verbatim for a single non-http target", async () => {
   const primary = new BootstrapError("pip exited with code 1: build failed");
   await assert.rejects(
     installHarness({
       python: "/venv/bin/python",
-      url: "/tmp/iterate-harness-1.9.1.tar.gz",
+      candidates: ["/tmp/iterate-harness-1.9.1.tar.gz"],
       homeDir: path.join("home", "npm"),
       version: "1.9.1",
       runStepFn: () => {
         throw primary;
       },
-      downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
+      downloader: async () => {
+        throw new Error("should not download");
+      },
     }),
-    (error) => error === primary
+    (error) => error instanceof BootstrapError && error.message.includes("build failed")
   );
-  assert.equal(downloads.length, 0);
+});
+
+test("installHarness tries the next candidate when the previous one fails", async () => {
+  const pipCalls = [];
+  const candidates = [pypiInstallSpec("1.9.1"), "https://github.com/x/y.whl"];
+  await installHarness({
+    python: "/venv/bin/python",
+    candidates,
+    homeDir: path.join("home", "npm"),
+    version: "1.9.1",
+    runStepFn: (command, args) => {
+      pipCalls.push([command, args]);
+      if (pipCalls.length === 1) {
+        // PyPI spec unavailable → fall through to the wheel.
+        throw new BootstrapError("pip exited with code 1: No matching distribution");
+      }
+    },
+    downloader: async (downloadUrl, dest) => undefined,
+  });
+  assert.equal(pipCalls.length, 2);
+  assert.deepEqual(
+    pipCalls.map(([, args]) => args),
+    [pipInstallArgs(candidates[0]), pipInstallArgs(candidates[1])]
+  );
 });
 
 test("installHarness propagates the second pip failure untouched", async () => {
@@ -289,7 +312,7 @@ test("installHarness propagates the second pip failure untouched", async () => {
   await assert.rejects(
     installHarness({
       python: "/venv/bin/python",
-      url: "https://github.com/x/y.tar.gz",
+      candidates: ["https://github.com/x/y.tar.gz"],
       homeDir: path.join("home", "npm"),
       version: "1.9.1",
       runStepFn: () => {
@@ -301,13 +324,15 @@ test("installHarness propagates the second pip failure untouched", async () => {
       },
       downloader: async () => undefined,
     }),
-    (error) => error === cacheFailure
+    (error) =>
+      error instanceof BootstrapError &&
+      error.message.includes("no matching distribution")
   );
   assert.equal(pipCalls, 2);
 });
 
 // ---------------------------------------------------------------------------
-// Wheel-first install (pre-built release wheel, archive as last-resort)
+// PyPI-first install (official index first, GitHub wheel, archive last)
 // ---------------------------------------------------------------------------
 
 test("installHarness downloads a wheel to a .whl cache file on a TLS failure", async () => {
@@ -318,7 +343,7 @@ test("installHarness downloads a wheel to a .whl cache file on a TLS failure", a
   const downloads = [];
   await installHarness({
     python: "/venv/bin/python",
-    url: wheelUrl,
+    candidates: [wheelUrl],
     homeDir: path.join("home", "npm"),
     version: "1.9.1",
     runStepFn: (command, args) => {
@@ -334,95 +359,89 @@ test("installHarness downloads a wheel to a .whl cache file on a TLS failure", a
   assert.deepEqual(downloads, [[wheelUrl, cache]]);
 });
 
-test("installHarness falls back to the source archive when the wheel is missing", async () => {
+test("installHarness walks PyPI → wheel → archive across the fallback chain", async () => {
+  const pypiSpec = pypiInstallSpec("1.9.1");
   const wheelUrl =
     "https://github.com/jingzhao-l/iterate-harness/releases/download/v1.9.1/iterate_harness-1.9.1-py3-none-any.whl";
   const archiveUrl = releaseTarballUrl("1.9.1");
-  const pipCalls = [];
-  const archiveDownloads = [];
+  const pipArgs = [];
+  const downloads = [];
   await installHarness({
     python: "/venv/bin/python",
-    url: wheelUrl,
+    candidates: [pypiSpec, wheelUrl, archiveUrl],
     homeDir: path.join("home", "npm"),
     version: "1.9.1",
     runStepFn: (command, args) => {
-      pipCalls.push([command, args]);
-      throw new BootstrapError("pip exited with code 1");
+      pipArgs.push(args);
+      throw new BootstrapError("pip exited with code 1: CERTIFICATE_VERIFY_FAILED");
     },
-    // Wheel download also fails → the archive fallback is exercised.
-    downloader: async () => {
-      throw new BootstrapError("downloading .whl failed: exit code 22");
-    },
-    fallback: {
-      python: "/venv/bin/python",
-      url: archiveUrl,
-      homeDir: path.join("home", "npm"),
-      version: "1.9.1",
-      // The archive pip attempt succeeds — no further fallback.
-      runStepFn: (command, args) => pipCalls.push([command, args]),
-      downloader: async (downloadUrl, dest) => archiveDownloads.push([downloadUrl, dest]),
-    },
-  });
-  assert.deepEqual(pipCalls.map(([, args]) => args), [
+    downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
+  }).catch(() => undefined);
+  // The PyPI spec is non-URL: one pip attempt, no download.
+  // The wheel (HTTP) and archive (HTTP) each do: pip → download → local pip.
+  assert.deepEqual(pipArgs, [
+    pipInstallArgs(pypiSpec),
     pipInstallArgs(wheelUrl),
+    pipInstallArgs(downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl")),
     pipInstallArgs(archiveUrl),
+    pipInstallArgs(downloadCachePath(path.join("home", "npm"), "1.9.1")),
   ]);
-  assert.equal(archiveDownloads.length, 0);
+  assert.deepEqual(downloads, [
+    [wheelUrl, downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl")],
+    [archiveUrl, downloadCachePath(path.join("home", "npm"), "1.9.1")],
+  ]);
 });
 
-test("installHarness surfaces the combined error when both wheel and archive fail", async () => {
+test("installHarness surfaces the combined error when every candidate fails", async () => {
+  const pypiSpec = pypiInstallSpec("1.9.1");
   const wheelUrl =
     "https://github.com/jingzhao-l/iterate-harness/releases/download/v1.9.1/iterate_harness-1.9.1-py3-none-any.whl";
   await assert.rejects(
     installHarness({
       python: "/venv/bin/python",
-      url: wheelUrl,
+      candidates: [pypiSpec, wheelUrl],
       homeDir: path.join("home", "npm"),
       version: "1.9.1",
       runStepFn: () => {
         throw new BootstrapError("pip exited with code 1");
       },
       downloader: async () => {
-        throw new BootstrapError("wheel missing");
-      },
-      fallback: {
-        python: "/venv/bin/python",
-        url: releaseTarballUrl("1.9.1"),
-        homeDir: path.join("home", "npm"),
-        version: "1.9.1",
-        // The archive pip build fails, then its downloader dies too.
-        runStepFn: () => {
-          throw new BootstrapError("pip exited with code 1: build failed");
-        },
-        downloader: async () => {
-          throw new BootstrapError("archive unreachable");
-        },
+        throw new BootstrapError("wheel unreachable");
       },
     }),
     (error) =>
-      error instanceof BootstrapError &&
-      error.message.includes("build failed") &&
-      error.message.includes("archive unreachable")
+      error instanceof BootstrapError && error.message.includes("all install candidates failed")
   );
 });
 
-test("installHarness ignores the fallback when the URL is an explicit override", async () => {
+test("installHarness installs a single explicit override directly", async () => {
   const url = "git+https://github.com/jingzhao-l/iterate-harness.git@main";
-  const primary = new BootstrapError("pip exited with code 1: bad ref");
+  const pipCalls = [];
+  await installHarness({
+    python: "/venv/bin/python",
+    candidates: [url],
+    homeDir: path.join("home", "npm"),
+    version: "1.9.1",
+    runStepFn: (command, args) => pipCalls.push([command, args]),
+    downloader: async () => {
+      throw new Error("should not download for a non-http url");
+    },
+  });
+  assert.equal(pipCalls.length, 1);
+  assert.deepEqual(pipCalls[0][1], pipInstallArgs(url));
+});
+
+test("installHarness rejects when no candidates are provided", async () => {
   await assert.rejects(
     installHarness({
       python: "/venv/bin/python",
-      url,
+      candidates: [],
       homeDir: path.join("home", "npm"),
       version: "1.9.1",
-      runStepFn: () => {
-        throw primary;
-      },
-      downloader: async () => {
-        throw new Error("should not download for a non-http url");
-      },
+      runStepFn: () => undefined,
     }),
-    (error) => error === primary
+    (error) =>
+      error instanceof BootstrapError && error.message.includes("no install candidate")
   );
 });
 

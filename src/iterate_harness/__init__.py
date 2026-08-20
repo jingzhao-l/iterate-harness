@@ -8,6 +8,6 @@ This package is the single source of truth for the project version. The
 
 from __future__ import annotations
 
-__version__ = "1.12.9"
+__version__ = "1.12.10"
 
 __all__ = ["__version__"]

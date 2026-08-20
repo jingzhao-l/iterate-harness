@@ -27,10 +27,11 @@ harness 本身是**一个 Python 包**。这个 npm 包是一个薄分发包装�
 2. 在 `~/.iterate-harness-npm/venv` 创建托管虚拟环境
    （可通过 `ITERATE_HARNESS_NPM_HOME` 覆盖）。
 3. `pip install` **与本 npm 包版本锁定的** harness 发布版本 —— npm 的 `1.6.0`
-   总会安装 harness `v1.6.0`。升级 npm 包会自动重装对应的 harness 版本。
-   优先下载 GitHub 发布里的**预构建 wheel**（`iterate_harness-<version>-py3-none-any.whl`，
-   已内置编译好的前端资源——和 iterate-skill-installer 分发预打包资源一致）。
-   若 wheel 缺失，再兑底使用锁定的**源码归档**。
+   总会安装 harness `v1.6.0`。升级 npm 包会在下次运行时自动重装对应的 harness 版本。
+   **首选官方 PyPI 索引**：pip 会按你配置的镜像源（如 `pypi.tuna.tsinghua.edu.cn`）
+   解析 `iterate-harness==X.Y.Z`，即使 GitHub 不可达或 TLS 证书校验失败也能安装。
+   若 PyPI 不可用，再兑底 GitHub release 上的**预构建 wheel**（已内置编译好的前端
+   资源——与 iterate-skill-installer 分发预打包资源一致），最后才用锁定的**源码归档**。
 4. 代理调用 venv 里真正的 `ih` 可执行文件，转发 argv、stdio、信号与退出码。
 
 若 `npm install` 期间无法完成安装（无 Python、无网络，或

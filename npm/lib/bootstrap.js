@@ -8,17 +8,18 @@
  * 1. Resolve a Python interpreter >= 3.10 (env override first).
  * 2. Create/reuse the venv at ~/.iterate-harness-npm/venv.
  * 3. pip-install the harness release pinned to THIS npm package's version
- *    (lockstep: npm 1.12.6 installs harness v1.12.6). The preferred artifact is
- *    the pre-built wheel uploaded to the GitHub release (it already contains
- *    the compiled frontend assets, exactly like iterate-skill-installer ships
- *    pre-wrapped assets). pip-installing the wheel avoids building from source,
- *    which previously failed because the source archive has no frontend/web/
- *    dist for pyproject.toml's force-include. When pip cannot fetch the wheel
- *    (typically a broken Python TLS trust store on macOS python.org builds),
- *    the wrapper retries by downloading the wheel with Node's own https stack
- *    — and, failing that, with curl (system trust store) — then pip-installs
- *    the local file. If the wheel is missing from the release entirely, the
- *    wrapper falls back to the pinned source archive as a last resort.
+ *    (lockstep: npm 1.12.9 installs harness v1.12.9). The preferred source is
+ *    the official **PyPI** index — pip resolves `iterate-harness==X.Y.Z` against
+ *    the user's configured mirror (e.g. `pypi.tuna.tsinghua.edu.cn`), so it
+ *    works even when GitHub is unreachable or its TLS cert fails to verify.
+ *    If PyPI is unavailable, the wrapper falls back to the pre-built GitHub
+ *    **wheel** release asset (frontend dist baked in, like iterate-skill-
+ *    installer ships pre-wrapped assets), pip-installing it directly and, if
+ *    pip's trust store is broken (common on macOS python.org builds), retrying
+ *    by downloading the wheel with Node's own https stack — and, failing that,
+ *    with curl (system trust store) — then pip-installing the local file. If
+ *    the wheel is missing too, the worker falls back to the pinned source
+ *    archive as a final resort.
  * 4. Stamp the installed version; a mismatch (npm upgrade) triggers a
  *    re-install on the next run.
  * 5. Spawn the venv's `ih` with argv/stdio/signals forwarded and the exit
@@ -60,6 +61,11 @@ const HARNESS_GITHUB_REPO = "jingzhao-l/iterate-harness";
 const HARNESS_RELEASE_DOWNLOAD_URL = `https://github.com/${HARNESS_GITHUB_REPO}/releases/download`;
 const HARNESS_REPO_ARCHIVE_URL = `https://github.com/${HARNESS_GITHUB_REPO}/archive/refs/tags`;
 
+// Preferred install channel: the official PyPI index. pip reads the user's
+// mirror config (e.g. `pypi.tuna.tsinghua.edu.cn`), so it stays fast and
+// stable even when GitHub is unreachable — unlike the GitHub wheel fallback.
+const PYPI_PACKAGE_NAME = "iterate-harness";
+
 // Preferred installable artifact: the pre-built wheel (frontend dist baked in).
 const WHEEL_ASSET_SUFFIX = "-py3-none-any.whl";
 // Last-resort artifact: the pinned source archive (pip builds from source).
@@ -89,6 +95,12 @@ function wheelAssetName(version) {
 // Preferred installable source: the pre-built wheel (frontend dist baked in).
 function wheelAssetUrl(version) {
   return `${HARNESS_RELEASE_DOWNLOAD_URL}/v${version}/${wheelAssetName(version)}`;
+}
+
+// PyPI package spec pinned to the version (e.g. `iterate-harness==1.12.9`).
+// pip resolves this against the user's configured index/mirror, not GitHub.
+function pypiInstallSpec(version) {
+  return `${PYPI_PACKAGE_NAME}==${version}`;
 }
 
 // Last-resort installable source: the pinned source archive (builds on pip).
@@ -274,25 +286,17 @@ function runStep(command, args, options) {
   }
 }
 
-// Preferred install URL: the pre-built wheel pinned to this npm version.
-// An explicit env override always wins (e.g. a local dev wheel or git ref).
-function installUrl(version, env) {
+// Ordered install candidates, best-effort first:
+//   1. PyPI spec — pip installs via the user's mirror (stable, no GitHub).
+//   2. Pre-built wheel on the GitHub release (needs GitHub, but no source build).
+//   3. Pinned source archive on GitHub (last resort; pip builds from source).
+// An explicit env override short-circuits the chain (the user owns the source).
+function installCandidates(version, env) {
   const override = env ? env[INSTALL_URL_ENV_VAR] : undefined;
   if (override) {
-    return override;
+    return [override];
   }
-  return wheelAssetUrl(version);
-}
-
-// Last-resort fallback URL: the pinned source archive. Only relevant when the
-// user did not override the install URL (an explicit override means they own
-// the source and no archive fallback should kick in).
-function installFallbackUrl(version, env) {
-  const override = env ? env[INSTALL_URL_ENV_VAR] : undefined;
-  if (override) {
-    return null;
-  }
-  return releaseTarballUrl(version);
+  return [pypiInstallSpec(version), wheelAssetUrl(version), releaseTarballUrl(version)];
 }
 
 // ---------------------------------------------------------------------------
@@ -421,41 +425,55 @@ async function downloadTarballTo(url, dest, deps) {
 
 async function installHarness(options) {
   const python = options.python;
-  const url = options.url;
   const homeDir = options.homeDir;
   const version = options.version;
+  const candidates = options.candidates;
   const runStepFn = options.runStepFn || runStep;
   const downloader = options.downloader || downloadTarballTo;
-  // Optional terminal fallback (e.g. the source archive if the wheel is missing).
-  const fallback = options.fallback;
 
+  if (!candidates || candidates.length === 0) {
+    throw new BootstrapError("no install candidate URLs were provided");
+  }
+
+  const failures = [];
+  for (const candidate of candidates) {
+    try {
+      if (isRemoteHttpUrl(candidate)) {
+        // HTTP(S) candidate: `pip` first, then node/curl download + local pip
+        // (survives broken Python TLS trust stores on macOS python.org builds).
+        await installRemoteArtifact(python, candidate, homeDir, version, runStepFn, downloader);
+      } else {
+        // Non-URL candidate (e.g. `iterate-harness==1.12.9` resolved by pip
+        // against the user's mirror): no artifact to download, just pip it.
+        runStepFn(python, pipInstallArgs(candidate));
+      }
+      return;
+    } catch (error) {
+      failures.push(`${candidate}: ${error.message}`);
+      process.stderr.write(
+        `[iterate-harness] install from "${candidate}" failed (${error.message}); ` +
+          "trying the next candidate ...\n"
+      );
+    }
+  }
+
+  throw new BootstrapError(`all install candidates failed:\n  ${failures.join("\n  ")}`);
+}
+
+// pip-install a downloadable HTTP artifact, retrying with a node/curl download
+// of the raw file + local pip install when pip's TLS trust store is broken.
+async function installRemoteArtifact(python, url, homeDir, version, runStepFn, downloader) {
   try {
     runStepFn(python, pipInstallArgs(url));
     return;
   } catch (primaryError) {
-    if (!isRemoteHttpUrl(url)) {
-      throw primaryError;
-    }
     process.stderr.write(
       `[iterate-harness] pip install from ${url} failed; retrying via direct download ...\n`
     );
-    const cachePath = downloadCachePath(homeDir, version, artifactExtensionFor(url));
-    try {
-      await downloader(url, cachePath);
-    } catch (downloadError) {
-      if (fallback) {
-        process.stderr.write(
-          `[iterate-harness] primary artifact unavailable (${downloadError.message}); ` +
-            `falling back to source archive ${fallback.url} ...\n`
-        );
-        return installHarness(fallback);
-      }
-      throw new BootstrapError(
-        `${primaryError.message}\n\n(direct-download fallback also failed: ${downloadError.message})`
-      );
-    }
-    runStepFn(python, pipInstallArgs(cachePath));
   }
+  const cachePath = downloadCachePath(homeDir, version, artifactExtensionFor(url));
+  await downloader(url, cachePath);
+  runStepFn(python, pipInstallArgs(cachePath));
 }
 
 async function bootstrap(homeDir, version, env) {
@@ -477,18 +495,13 @@ async function bootstrap(homeDir, version, env) {
     runStep(interpreter.command, [...interpreter.preArgs, "-m", "venv", venvDir]);
   }
 
-  const url = installUrl(version, env);
-  const fallbackUrl = installFallbackUrl(version, env);
+  const candidates = installCandidates(version, env);
   ui.step(`Installing iterate-harness ${version}`);
   await installHarness({
     python: executable.python,
-    url,
+    candidates,
     homeDir,
     version,
-    fallback:
-      fallbackUrl != null
-        ? { python: executable.python, url: fallbackUrl, homeDir, version }
-        : undefined,
   });
 
   const stampPath = path.join(homeDir, STAMP_FILE_NAME);
@@ -624,15 +637,16 @@ module.exports = {
   downloadFile,
   downloadTarballTo,
   ensureRuntime,
-  installFallbackUrl,
+  installCandidates,
   installHarness,
-  installUrl,
+  installRemoteArtifact,
   isRemoteHttpUrl,
   isSupportedPython,
   needsBootstrap,
   packageVersion,
   parsePythonVersion,
   pipInstallArgs,
+  pypiInstallSpec,
   pythonCandidates,
   releaseTarballUrl,
   reportBootstrapFailure,

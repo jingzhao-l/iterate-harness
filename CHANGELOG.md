@@ -2,7 +2,31 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
-The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
+## [1.12.10] - 2026-08-20
+
+Install source switched to the official **PyPI** index, so npm installs work
+without GitHub in network-restricted (or TLS-broken) environments — exactly
+the "no GitHub dependency" experience you get from DNS-fixed proxies, but
+built in.
+
+### Changed
+
+- **Install channel** (`npm/lib/bootstrap.js`): the wrapper now installs the
+  PyPI spec `iterate-harness==<version>` first, which pip resolves against the
+  user's configured index/mirror (e.g. `pypi.tuna.tsinghua.edu.cn`). The
+  GitHub pre-built wheel is demoted to a fallback (kept for users without a
+  PyPI mirror), and the source archive is the final last-resort. Replaced the
+  `installUrl`/`installFallbackUrl`/`fallback` API with an ordered
+  `installCandidates` chain; HTTP candidates still get the node/curl
+  local-download resilience, non-URL (PyPI) candidates are pip-installed
+  directly.
+- **Release distribution** (`.github/workflows/release.yml`): the released
+  wheel is now also published to PyPI via twine (best-effort, gated on the
+  `PYPI_PASSWORD` secret).
+- **Tests** (`npm/test/bootstrap.test.js`): added `pypiInstallSpec`/
+  `installCandidates` coverage and rewrote the `installHarness` suite for the
+  new candidate-chain API (PyPI → wheel → archive), plus an end-to-end walk
+  test asserting the exact pip/download call order.
 
 ## [1.12.9] - 2026-08-20
 
@@ -620,3 +644,5 @@ to the iterate review/fix loop (semantic layer ported from the iterate skill).
 
 - Initial public release of OpenHarness.
 - Core agent loop, tool registry, permission system, hooks, skills, plugins, MCP support, and terminal UI.
+
+The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
