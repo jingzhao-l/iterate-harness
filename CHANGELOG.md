@@ -4,6 +4,15 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.12.7] - 2026-08-20
+
+npm first-run install hardened for broken-Python-TLS environments: when pip can't fetch the release wheel (e.g. macOS python.org build with a broken certificate chain) and the wrapper downloads the wheel itself via Node/curl, the locally cached wheel now keeps a valid PEP 427 filename (`iterate_harness-<version>-py3-none-any.whl`) so pip accepts it instead of rejecting a bare `iterate-harness-<version>.whl`.
+
+### Fixed
+
+- **npm wrapper wheel cache** (`npm/lib/bootstrap.js`): `downloadCachePath` now returns the real wheel asset name for the `.whl` extension instead of a generic `iterate-harness-<version>.whl`. Previously, in the fallback path (Node/curl download), the cached wheel could not be pip-installed because pip rejects any `*.whl` lacking the `{python}-{abi}-{platform}` tags with "not a valid wheel filename".
+- **Regression test** (`npm/test/bootstrap.test.js`): adds coverage asserting the wheel cache path is a valid PEP 427 wheel filename and round-trips through `artifactExtensionFor(wheelAssetUrl(...))`.
+
 ## [1.12.6] - 2026-08-20
 
 npm first-run install fixed: the wrapper no longer tries to build the harness from the GitHub source archive (which lacks `frontend/web/dist`, so pip's source build always failed). It now downloads the **pre-built wheel** uploaded to the GitHub release and pip-installs that — mirroring how `iterate-skill-installer` ships pre-wrapped assets — with the source archive demoted to a last-resort fallback.

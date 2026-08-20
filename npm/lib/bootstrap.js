@@ -161,6 +161,14 @@ function artifactExtensionFor(url) {
 
 function downloadCachePath(homeDir, version, extension) {
   const ext = extension || DEFAULT_ARTIFACT_EXT;
+  if (ext === WHEEL_ARTIFACT_EXT) {
+    // A locally-cached wheel must keep a valid PEP 427 filename (e.g.
+    // `iterate_harness-1.12.6-py3-none-any.whl`). pip refuses any `*.whl`
+    // whose name lacks the `{python}-{abi}-{platform}` tags, so the fallback
+    // cache file reuses the real release asset name rather than a bare
+    // `iterate-harness-{version}.whl`.
+    return path.join(homeDir, TARBALL_CACHE_DIR_NAME, wheelAssetName(version));
+  }
   return path.join(homeDir, TARBALL_CACHE_DIR_NAME, `iterate-harness-${version}${ext}`);
 }
 
