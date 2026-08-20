@@ -166,6 +166,21 @@ test("downloadCachePath lands inside the runtime cache dir with the version pinn
   );
 });
 
+test("downloadCachePath keeps a valid PEP 427 filename for the wheel cache", () => {
+  // A wheel cached for offline pip install must carry the
+  // `{name}-{version}-{python}-{abi}-{platform}` tags — pip rejects a bare
+  // `iterate-harness-1.9.1.whl` with "not a valid wheel filename".
+  assert.equal(
+    downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl"),
+    path.join("home", "npm", "cache", wheelAssetName("1.9.1"))
+  );
+  // Round-trips through artifactExtensionFor(wheelAssetUrl) end-to-end.
+  assert.equal(
+    downloadCachePath(path.join("home", "npm"), "1.9.1", artifactExtensionFor(wheelAssetUrl("1.9.1"))),
+    path.join("home", "npm", "cache", "iterate_harness-1.9.1-py3-none-any.whl")
+  );
+});
+
 test("pipInstallArgs pins upgrade, force-reinstall and the target", () => {
   assert.deepEqual(pipInstallArgs("https://example.com/x.tar.gz"), [
     "-m",
