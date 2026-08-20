@@ -1237,11 +1237,6 @@ def iterate_report(
         "--fail-on",
         help="Severity gate for the exit code: none|low|medium|high|critical",
     ),
-    webhook_url: str = typer.Option(
-        "",
-        "--webhook",
-        help="Post report to a Slack/Feishu webhook URL",
-    ),
     lang: str = typer.Option(
         "",
         "--lang",
@@ -1265,7 +1260,6 @@ def iterate_report(
     serve = _typer_flag(serve)
     persist = _typer_flag(persist)
     serve_port = _typer_int(serve_port)
-    webhook_url = _typer_str(webhook_url)
     lang = _typer_str(lang)
     csv_out = _typer_str(csv_out)
 
@@ -1321,20 +1315,6 @@ def iterate_report(
         body = pr_comment.render_markdown(summary, gate)
         result = pr_comment.post_pr_comment(body, str(Path.cwd()))
         print(f"PR comment: {result}", file=sys.stderr)
-    if webhook_url:
-        from iterate_harness.iterate import webhook as webhook_mod
-
-        webhook_result = webhook_mod.notify_report(webhook_url, summary, gate)
-        if webhook_result.success:
-            print(
-                f"Webhook notification sent (HTTP {webhook_result.status_code}).",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"Webhook notification failed: {webhook_result.error}",
-                file=sys.stderr,
-            )
     if not github and not pr:
         print(ci_report.render_text(summary, gate, language=language))
     if csv_out:

@@ -18,7 +18,6 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
 - :mod:`.dimension_check` — skill↔harness dimension-system consistency doctor
 - :mod:`.prompts` — canonical workflow prompt templates
 - :mod:`.trend_store` — finding fingerprint trend library (new/fixed/stubborn)
-- :mod:`.webhook` — Slack / Lark/Feishu / generic webhook notifications
 - :mod:`.worktree_flow` — fix-round git isolation orchestration
 
 This ``__init__`` uses PEP 562 lazy attribute resolution: the kernel's
@@ -124,11 +123,6 @@ _EXPORTS: dict[str, str] = {
     "ReviewReport": ".types",
     "ReviewRound": ".types",
     "ValidationResult": ".types",
-    # webhook
-    "WebhookResult": ".webhook",
-    "detect_webhook_type": ".webhook",
-    "notify_report": ".webhook",
-    "send_webhook": ".webhook",
     # validate
     "run_command": ".validate",
     "run_validation": ".validate",
@@ -208,10 +202,6 @@ __all__ = [
     "reviewer_task_prompt",
     "run_command",
     "run_dimension_doctor",
-    "WebhookResult",
-    "detect_webhook_type",
-    "notify_report",
-    "send_webhook",
     "run_tui_personalize",
     "run_validation",
     "save_checkpoint",

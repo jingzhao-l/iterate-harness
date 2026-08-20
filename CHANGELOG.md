@@ -4,6 +4,17 @@ All notable changes to iterate-harness should be recorded in this file.
 
 The format is based on Keep a Changelog, and this project currently tracks changes in a lightweight, repository-oriented way.
 
+## [1.12.3] - 2026-08-20
+
+Final legacy sweep: removed the remaining external-communication surface and confirmed dead code so `ih` is purely the iterate review/fix harness with no channel/notification leftover.
+
+### Removed
+
+- **Webhook notifications** (`iterate/webhook.py`, `tests/test_iterate/test_webhook.py`, `cli.py`): dropped the Slack / Lark / Feishu / generic webhook notifier and the `ih iterate report --webhook <url>` option; exports (`WebhookResult`, `detect_webhook_type`, `notify_report`, `send_webhook`) removed from `iterate/__init__.py`.
+- **Compatibility helpers** (`utils/helpers.py`, `tests/test_utils/test_helpers.py`): removed the unused `get_data_path` / `safe_filename` / `split_message` shims kept only for legacy channel adapters.
+- **Empty OAuth service dir** (`services/oauth/`): removed the leftover empty package from the deprecated subscription/OAuth flow.
+- **Dead channel config models** (`config/schema.py`): removed the unused `Config` / `ChannelConfigs` / `SlackConfig` / `FeishuConfig` / etc. compatibility models — no production or test code imports `iterate_harness.config.schema`.
+
 ## [1.12.2] - 2026-08-19
 
 Iterate-only cleanup: stripped the remaining OpenHarness branding and the general-purpose agent-harness surface area from the CLI/TUI, auth, commands, workflows, and docs so `ih` presents purely as the iterate review/fix harness.
