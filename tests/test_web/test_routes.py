@@ -486,8 +486,7 @@ class TestReports:
 class TestEvents:
     def test_events_route_registered(self):
         app = create_app()
-        paths = {route.path for route in app.routes}
-        assert "/api/v1/events" in paths
+        assert app.url_path_for("stream_events") == "/api/v1/events"
 
     def test_build_status_payload_keys(self, tmp_path: Path):
         payload = events_module._build_status_payload(tmp_path)

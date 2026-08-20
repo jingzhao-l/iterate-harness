@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 import iterate_harness.mcp.client as client_module
@@ -18,10 +18,7 @@ from iterate_harness.tools.base import ToolExecutionContext
 
 @pytest.mark.asyncio
 async def test_http_mcp_manager_connects_and_executes_in_process_server(monkeypatch):
-    server = FastMCP(
-        "demo-http",
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-    )
+    server = MCPServer("demo-http")
 
     @server.tool()
     def hello(name: str) -> str:
@@ -31,9 +28,11 @@ async def test_http_mcp_manager_connects_and_executes_in_process_server(monkeypa
     def readme() -> str:
         return "http fixture resource contents"
 
-    app = server.streamable_http_app()
-    transport = httpx.ASGITransport(app=app)
-    original_async_client = client_module.httpx.AsyncClient
+    app = server.streamable_http_app(
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    )
+    transport = httpx2.ASGITransport(app=app)
+    original_async_client = client_module.httpx2.AsyncClient
     seen_headers: list[dict[str, str] | None] = []
 
     def _async_client_factory(*args, **kwargs):
@@ -45,7 +44,7 @@ async def test_http_mcp_manager_connects_and_executes_in_process_server(monkeypa
             **kwargs,
         )
 
-    monkeypatch.setattr(client_module.httpx, "AsyncClient", _async_client_factory)
+    monkeypatch.setattr(client_module.httpx2, "AsyncClient", _async_client_factory)
 
     manager = McpClientManager(
         {
