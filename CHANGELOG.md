@@ -2,6 +2,42 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [1.12.12] - 2026-08-21
+
+WebUI operation-console controls, sandbox hardening for file tools, and a
+batch of UX fixes from the full project review.
+
+### Added
+
+- **Dashboard run controls** (`frontend/web/src/pages/Dashboard.tsx`): the
+  persistent run-status banner on the dashboard now exposes direct
+  pause / resume / stop buttons backed by `POST /chat/control`, so the
+  operation console no longer depends on the chat panel. Stop requires a
+  secondary confirmation and is disabled while the loop is waiting for human
+  input.
+
+### Security
+
+- **Sandbox path validation for `todo_write` and `notebook_edit`**
+  (`tools/todo_write_tool.py`, `tools/notebook_edit_tool.py`): both tools now
+  resolve candidate paths and validate them against the Docker sandbox
+  boundary the same way `file_write` already did, blocking directory-traversal
+  escape attempts. Covered by new rejection tests in `tests/test_core_tools.py`.
+- **No more hardcoded API keys in tests**: four real-API test files read
+  `ANTHROPIC_API_KEY` from the environment (empty default) and skip their
+  real-API cases when the key or the target workspace is absent.
+
+### Fixed
+
+- **Runs timeline diff expansion** (`frontend/web/src/pages/Runs.tsx`): the
+  expandable diff block now normalizes both string and array persisted diff
+  shapes, so it renders instead of being silently hidden.
+- **StartDialog resume mode** (`frontend/web/src/components/StartDialog.tsx`):
+  the "changed files / git ref" options are hidden in resume mode and a stale
+  `changed` flag is cleared, preventing a bad kickoff.
+- **Headless run guidance** (`cli.py`): after a `--headless` run finishes, the
+  CLI prints next-step hints for viewing the HTML report or decision log.
+
 ## [1.12.11] - 2026-08-21
 
 Security hardening, MCP 2.0.0 migration, and reproducible dependency pinning.
