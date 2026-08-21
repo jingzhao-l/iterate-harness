@@ -5,9 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from iterate_harness.iterate.review_scope import (
-    COVERAGE_TARGET,
     DEFAULT_SCOPE_CHUNK_SIZE,
-    CoverageResult,
     chunk_files,
     collect_scope_files,
     compute_coverage,

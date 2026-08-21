@@ -40,9 +40,7 @@ from iterate_harness.memory import (
 )
 from iterate_harness.output_styles import load_output_styles
 from iterate_harness.permissions import PermissionMode, build_permission_checker
-from iterate_harness.plugins import load_plugins
 from iterate_harness.prompts import build_runtime_system_prompt
-from iterate_harness.plugins.installer import install_plugin_from_path, uninstall_plugin
 from iterate_harness.services import (
     build_post_compact_messages,
     compact_conversation,

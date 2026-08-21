@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from iterate_harness.swarm import registry as registry_mod
 from iterate_harness.swarm import spawn_utils as spawn_utils_mod
 from iterate_harness.swarm.team_lifecycle import (
     TeamFile,
