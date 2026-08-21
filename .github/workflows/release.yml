@@ -21,6 +21,10 @@ name: Release publish
 on:
   release:
     types: [published]
+  # Manual fallback: the `release` event has not fired reliably since v1.12.10,
+  # so operators can dispatch this workflow on an existing tag instead:
+  #   gh workflow run release.yml --ref v1.12.11
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -33,7 +37,9 @@ jobs:
       - name: Checkout tagged tree
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          # On `release` events use the release tag; on manual dispatch use the
+          # dispatched ref (github.ref_name), e.g. `--ref v1.12.11`.
+          ref: ${{ github.event.release.tag_name || github.ref_name }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
