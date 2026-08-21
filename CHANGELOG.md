@@ -2,6 +2,51 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [1.12.11] - 2026-08-21
+
+Security hardening, MCP 2.0.0 migration, and reproducible dependency pinning.
+
+### Security
+
+- **Credential encryption at rest** (`auth/storage.py`): when no system keyring
+  is available (containers, CI, WSL), credentials in `credentials.json` are now
+  encrypted with Fernet (authenticated symmetric encryption). The key is derived
+  deterministically from the machine secret + user home + app salt, so the file
+  is only decryptable on the same machine under the same user. Legacy plaintext
+  values from older versions are migrated in place automatically.
+- **WebUI access-token protection** (`web/token.py`, new): `ih web serve` issues
+  a random token (persisted under the config dir with mode 600), prints it on
+  startup, and injects it into the browser URL. All API calls must carry the
+  token (`Authorization` header or `?token=` query), preventing local
+  cross-process access to the loopback console.
+
+### Changed
+
+- **MCP 2.0.0 migration** (`mcp/client.py` + fixtures/tests): adapted to
+  breaking changes — `FastMCP` → `MCPServer`, `inputSchema` → `input_schema`,
+  `structuredContent` → `structured_content`, and the streamable HTTP client's
+  new 2-tuple return. The HTTP transport now uses the dedicated `httpx2` client
+  that MCP 2.0.0 requires.
+- **Dependencies pinned to exact versions** (`pyproject.toml`): all runtime and
+  dev dependencies are now exact-pinned (resolved from `uv.lock`) for
+  reproducible installs. Added `httpx2==2.10.0`; upgraded `fastapi` to 0.141.1
+  to resolve the `starlette` version conflict with MCP 2.0.0.
+- **No more silent `except: pass`**: cleanup/best-effort error paths across
+  checkpoint, report server, docker backend, cron scheduler, session storage,
+  swarm, and task manager now log the reason at debug level instead of
+  swallowing exceptions.
+
+### Added
+
+- **Test suites** for `state/`, `keybindings/`, `themes/`, WebUI token auth,
+  and the auth manager (closing the coverage gaps identified in the full
+  project review).
+
+### Fixed
+
+- **Unused imports** (`commands/registry.py`, two test files) removed so the
+  pinned `ruff` rule set is fully green.
+
 ## [1.12.10] - 2026-08-20
 
 Install source switched to the official **PyPI** index, so npm installs work
