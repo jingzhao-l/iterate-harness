@@ -44,6 +44,15 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
   const setChatStatus = useWebUi((state) => state.setChatStatus);
   const projectRoot = useWebUi((state) => state.projectRoot);
 
+  // "changed"/"ref" only apply to review/run (the diff baseline for a
+  // changed-only pass). "resume" continues from the last checkpoint, so those
+  // options are meaningless there: switching into resume hides them and
+  // clears the flag so a stale "changed" never leaks into the kickoff.
+  const selectMode = (next: StartRequest["mode"]): void => {
+    setMode(next);
+    if (next === "resume") setChanged(false);
+  };
+
   const handleStart = async (): Promise<void> => {
     if (busy) return;
     setBusy(true);
@@ -91,7 +100,7 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
             <button
               key={option.value}
               className={`mode-option ${mode === option.value ? "active" : ""}`}
-              onClick={() => setMode(option.value)}
+              onClick={() => selectMode(option.value)}
               disabled={busy}
             >
               <span className="mode-label">{option.label}</span>
@@ -100,17 +109,19 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
           ))}
         </div>
 
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={changed}
-            onChange={(event) => setChanged(event.target.checked)}
-            disabled={busy}
-          />
-          仅审查自 ref 以来的变更文件
-        </label>
+        {mode !== "resume" && (
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={changed}
+              onChange={(event) => setChanged(event.target.checked)}
+              disabled={busy}
+            />
+            仅审查自 ref 以来的变更文件
+          </label>
+        )}
 
-        {changed && (
+        {mode !== "resume" && changed && (
           <label className="field-label">
             Git ref（变更基准）
             <input

@@ -879,6 +879,12 @@ def _run_headless(kickoff: str, branch: str | None = None) -> None:
     ensure_onboarding_fingerprints(Path.cwd())
     warn_if_drifted(Path.cwd())
     asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
+    print(
+        "\nRun finished. "
+        "View the report with `ih iterate report --html --serve` "
+        "(or `ih iterate log --tail 40` for the decision log).",
+        file=sys.stderr,
+    )
 
 
 def _resolve_changed_files(

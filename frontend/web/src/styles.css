@@ -843,6 +843,18 @@ table.data tr.row-active td {
   font-size: 12px;
 }
 
+/* Direct run controls on the dashboard banner — see Dashboard.tsx. */
+.run-banner-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-banner-controls .btn {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
 .waiting-tag {
   display: inline-block;
   padding: 2px 8px;

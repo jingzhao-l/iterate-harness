@@ -4,7 +4,9 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { api } from "../api";
 import { ConvergenceChart } from "../components/ConvergenceChart";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { StartDialog } from "../components/StartDialog";
 import { useWebUi } from "../store";
 
@@ -35,10 +37,30 @@ export default function Dashboard(): React.JSX.Element {
   const chatStatus = useWebUi((state) => state.chatStatus);
   const pushToast = useWebUi((state) => state.pushToast);
   const [showStart, setShowStart] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [controlling, setControlling] = useState(false);
 
   useEffect(() => {
     if (!status && !lastError) void refreshStatus();
   }, [status, lastError, refreshStatus]);
+
+  // Pause / resume / stop the live run straight from the dashboard banner
+  // (design §17 UX: the dashboard is the operation console, controls live
+  // here rather than only inside the chat panel). "stop" requires a
+  // secondary confirmation because it is destructive.
+  const handleControl = async (action: "pause" | "resume" | "stop"): Promise<void> => {
+    setControlling(true);
+    try {
+      const result = await api.chatControl(action);
+      if (result.message) pushToast("info", result.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      pushToast("error", `控制失败：${message}`);
+    } finally {
+      setControlling(false);
+      setConfirmStop(false);
+    }
+  };
 
   if (statusLoading && !status) {
     return (
@@ -124,6 +146,38 @@ export default function Dashboard(): React.JSX.Element {
             {chatStatus.project_root ? ` · ${chatStatus.project_root}` : ""}
           </span>
         )}
+        <div className="run-banner-controls">
+          {chatState === "running" && !waitingForInput && (
+            <button
+              className="btn"
+              onClick={() => void handleControl("pause")}
+              disabled={controlling}
+              title="暂停运行，在下一轮边界停止"
+            >
+              暂停
+            </button>
+          )}
+          {chatState === "paused" && (
+            <button
+              className="btn"
+              onClick={() => void handleControl("resume")}
+              disabled={controlling}
+              title="恢复运行"
+            >
+              继续
+            </button>
+          )}
+          {(chatState === "running" || chatState === "paused") && (
+            <button
+              className="btn danger"
+              onClick={() => setConfirmStop(true)}
+              disabled={controlling}
+              title="停止运行（保留决策日志，可 resume）"
+            >
+              停止
+            </button>
+          )}
+        </div>
       </section>
 
       <div className="cards">
@@ -276,6 +330,20 @@ export default function Dashboard(): React.JSX.Element {
             pushToast("success", "迭代已启动，可在右下角对话面板查看进度");
           }}
         />
+      )}
+
+      {confirmStop && (
+        <ConfirmDialog
+          title="停止迭代"
+          confirmLabel="确认停止"
+          danger
+          busy={controlling}
+          onCancel={() => setConfirmStop(false)}
+          onConfirm={() => void handleControl("stop")}
+        >
+          将停止当前运行的迭代循环。已完成的轮次结果会保留在决策日志中，可稍后通过
+          <code> /iterate resume</code> 恢复。确定停止吗？
+        </ConfirmDialog>
       )}
     </>
   );

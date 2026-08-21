@@ -36,6 +36,15 @@ function asString(value: unknown): string {
   return String(value);
 }
 
+// The decision log stores `diff` as a unified-diff string (see html_report.py).
+// Normalize both a string and a pre-split array into lines so the expandable
+// diff block renders regardless of the exact persisted shape.
+function diffLines(diff: unknown): string[] {
+  if (Array.isArray(diff)) return diff.map((line) => String(line));
+  if (typeof diff === "string" && diff.trim()) return diff.split("\n");
+  return [];
+}
+
 function severityColor(severity: string): string {
   return severity in SEVERITY_LABELS ? `severity-${severity}` : "neutral";
 }
@@ -374,7 +383,7 @@ export default function Runs(): React.JSX.Element {
                   </div>
                   <div className="body">
                     <EntryBody entry={entry} />
-                    {Array.isArray(entry.data?.diff) && entry.data.diff.length > 0 && (
+                    {diffLines(entry.data?.diff).length > 0 && (
                       <div>
                         <button
                           className="btn"
@@ -384,9 +393,7 @@ export default function Runs(): React.JSX.Element {
                           {expanded.has(entry.index) ? "收起 diff" : "展开 diff"}
                         </button>
                         {expanded.has(entry.index) && (
-                          <pre className="diff">
-                            {(entry.data.diff as string[]).join("\n")}
-                          </pre>
+                          <pre className="diff">{diffLines(entry.data?.diff).join("\n")}</pre>
                         )}
                       </div>
                     )}
