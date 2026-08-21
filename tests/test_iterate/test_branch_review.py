@@ -26,6 +26,20 @@ def _init_git_repo(path: Path) -> None:
     subprocess.run(
         ["git", "init", "-b", "main"], cwd=str(path), check=True, capture_output=True
     )
+    # CI runners have no global git identity; configure one locally so the
+    # initial commit succeeds (mirrors the other git-based test fixtures).
+    subprocess.run(
+        ["git", "config", "user.email", "iterate_harness@example.com"],
+        cwd=str(path),
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "IterateHarness Tests"],
+        cwd=str(path),
+        check=True,
+        capture_output=True,
+    )
     (path / "file.txt").write_text("hello\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=str(path), check=True, capture_output=True)
     subprocess.run(
