@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -13,6 +13,9 @@ from croniter import croniter
 from iterate_harness.config.paths import get_cron_registry_path
 from iterate_harness.utils.file_lock import exclusive_file_lock
 from iterate_harness.utils.fs import atomic_write_text
+
+#: Python 3.10 compatibility — ``datetime.UTC`` is only available in 3.11+.
+UTC = timezone.utc
 
 
 def _cron_lock_path() -> Path:

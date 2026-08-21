@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-from datetime import UTC
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,9 @@ from iterate_harness.iterate import batch as iterate_batch
 from iterate_harness.iterate import decision_log
 from iterate_harness.services import cron_scheduler
 from iterate_harness.services.cron import load_cron_jobs
+
+#: Python 3.10 compatibility — ``datetime.UTC`` is only available in 3.11+.
+UTC = timezone.utc
 
 
 @pytest.fixture()

@@ -12,10 +12,13 @@ return what parsed, never raise.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .types import DecisionLogEntry as DecisionLogEntry
+
+#: Python 3.10 compatibility — ``datetime.UTC`` is only available in 3.11+.
+UTC = timezone.utc
 
 LOG_DIR = ".iterate"
 LOG_FILE = "decision-log.jsonl"

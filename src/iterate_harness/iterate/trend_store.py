@@ -21,9 +21,12 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+#: Python 3.10 compatibility — ``datetime.UTC`` is only available in 3.11+.
+UTC = timezone.utc
 
 log = logging.getLogger(__name__)
 

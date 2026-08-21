@@ -14,11 +14,14 @@ from __future__ import annotations
 import contextlib
 import io
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from iterate_harness.iterate import ci_report, config_loader, decision_log, git_scope, prompts
+
+#: Python 3.10 compatibility — ``datetime.UTC`` is only available in 3.11+.
+UTC = timezone.utc
 
 #: Canonical cron job name for the scheduled changed-only quick review.
 ITERATE_CRON_JOB_NAME = "iterate.review-changed"
