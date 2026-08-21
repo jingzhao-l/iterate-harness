@@ -25,7 +25,17 @@ class TodoWriteTool(BaseTool):
     input_model = TodoWriteToolInput
 
     async def execute(self, arguments: TodoWriteToolInput, context: ToolExecutionContext) -> ToolResult:
-        path = Path(context.cwd) / arguments.path
+        path = _resolve_path(context.cwd, arguments.path)
+
+        from iterate_harness.sandbox.session import is_docker_sandbox_active
+
+        if is_docker_sandbox_active():
+            from iterate_harness.sandbox.path_validator import validate_sandbox_path
+
+            allowed, reason = validate_sandbox_path(path, context.cwd)
+            if not allowed:
+                return ToolResult(output=f"Sandbox: {reason}", is_error=True)
+
         existing = path.read_text(encoding="utf-8") if path.exists() else "# TODO\n"
 
         unchecked_line = f"- [ ] {arguments.item}"
@@ -42,5 +52,13 @@ class TodoWriteTool(BaseTool):
             # New item — append
             updated = existing.rstrip() + f"\n{target_line}\n"
 
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(updated, encoding="utf-8")
         return ToolResult(output=f"Updated {path}")
+
+
+def _resolve_path(base: Path, candidate: str) -> Path:
+    path = Path(candidate).expanduser()
+    if not path.is_absolute():
+        path = base / path
+    return path.resolve()

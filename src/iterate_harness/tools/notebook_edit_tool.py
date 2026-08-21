@@ -35,6 +35,16 @@ class NotebookEditTool(BaseTool):
         context: ToolExecutionContext,
     ) -> ToolResult:
         path = _resolve_path(context.cwd, arguments.path)
+
+        from iterate_harness.sandbox.session import is_docker_sandbox_active
+
+        if is_docker_sandbox_active():
+            from iterate_harness.sandbox.path_validator import validate_sandbox_path
+
+            allowed, reason = validate_sandbox_path(path, context.cwd)
+            if not allowed:
+                return ToolResult(output=f"Sandbox: {reason}", is_error=True)
+
         notebook = _load_notebook(path, create_if_missing=arguments.create_if_missing)
         if notebook is None:
             return ToolResult(output=f"Notebook not found: {path}", is_error=True)

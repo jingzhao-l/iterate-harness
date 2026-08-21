@@ -218,6 +218,32 @@ async def test_notebook_edit_tool(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_todo_write_rejects_path_outside_sandbox(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("iterate_harness.sandbox.session.is_docker_sandbox_active", lambda: True)
+    ctx = ToolExecutionContext(cwd=tmp_path)
+    result = await TodoWriteTool().execute(
+        TodoWriteToolInput(item="escape", path="../../escape.md"),
+        ctx,
+    )
+    assert result.is_error is True
+    assert "Sandbox" in result.output
+    assert not (tmp_path / ".." / "escape.md").resolve().exists()
+
+
+@pytest.mark.asyncio
+async def test_notebook_edit_rejects_path_outside_sandbox(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("iterate_harness.sandbox.session.is_docker_sandbox_active", lambda: True)
+    ctx = ToolExecutionContext(cwd=tmp_path)
+    result = await NotebookEditTool().execute(
+        NotebookEditToolInput(path="../../escape.ipynb", cell_index=0, new_source="x=1"),
+        ctx,
+    )
+    assert result.is_error is True
+    assert "Sandbox" in result.output
+    assert not (tmp_path / ".." / "escape.ipynb").resolve().exists()
+
+
+@pytest.mark.asyncio
 async def test_lsp_tool(tmp_path: Path):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "utils.py").write_text(
