@@ -92,13 +92,16 @@ jobs:
         # mirror, e.g. tuna). Publishing here on every release keeps PyPI in
         # sync. Best-effort: if the secret isn't configured, skip silently —
         # the GitHub wheel asset remains a working fallback.
-        # Implicit non-empty check: `${{ secrets.X }}` is false when the secret
-        # is unset/empty and true otherwise, avoiding edge cases where an
-        # explicit `!= ''` comparison behaves unexpectedly on some runners.
-        if: ${{ secrets.PYPI_PASSWORD }}
+        # NOTE: the `secrets` context is NOT available in `if:` conditionals,
+        # so gate on the env var inside the run script instead. When the
+        # secret is unset, TWINE_PASSWORD is empty and the step exits 0.
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
         run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "PYPI_PASSWORD secret not configured; skipping PyPI publish"
+            exit 0
+          fi
           python -m pip install --upgrade twine
           twine upload --non-interactive --skip-existing dist/*.whl
