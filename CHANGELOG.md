@@ -2,6 +2,18 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [1.13.0] - 2026-08-22
+
+Minor release to keep the iterate-harness distribution in step with the
+released plugin line (iterate-plugin 2.11.0). Aligns the npm wrapper and the
+Python package to the latest reviewed/hardened source state after the full
+project review; no breaking API changes.
+
+### Changed
+
+- Version bumped to 1.13.0 across `src/iterate_harness/__init__.py` and
+  `npm/package.json` (single source of truth retained in `__version__`).
+
 ## [1.12.12] - 2026-08-21
 
 WebUI operation-console controls, sandbox hardening for file tools, and a
