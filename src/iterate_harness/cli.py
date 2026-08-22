@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import typer
 
 from iterate_harness import __version__
+from iterate_harness.iterate.batch import DEFAULT_SCHEDULE_TIMEOUT_SECONDS
 from iterate_harness.iterate.decision_log import DecisionLogEntry
 
 log = logging.getLogger(__name__)
@@ -1339,6 +1340,172 @@ def iterate_report(
         ci_report.threshold_exit_code(gate),
     )
     raise typer.Exit(exit_code)
+
+
+# ---- unattended automation subcommands (schedule / hook / cron) ----
+
+@iterate_app.command("schedule")
+def iterate_schedule(
+    action: str = typer.Argument(
+        ..., help="Action: add|remove|status (add upserts the quick-review cron job)"
+    ),
+    cron: str = typer.Option(
+        "", "--cron", help="5-field cron expression, e.g. '0 9 * * 1-5' (required for add)"
+    ),
+    ref: str = typer.Option("HEAD", "--ref", help="Git ref used as the --changed baseline"),
+    rounds: int = typer.Option(
+        3, "--rounds", min=1, max=20, help="Quick-review round cap for scheduled runs"
+    ),
+    mode: str = typer.Option(
+        "dry-run", "--mode", help="Dry-run|normal (normal applies AI fixes automatically)"
+    ),
+    timeout: int = typer.Option(
+        DEFAULT_SCHEDULE_TIMEOUT_SECONDS,
+        "--timeout",
+        min=60,
+        help="Max seconds a scheduled run may take before it is killed",
+    ),
+    timezone: str = typer.Option(
+        None,
+        "--timezone",
+        help="IANA timezone for evaluating the cron expression (default: UTC)",
+    ),
+) -> None:
+    """Manage the unattended scheduled quick-review cron job. [schedule]"""
+    from iterate_harness.iterate import batch as iterate_batch_mod
+
+    action = action.strip().lower()
+    if action not in ("add", "remove", "status"):
+        raise typer.BadParameter("action must be add|remove|status")
+
+    if action == "add":
+        if not cron.strip():
+            raise typer.BadParameter("--cron is required for 'schedule add'")
+        try:
+            job = iterate_batch_mod.install_schedule(
+                cwd=str(Path.cwd()),
+                schedule=cron,
+                ref=ref,
+                rounds=rounds,
+                mode=mode,
+                timeout=timeout,
+                timezone=timezone or None,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        print(
+            f"Scheduled job {job['name']}: {job['schedule']} -> {job['command']}"
+            f" (cwd={job['cwd']}, timeout={job['timeout']}s)"
+        )
+    elif action == "remove":
+        removed = iterate_batch_mod.remove_schedule()
+        print("Scheduled quick-review job removed." if removed else "No scheduled quick-review job found.")
+    else:  # status
+        status = iterate_batch_mod.schedule_status()
+        if status is None or status.get("job") is None:
+            print("No scheduled quick-review job. Use `ih iterate schedule add --cron '...'`.")
+        else:
+            job = status["job"]
+            last = status.get("lastRun")
+            print(f"Job:        {job['name']}")
+            print(f"Schedule:   {job['schedule']}" + (f" ({job['timezone']})" if job.get("timezone") else ""))
+            print(f"Command:    {job['command']}")
+            print(f"CWD:        {job['cwd']}")
+            print(f"Timeout:    {job['timeout']}s")
+            if last:
+                print(
+                    f"Last run:   {last.get('finished_at', last.get('started_at', '?'))} "
+                    f"(status={last.get('status', '?')})"
+                )
+            else:
+                print("Last run:   never")
+
+
+@iterate_app.command("hook")
+def iterate_hook(
+    action: str = typer.Argument(
+        ..., help="Action: install|uninstall|status (git pre-commit auto-review hook)"
+    ),
+    fail_on: str = typer.Option(
+        "low", "--fail-on", help="Block commit at severity: none|low|medium|high|critical"
+    ),
+) -> None:
+    """Manage the git pre-commit hook that gate-keeps commits on findings. [hook]"""
+    from iterate_harness.iterate import git_hook
+
+    action = action.strip().lower()
+    if action not in ("install", "uninstall", "status"):
+        raise typer.BadParameter("action must be install|uninstall|status")
+
+    try:
+        if action == "install":
+            target = git_hook.install_hook(Path.cwd(), fail_on=fail_on)
+            print(f"Pre-commit hook installed: {target}")
+        elif action == "uninstall":
+            removed = git_hook.uninstall_hook(Path.cwd())
+            print("Pre-commit hook removed." if removed else "No managed hook to remove.")
+        else:  # status
+            status = git_hook.hook_status(Path.cwd())
+            if status.get("error"):
+                print(f"Hook: not installed ({status['error']})")
+            elif status.get("installed"):
+                print(f"Hook: installed at {status['path']} (managed by iterate)")
+                print(f"Skip: {status.get('skippable', '')}")
+            else:
+                print(f"Hook: not installed (path={status.get('path')})")
+    except git_hook.HookError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise typer.Exit(1)
+
+
+@iterate_app.command("cron")
+def iterate_cron(
+    action: str = typer.Argument(
+        ..., help="Action: start|stop|status|history (background cron scheduler daemon)"
+    ),
+    limit: int = typer.Option(
+        20, "--limit", min=1, max=200, help="Number of history entries to show (history action)"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+) -> None:
+    """Manage the background cron scheduler daemon that executes scheduled jobs. [cron]"""
+    from iterate_harness.services import cron_scheduler
+
+    action = action.strip().lower()
+    if action not in ("start", "stop", "status", "history"):
+        raise typer.BadParameter("action must be start|stop|status|history")
+
+    if action == "start":
+        try:
+            pid = cron_scheduler.start_daemon()
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise typer.Exit(1) from exc
+        print(f"Scheduler started (pid={pid}).")
+    elif action == "stop":
+        stopped = cron_scheduler.stop_scheduler()
+        print("Scheduler stopped." if stopped else "Scheduler was not running.")
+    elif action == "status":
+        status = cron_scheduler.scheduler_status()
+        if as_json:
+            print(json.dumps(status, ensure_ascii=False, indent=2))
+        else:
+            print(f"Running:       {status['running']}" + (f" (pid={status['pid']})" if status["pid"] else ""))
+            print(f"Enabled jobs:  {status['enabled_jobs']}/{status['total_jobs']}")
+            print(f"Log file:      {status['log_file']}")
+            print(f"History file:  {status['history_file']}")
+    else:  # history
+        entries = cron_scheduler.load_history(limit=limit)
+        if as_json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        elif not entries:
+            print("No cron job executions recorded yet.")
+        else:
+            for entry in entries:
+                started = entry.get("started_at", "?")
+                status_value = entry.get("status", "?")
+                name = entry.get("name", entry.get("jobName", "?"))
+                print(f"{started}  {status_value:<10} {name}")
 
 
 def _typer_flag(value: object) -> bool:

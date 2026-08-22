@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -17,6 +18,31 @@ from iterate_harness.mcp.types import McpStdioServerConfig
 
 
 app = cli.app
+
+
+@pytest.fixture(autouse=True)
+def _isolate_data_dir(tmp_path, monkeypatch):
+    """Redirect the unattended-automation data dir (cron registry/history) so
+    `schedule` / `cron` tests never touch a developer's real state."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+
+
+@pytest.fixture()
+def git_repo(tmp_path: Path, monkeypatch) -> Path:
+    """A throwaway git repo with git on PATH (sandbox-safe)."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/local/bin")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "HOME": "/tmp",
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+    }
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, env=env, capture_output=True)
+    return repo
 
 
 @pytest.fixture(autouse=True)
@@ -537,5 +563,109 @@ def test_build_dry_run_preview_recommends_matching_skills_and_tools(monkeypatch,
     assert any("you can run this prompt directly" in action.lower() for action in preview["readiness"]["next_actions"])
     assert "review" in recommended_skills
     assert "grep" in recommended_tools
+
+
+# ---- unattended automation commands (schedule/hook/cron) ----
+
+
+class TestIterateScheduleCommand:
+    def test_schedule_add_status_remove_lifecycle(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        add = runner.invoke(
+            app, ["iterate", "schedule", "add", "--cron", "0 9 * * 1-5", "--ref", "origin/main"]
+        )
+        assert add.exit_code == 0, add.output
+        assert "0 9 * * 1-5" in add.output
+        assert "origin/main" in add.output
+
+        status = runner.invoke(app, ["iterate", "schedule", "status"])
+        assert status.exit_code == 0, status.output
+        assert "Schedule:   0 9 * * 1-5" in status.output
+        assert "Last run:   never" in status.output
+
+        remove = runner.invoke(app, ["iterate", "schedule", "remove"])
+        assert remove.exit_code == 0, remove.output
+        assert "removed" in remove.output
+
+        empty = runner.invoke(app, ["iterate", "schedule", "status"])
+        assert empty.exit_code == 0, empty.output
+        assert "No scheduled quick-review job" in empty.output
+
+    def test_schedule_add_requires_cron(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["iterate", "schedule", "add"])
+        assert result.exit_code != 0
+        assert "--cron is required" in result.output
+
+    def test_schedule_invalid_action_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["iterate", "schedule", "pause"])
+        assert result.exit_code != 0
+        assert "action must be add|remove|status" in result.output
+
+    def test_schedule_invalid_cron_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["iterate", "schedule", "add", "--cron", "not-cron"])
+        assert result.exit_code != 0
+        assert "cron" in result.output
+
+
+class TestIterateCronCommand:
+    def test_cron_status_empty(self):
+        result = CliRunner().invoke(app, ["iterate", "cron", "status"])
+        assert result.exit_code == 0, result.output
+        assert "Running:" in result.output
+
+    def test_cron_status_json(self):
+        result = CliRunner().invoke(app, ["iterate", "cron", "status", "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert "running" in payload
+        assert "total_jobs" in payload
+
+    def test_cron_history_empty(self):
+        result = CliRunner().invoke(app, ["iterate", "cron", "history"])
+        assert result.exit_code == 0, result.output
+        assert "No cron job executions recorded yet." in result.output
+
+    def test_cron_invalid_action_rejected(self):
+        result = CliRunner().invoke(app, ["iterate", "cron", "explode"])
+        assert result.exit_code != 0
+        assert "action must be start|stop|status|history" in result.output
+
+
+class TestIterateHookCommand:
+    def test_hook_status_outside_git_repo_degrades(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["iterate", "hook", "status"])
+        assert result.exit_code == 0, result.output
+        assert "not installed" in result.output
+
+    def test_hook_install_and_uninstall_via_cli(self, tmp_path, monkeypatch, git_repo):
+        monkeypatch.chdir(git_repo)
+        runner = CliRunner()
+
+        installed = runner.invoke(app, ["iterate", "hook", "install", "--fail-on", "high"])
+        assert installed.exit_code == 0, installed.output
+        assert "pre-commit" in installed.output
+
+        status = runner.invoke(app, ["iterate", "hook", "status"])
+        assert status.exit_code == 0, status.output
+        assert "installed" in status.output
+
+        removed = runner.invoke(app, ["iterate", "hook", "uninstall"])
+        assert removed.exit_code == 0, removed.output
+        assert "removed" in removed.output
+
+        gone = runner.invoke(app, ["iterate", "hook", "status"])
+        assert gone.exit_code == 0, gone.output
+        assert "not installed" in gone.output
+
+    def test_hook_invalid_action_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["iterate", "hook", "execute"])
+        assert result.exit_code != 0
+        assert "action must be install|uninstall|status" in result.output
 
 
