@@ -2,6 +2,37 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [1.14.0] - 2026-08-22
+
+Minor release adding the previously documented but unwired unattended CLI
+commands and fixing two WebUI presentation issues. The automation entry
+points now have first-class `ih` subcommands instead of existing only as
+library functions.
+
+### Added
+
+- **`ih iterate schedule add|remove|status`** (`cli.py`): register (upsert),
+  remove, or inspect the unattended quick-review cron job. Validates the
+  5-field cron expression, `dry-run|normal` mode, and IANA timezone; exit
+  codes and errors surface through typer.
+- **`ih iterate hook install|uninstall|status`** (`cli.py`): managed
+  pre-commit gate setup/teardown/inspection. Refuses to overwrite foreign
+  hooks and degrades gracefully outside a git repo.
+- **`ih iterate cron start|stop|status|history`** (`cli.py`): background cron
+  scheduler daemon lifecycle and run history, with `--json` output.
+- CLI unit coverage (`tests/test_commands/test_cli.py`) for all three command
+  groups: happy paths, input validation, and non-git degradation.
+
+### Fixed
+
+- **Workspaces page** (`frontend/web`): a failed worktree removal no longer
+  flips the whole page into the misleading "加载失败" empty state — the error
+  now stays in a local, dismissible alert banner while the intact list
+  remains visible.
+- **Dashboard report size** (`frontend/web`): report size now uses the shared
+  human-readable `formatSize` (KB/MB) instead of raw bytes, matching the
+  Reports page.
+
 ## [1.13.1] - 2026-08-22
 
 Patch release fixing report-finding reads across the three legacy
