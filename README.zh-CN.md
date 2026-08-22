@@ -32,9 +32,9 @@
 
 | 组件 | 形态 | 面向场景 |
 | --- | --- | --- |
-| **Core Skill + CLI** | 可移植 AI 技能 `/iterate` + `iterate` CLI | 在 Trae / Claude Code / Cursor / Copilot / Codex 等 25+ 助手的对话式界面里迭代 |
+| [**Core Skill + CLI**](https://github.com/jingzhao-l/iterate-skill) | 可移植 AI 技能 `/iterate` + `iterate` CLI | 在 Trae / Claude Code / Cursor / Copilot / Codex 等 25+ 助手的对话式界面里迭代 |
 | **iterate-harness** | 独立无头引擎（`ih`，npm: `iterate-harness`） | **本仓库** —— 在终端 / CI / Git 钩子里运行同一闭环，无需对话式助手 |
-| **iterate-plugin** | dsh 桌面客户端插件 | 把 iterate 的收敛仪表盘 / review 进度带进 dsh 界面 |
+| [**iterate-plugin**](https://github.com/jingzhao-l/iterate-plugin) | dsh 桌面客户端插件 | 把 iterate 的收敛仪表盘 / review 进度带进 dsh 界面 |
 
 它是一款**独立的专属 agent harness**，围绕 iterate review/fix 闭环打造：
 内核 agent loop、React TUI、工具/技能/插件体系与权限层全部为 iterate 原生，
