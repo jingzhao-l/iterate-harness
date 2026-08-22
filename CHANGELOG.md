@@ -2,6 +2,33 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [1.13.1] - 2026-08-22
+
+Patch release fixing report-finding reads across the three legacy
+decision-log shapes. The decision logger records report findings under
+different keys across versions (full `findings`, trimmed
+`topFindings`/`notableFindings`, or a nested `summary` object), and the
+consumers only looked at `findings` + `topFindings`. As a result the WebUI
+last-run summary and `ih iterate report` could show 0 findings whenever the
+newest report entry used another shape.
+
+### Fixed
+
+- **Unified report-finding extraction** (`iterate/decision_log.py`): new
+  `findings_from_report` helper accepts every historical layout (full list,
+  `topFindings`, `notableFindings`, or nested `summary`), so both the WebUI
+  last-run summary and `ih iterate report` produce consistent, non-empty
+  results.
+- **`latest_report_entry` skips bare report entries** (`iterate/ci_report.py`):
+  a `report` entry carrying only `verdict` (no findings/summary/count) is
+  treated as "no report yet" instead of rendering a misleadingly-empty report
+  with a passing exit code.
+- **Consumer reads routed through the shared helper** (`iterate/last_state.py`,
+  `iterate/ci_report.py`) with an explicit numeric count preferred from the
+  entry or its nested `summary` before falling back to the list length.
+- Added regression tests covering all legacy report shapes in
+  `tests/test_iterate/test_decision_log.py`.
+
 ## [1.13.0] - 2026-08-22
 
 Minor release to keep the iterate-harness distribution in step with the
