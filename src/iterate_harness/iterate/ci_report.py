@@ -85,13 +85,27 @@ class ReportSummary:
 
     @classmethod
     def from_entry(cls, entry: DecisionLogEntry | None) -> ReportSummary:
+        from .decision_log import findings_from_report
+
         data = entry.data if isinstance(entry, DecisionLogEntry) else {}
         if isinstance(data, dict):
-            raw_findings = data.get("findings")
-            findings = [f for f in raw_findings if isinstance(f, dict)] if isinstance(raw_findings, list) else []
+            # Model-driven loops record findings under different keys across
+            # versions (``findings`` / ``topFindings`` / ``notableFindings`` /
+            # nested ``summary``). Delegate to the shared consumer so `ih
+            # iterate report` renders the headline issues instead of silently
+            # degrading to an empty report regardless of the historical shape.
+            findings = findings_from_report(data)
+            # The legacy nested layout carries the count under
+            # ``summary.totalFindings``; the canonical layouts use the top-level
+            # ``totalFindings``. Prefer an explicit count, fall back to the
+            # extracted list length.
+            summary = data.get("summary")
+            count = data.get("totalFindings")
+            if not isinstance(count, int) and isinstance(summary, dict):
+                count = summary.get("totalFindings")
             return cls(
                 verdict=str(data.get("verdict") or "unknown"),
-                total_findings=_int_or(data.get("totalFindings"), len(findings)),
+                total_findings=_int_or(count, len(findings)),
                 findings=findings,
                 mode=str(data.get("mode") or "dry-run"),
             )
@@ -102,11 +116,37 @@ def _int_or(value: Any, fallback: int) -> int:
     return value if isinstance(value, int) else fallback
 
 
+def _entry_carries_report_data(data: dict[str, Any]) -> bool:
+    """Return True when a ``report`` entry carries any actual report payload.
+
+    A producer that dies before assembling findings may only write a bare
+    ``{"verdict": ...}``; such an entry carries no report data and must be
+    skipped so the pipeline degrades to "no report yet" instead of rendering
+    a misleadingly-empty report with exit code 0.
+    """
+    # A nested ``summary`` sub-object is a report payload on its own.
+    if isinstance(data.get("summary"), dict):
+        return True
+    for key in ("findings", "notableFindings", "topFindings", "totalFindings"):
+        value = data.get(key)
+        if isinstance(value, list) or isinstance(value, int):
+            return True
+    return False
+
+
 def latest_report_entry(entries: list[DecisionLogEntry]) -> DecisionLogEntry | None:
-    """Return the last ``report`` entry carrying a findings list, if any."""
+    """Return the last ``report`` entry carrying report data, if any.
+
+    The decision log accepts ``report`` entries whose payload carries a full
+    ``findings`` list or a trimmed ``topFindings``/``notableFindings`` slice or
+    a nested ``summary`` (all shapes are produced across versions of the
+    model-driven canonical loop), so we accept any ``report`` entry holding
+    actual report data. Bare entries with only ``verdict`` are skipped.
+    """
     for entry in reversed(entries):
-        if entry.type == "report" and isinstance(entry.data, dict) and "findings" in entry.data:
-            return entry
+        if entry.type == "report" and isinstance(entry.data, dict):
+            if _entry_carries_report_data(entry.data):
+                return entry
     return None
 
 

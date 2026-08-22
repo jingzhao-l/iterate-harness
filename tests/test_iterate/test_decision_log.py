@@ -140,3 +140,27 @@ class TestMakeEntry:
             "round_start", "review_result", "atomic_fix", "architectural_fix",
             "revert", "validation", "decision", "report",
         }
+
+    def test_findings_from_report_handles_all_legacy_shapes(self):
+        from iterate_harness.iterate.decision_log import findings_from_report
+
+        canonical = {"findings": [{"dimension": "security", "file": "a.py", "summary": "x"}]}
+        assert len(findings_from_report(canonical)) == 1
+
+        trimmed = {"topFindings": [{"dimension": "correctness", "file": "b.py", "summary": "y"}]}
+        assert len(findings_from_report(trimmed)) == 1
+
+        notable = {"notableFindings": [{"dimension": "architecture", "file": "c.py", "summary": "z"}]}
+        assert len(findings_from_report(notable)) == 1
+
+        nested = {"summary": {"findings": [{"dimension": "performance", "file": "d.py", "summary": "w"}]}}
+        assert len(findings_from_report(nested)) == 1
+
+        # Precedence: the fully-qualified ``findings`` wins over a trimmer slice.
+        mixed = {"findings": [{"dimension": "a", "file": "n", "summary": "1"}], "topFindings": [{"dimension": "b", "file": "m", "summary": "2"}]}
+        assert findings_from_report(mixed)[0]["dimension"] == "a"
+
+        # Non-dict payloads and shapes without any carrier yield [].
+        assert findings_from_report(None) == []
+        assert findings_from_report({"verdict": "converged"}) == []
+        assert findings_from_report({"topFindings": ["not-a-dict"]}) == []

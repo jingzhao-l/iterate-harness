@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .types import DecisionLogEntry as DecisionLogEntry
 
@@ -121,3 +122,59 @@ def make_entry(
         type=entry_type,
         data=data or {},
     )
+
+
+#: Keys that may carry finding payloads across the legacy report shapes.
+#: The canonical loop writes the full list as ``findings``, but several older
+#: producer paths recorded the same data under different keys (``topFindings``,
+#: ``notableFindings``) or nested it under a ``summary`` sub-object. Order here
+#: is precedence: the fully-qualified names win over the trimmed slices.
+_FINDING_CARRIER_KEYS = ("findings", "notableFindings", "topFindings")
+
+
+def _normalize_finding(raw: Any) -> dict[str, Any] | None:
+    """Return a finding dict when ``raw`` is a dict with the core fields.
+
+    Finding payloads across legacy shapes share the same per-finding keys
+    (``dimension``/``file``/``severity``/``summary``); anything else is skipped
+    so a mixed list never poisons the report.
+    """
+    if not isinstance(raw, dict):
+        return None
+    if not any(key in raw for key in ("dimension", "file", "summary")):
+        return None
+    return raw
+
+
+def findings_from_report(data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Extract the finding list from a ``report`` entry payload regardless of
+    which legacy shape the producer wrote.
+
+    Supports all three historical layouts so the WebUI last-run summary and
+    ``ih iterate report`` produce identical, non-empty results:
+
+    - canonical: ``{"findings": [{...}]}``
+    - trimmed:   ``{"topFindings": [{...}]}`` or ``{"notableFindings": [...]}``
+    - nested:    ``{"summary": {"findings": [...]}}``
+    """
+    if not isinstance(data, dict):
+        return []
+
+    # Nested ``summary`` sub-object may carry the full list itself.
+    summary = data.get("summary")
+    if isinstance(summary, dict):
+        for key in _FINDING_CARRIER_KEYS:
+            raw = summary.get(key)
+            if isinstance(raw, list):
+                findings = [f for f in raw if isinstance(f, dict)]
+                if findings:
+                    return findings
+
+    for key in _FINDING_CARRIER_KEYS:
+        raw = data.get(key)
+        if isinstance(raw, list):
+            findings = [f for f in raw if isinstance(f, dict)]
+            if findings:
+                return findings
+
+    return []

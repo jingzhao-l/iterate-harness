@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from .checkpoint import load_checkpoint
-from .decision_log import DecisionLogEntry, read_entries
+from .decision_log import DecisionLogEntry, findings_from_report, read_entries
 
 #: How many finding summaries to preview in the resume panel.
 MAX_PREVIEW_FINDINGS = 3
@@ -55,12 +55,23 @@ def _summarize_report(entries: list[DecisionLogEntry], report: DecisionLogEntry)
 
     max_round = max((entry.round for entry in entries), default=0)
     intervention = _last_intervention(entries)
+    # The recovered finding list may be a trimmed/legacy slice (e.g. the
+    # ``notableFindings`` top-N), so prefer an explicit count from the entry
+    # or its nested ``summary`` when present, and only fall back to the length
+    # of the recovered list.
+    data = report.data if isinstance(report.data, dict) else {}
+    summary = data.get("summary")
+    total = data.get("totalFindings")
+    if not isinstance(total, int) and isinstance(summary, dict):
+        total = summary.get("totalFindings")
+    if not isinstance(total, int):
+        total = len(findings)
     return {
         "timestamp": report.timestamp,
-        "mode": str(report.data.get("mode") or "dry-run"),
-        "verdict": str(report.data.get("verdict") or "unknown"),
+        "mode": str(data.get("mode") or "dry-run"),
+        "verdict": str(data.get("verdict") or "unknown"),
         "rounds": max(max_round, report.round),
-        "totalFindings": len(findings),
+        "totalFindings": total,
         "severity": severity_counts,
         "preview": [
             {
@@ -132,10 +143,11 @@ def _last_entry(entries: list[DecisionLogEntry], entry_type: str) -> DecisionLog
 
 
 def _findings_of(entry: DecisionLogEntry) -> list[dict[str, Any]]:
-    raw = entry.data.get("findings") if isinstance(entry.data, dict) else None
-    if not isinstance(raw, list):
-        return []
-    return [f for f in raw if isinstance(f, dict)]
+    # Model-driven loops may record the full ``findings`` list or only a
+    # trimmed/legacy slice (``topFindings`` / ``notableFindings`` / nested
+    # ``summary``) — delegate to the shared consumer so the resume panel and
+    # the WebUI last-run summary stay populated for every historical shape.
+    return findings_from_report(entry.data if isinstance(entry.data, dict) else None)
 
 
 def _last_intervention(entries: list[DecisionLogEntry]) -> dict[str, Any] | None:
