@@ -7,7 +7,7 @@ import { api } from "../api";
 import { useWebUi } from "../store";
 import type { ReportPreview, ReportView } from "../types";
 
-function formatSize(bytes: number): string {
+export function formatSize(bytes: number): string {
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(2)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} kB`;
   return `${bytes} B`;

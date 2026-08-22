@@ -495,6 +495,19 @@ pre.diff .del { color: #f87171; }
   padding: 32px 0;
 }
 
+.alert-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #dc2626;
+  background: rgba(220, 38, 38, 0.08);
+  color: #f87171;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
 .spinner {
   display: inline-block;
   width: 14px;

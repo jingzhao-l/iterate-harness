@@ -9,6 +9,7 @@ import { ConvergenceChart } from "../components/ConvergenceChart";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { StartDialog } from "../components/StartDialog";
 import { useWebUi } from "../store";
+import { formatSize } from "./Reports";
 
 const SEVERITY_LABELS: Record<string, string> = {
   critical: "严重",
@@ -285,7 +286,7 @@ export default function Dashboard(): React.JSX.Element {
                         {report.name}
                       </Link>
                     </td>
-                    <td className="mono">{report.size} B</td>
+                    <td className="mono">{formatSize(report.size)}</td>
                   </tr>
                 ))}
               </tbody>

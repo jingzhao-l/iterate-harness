@@ -16,6 +16,9 @@ export default function Workspaces(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [removeSlug, setRemoveSlug] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  // Removal failures must never flip the whole page into a "加载失败" state —
+  // the list itself loaded fine; keep them as a local, non-blocking banner.
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const projectRoot = useWebUi((state) => state.projectRoot);
 
   const load = useCallback(async () => {
@@ -38,13 +41,14 @@ export default function Workspaces(): React.JSX.Element {
   const handleRemove = async (): Promise<void> => {
     if (!removeSlug) return;
     setRemoving(true);
+    setRemoveError(null);
     try {
       await api.removeWorkspace(removeSlug, projectRoot);
       // Reload the list after removal.
       setRemoveSlug(null);
       void load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setRemoveError(err instanceof Error ? err.message : String(err));
       setRemoveSlug(null);
     } finally {
       setRemoving(false);
@@ -88,6 +92,18 @@ export default function Workspaces(): React.JSX.Element {
       ) : (
         <section className="panel">
           <h2>工作区列表（共 {workspaces.length} 个）</h2>
+          {removeError && (
+            <div className="alert-error" role="alert" style={{ marginBottom: 12 }}>
+              删除失败：{removeError}
+              <button
+                className="btn"
+                style={{ marginLeft: 8, padding: "2px 8px", fontSize: 12 }}
+                onClick={() => setRemoveError(null)}
+              >
+                知道了
+              </button>
+            </div>
+          )}
           <table className="data">
             <thead>
               <tr>
