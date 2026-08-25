@@ -2,6 +2,89 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [1.15.0] - 2026-08-26
+
+Feature release closing the seven functional gaps found in the design doc
+(DESIGN-iterate-harness.md §11.2.2 / §18.4 / §18.5) and applying the fixes
+for the 93 code-review findings across the web backend, iterate core and UI
+layers. The iterate loop now knows when it is stalled or running out of
+budget, risk-area writes are gated even in full-auto, and fix scope is
+measured instead of assumed.
+
+### Added
+
+- **Stall-aware auto-pause** (`iterate/loop_policy.py`, P0, §18.5): new
+  `iterate.stall_pause_rounds` knob (default `2`). After that many
+  consecutive rounds with zero new findings the loop pauses and asks the
+  user how to continue (`resume` / `skip` / `narrow` / `stop`) instead of
+  silently declaring convergence. Setting it to `0` preserves the previous
+  hard-stop-on-first-empty-round behaviour.
+- **Budget-headroom pause** (`iterate/loop_policy.py`, P1, §18.5): new
+  `iterate.budget_pause_min_rounds` knob (default `1`). When the remaining
+  token/USD budget cannot cover that many rounds at the recent burn rate,
+  the loop pauses and asks for a top-up or stop before the hard budget stop
+  fires mid-round.
+- **Risk-area approval gate** (`permissions/checker.py`, P1, §11.2.2): paths
+  listed in `iterate.risk_area_paths` / `personalization.risk_areas`
+  (accepting either a plain string or a `{path: ...}` object) now require
+  explicit confirmation for every mutating tool call — even in `full_auto`
+  mode. Read-only calls on those paths stay ungated. Wired into
+  `build_permission_checker`.
+- **Measured `is_atomic` check** (`iterate/fix_scope.py`, P2, §11.2.2): after
+  each normal-mode round the actual change size is measured via
+  `git diff --numstat`. When it exceeds `atomic.max_lines`, the finding is
+  logged as a degraded-to-architectural decision entry and a steering hint is
+  injected instead of relying on the sub-agent's self-report.
+- **Deferred-fix state inheritance** (`iterate/checkpoint.py`,
+  `iterate/decision_log.py`, `iterate/last_state.py`, P2, §11.2.2): the
+  checkpoint now persists the deferred architectural-fix list
+  (`extract_deferred_architectural`), the resume summary surfaces it, and
+  `resume_kickoff` re-injects it across sessions so deliberately-untouched
+  architectural work is not lost.
+- **WebUI quick phrases** (`frontend/web`, P2, §18.4): one-click nudge chips
+  in the input bar send steering phrases through the nudge channel, plus a
+  stop chip that routes through the destructive-action confirmation dialog.
+- **Frontend unit tests** (`frontend/web`, P2, §17.9): vitest 3.2.4 with 13
+  tests covering `triageKey` generation, run-state/progress event mapping,
+  chat-message deduplication and toast lifecycle.
+
+### Fixed
+
+- **Concurrency & state defects** (`web/run_manager.py`, `web/token.py`,
+  `web/events.py`): double `resume`/`stop` no longer races on a finished
+  asyncio future (`InvalidStateError`), the run-manager `_stopping` flag is
+  no longer shared across concurrent tasks, start payloads are pre-validated
+  before launch, token issuance is serialized with a lock, and the periodic
+  status push uses a time-based snapshot check so the SSE stream cannot
+  starve it.
+- **Findings triage** (`web/findings_triage.py`): record/clear are now
+  serialized with an exclusive file lock and write failures surface as
+  errors instead of being silently swallowed.
+- **Data integrity** (`iterate/checkpoint.py`, `web/routes/runs.py`,
+  `web/routes/checkpoints.py`, `iterate/trend_store.py`): malformed round
+  numbers degrade defensively, cross-round severity changes are preserved by
+  filtering before dedup, and trend/checkpoint writes use atomic temp-file
+  writes to avoid torn files on crash.
+- **Review & last-run accuracy** (`iterate/review.py`, `iterate/last_state.py`,
+  `iterate/ci_report.py`): round-index convergence is corrected, preview
+  truncation no longer distorts finding counts, and workflow-command
+  properties are comma-separated as GitHub expects.
+- **Security hardening** (`web/security.py`): a symlink-loop in path checks
+  now raises `ValueError` instead of leaking `RuntimeError`.
+- **Config parsing** (`config/`): nested sections that are unexpectedly
+  non-dict parse defensively; bundled config schema is kept in sync and the
+  `go` command whitelist is widened.
+- **CLI/installer ergonomics**: global CLI flags may now follow the
+  subcommand, the full reviewer config is preserved, the npm installer
+  rejects flag-like `--ai/--target/--token` values, and the interactive
+  arrow-menu no longer stacks rows in raw terminal mode.
+- **Web/terminal UX** (`frontend/web`, `frontend/terminal`): the nudge-clear
+  button no longer dead-ends, the live transcript tab has a proper empty
+  state, the triage key captures the right location, and the observatory
+  clipboard-write fallback reveals the raw command text on failure.
+- **Release tooling**: `workflow_dispatch` can select an explicit target tag,
+  and the SkillHub badge link in the README points at the correct repo.
+
 ## [1.14.0] - 2026-08-22
 
 Minor release adding the previously documented but unwired unattended CLI
