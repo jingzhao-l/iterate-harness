@@ -571,7 +571,10 @@ async def handle_line(
                     bundle.engine.set_model(original_model)
             bundle.session_backend.save_snapshot(
                 cwd=bundle.cwd,
-                model=bundle.engine.model,
+                # Record the model this turn actually ran under - the engine
+                # model may already be restored to the pre-command value by
+                # the finally block above.
+                model=result.submit_model or bundle.engine.model,
                 system_prompt=system_prompt,
                 messages=bundle.engine.messages,
                 usage=bundle.engine.total_usage,

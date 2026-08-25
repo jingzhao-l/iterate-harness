@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from iterate_harness.utils.file_lock import exclusive_file_lock
+
 #: Python 3.10 compatibility — ``datetime.UTC`` is only available in 3.11+.
 UTC = timezone.utc
 
@@ -120,11 +122,18 @@ def record_decision(
         "note": (note or "").strip() or None,
         "timestamp": datetime.now(UTC).isoformat(),
     }
+    # Hold the journal lock around the append so a concurrent clear's
+    # read-modify-rewrite can never drop this record. A failed append is
+    # surfaced to the caller (HTTP 500) instead of returning a phantom "ok"
+    # record that was never persisted.
+    lock_path = journal_path(project_root).with_name(f"{TRIAGE_FILE}.lock")
     try:
-        with journal_path(project_root).open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        with exclusive_file_lock(lock_path):
+            with journal_path(project_root).open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
     except OSError as exc:
-        log.warning("web findings-triage append failed: %s", exc)
+        log.error("web findings-triage append failed: %s", exc)
+        raise
     return record
 
 
@@ -141,28 +150,34 @@ def clear_decision(
     decision was removed.
     """
     key = _key(file=file, line=line, dimension=dimension)
-    decisions = load_decisions(project_root)
-    if key not in decisions:
-        return False
-    decisions.pop(key)
-    _rewrite(project_root, decisions)
+    lock_path = journal_path(project_root).with_name(f"{TRIAGE_FILE}.lock")
+    with exclusive_file_lock(lock_path):
+        decisions = load_decisions(project_root)
+        if key not in decisions:
+            return False
+        decisions.pop(key)
+        _rewrite(project_root, decisions)
     return True
 
 
 def clear_all(project_root: str | Path) -> int:
     """Clear every triage decision; returns the number removed."""
-    decisions = load_decisions(project_root)
-    count = len(decisions)
-    if count:
-        _rewrite(project_root, {})
+    lock_path = journal_path(project_root).with_name(f"{TRIAGE_FILE}.lock")
+    with exclusive_file_lock(lock_path):
+        decisions = load_decisions(project_root)
+        count = len(decisions)
+        if count:
+            _rewrite(project_root, {})
     return count
 
 
 def _rewrite(project_root: str | Path, decisions: dict[str, dict[str, Any]]) -> None:
-    """Best-effort atomic rewrite of the journal from the given key->record map.
+    """Atomic rewrite of the journal from the given key->record map.
 
     Writes to a temp file first, then atomically replaces the journal, so an
     interrupted compaction never leaves a truncated/corrupt journal behind.
+    A failed rewrite is surfaced to the caller (HTTP 500), never silently
+    swallowed.
     """
     path = journal_path(project_root)
     temp_path = path.with_name(f"{path.name}.tmp")
@@ -171,8 +186,9 @@ def _rewrite(project_root: str | Path, decisions: dict[str, dict[str, Any]]) -> 
             for record in decisions.values():
                 handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
         temp_path.replace(path)
-    except OSError as exc:
-        log.warning("web findings-triage rewrite failed: %s", exc)
+    except OSError:
+        log.error("web findings-triage rewrite failed")
+        raise
     finally:
         # Never leave a stale temp file behind after a failed compaction.
         try:

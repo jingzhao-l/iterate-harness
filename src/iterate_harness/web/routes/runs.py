@@ -147,6 +147,15 @@ def get_findings(
         for finding in raw:
             if not isinstance(finding, dict):
                 continue
+            # Apply severity/dimension filters BEFORE deduplication: the same
+            # (file, line, dimension) key re-reported in a later round with a
+            # different severity must stay visible under a filtered view.
+            # (Previously the round-1 occurrence was deduped first, hiding the
+            # round-2 re-report that actually matched the filter.)
+            if severity and str(finding.get("severity") or "").lower() != severity.lower():
+                continue
+            if dimension and str(finding.get("dimension") or "") != dimension:
+                continue
             # Deduplicate by (file, line, dimension) across entries so the
             # same finding reported in later rounds appears once.
             dedup_key = (
@@ -157,10 +166,6 @@ def get_findings(
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
-            if severity and str(finding.get("severity") or "").lower() != severity.lower():
-                continue
-            if dimension and str(finding.get("dimension") or "") != dimension:
-                continue
             findings.append(dict(finding))
 
     total = len(findings)
@@ -218,14 +223,22 @@ def record_findings_triage(
             status_code=422,
             detail="triage requires confirm=true (secondary confirmation)",
         )
-    record = findings_triage.record_decision(
-        root,
-        file=body.file,
-        line=body.line,
-        dimension=body.dimension,
-        decision=body.decision,
-        note=body.note,
-    )
+    try:
+        record = findings_triage.record_decision(
+            root,
+            file=body.file,
+            line=body.line,
+            dimension=body.dimension,
+            decision=body.decision,
+            note=body.note,
+        )
+    except OSError as exc:
+        # A failed journal write must surface as a real error, never a
+        # phantom success (the caller sees a 500 instead of a false "ok").
+        raise HTTPException(
+            status_code=500,
+            detail=f"triage journal write failed: {exc}",
+        ) from exc
     AuditLog(root).record(
         "findings.triage",
         body.decision,
@@ -263,12 +276,18 @@ def dismiss_findings_triage(
             status_code=422,
             detail="dismiss triage requires confirm=true (secondary confirmation)",
         )
-    removed = findings_triage.clear_decision(
-        root,
-        file=body.file,
-        line=body.line,
-        dimension=body.dimension,
-    )
+    try:
+        removed = findings_triage.clear_decision(
+            root,
+            file=body.file,
+            line=body.line,
+            dimension=body.dimension,
+        )
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"triage journal write failed: {exc}",
+        ) from exc
     AuditLog(root).record(
         "findings.triage.dismiss",
         body.file,
@@ -307,7 +326,13 @@ def clear_findings_triage(
             status_code=422,
             detail="clear triage requires confirm=true (secondary confirmation)",
         )
-    removed = findings_triage.clear_all(root)
+    try:
+        removed = findings_triage.clear_all(root)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"triage journal write failed: {exc}",
+        ) from exc
     AuditLog(root).record("findings.triage.clear", "all", summary={"removed": removed})
     return OperationResult(
         status="ok",

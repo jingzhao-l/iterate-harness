@@ -78,16 +78,19 @@ def restore_checkpoint(
     checkpoint = load_checkpoint(root)
     if checkpoint is None:
         raise HTTPException(status_code=404, detail="No checkpoint to restore")
+    # Malformed persisted "round" (string, dict, list, non-int float) must
+    # degrade to a safe default instead of raising 500.
+    round_value = as_int(checkpoint.get("round"))
     AuditLog(root).record(
         "checkpoint.restore",
         "checkpoint.json",
-        summary={"round": int(checkpoint.get("round") or 0)},
+        summary={"round": round_value},
     )
     return OperationResult(
         status="ok",
-        message=f"Checkpoint armed for resume (round {int(checkpoint.get('round') or 0)})",
+        message=f"Checkpoint armed for resume (round {round_value})",
         target="checkpoint.json",
-        detail={"round": int(checkpoint.get("round") or 0)},
+        detail={"round": round_value},
     )
 
 

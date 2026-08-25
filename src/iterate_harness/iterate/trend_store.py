@@ -20,6 +20,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -160,9 +162,19 @@ def load_library(project_root: str | Path) -> dict[str, dict[str, Any]]:
 def _save_library(project_root: str | Path, records: dict[str, dict[str, Any]]) -> Path:
     target = library_path(project_root)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(target)
+    # Process-unique temp name (mkstemp) avoids concurrent writers clobbering
+    # each other's fixed ".json.tmp"; os.replace keeps the swap atomic.
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=target.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(records, handle, ensure_ascii=False, indent=2)
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return target
 
 

@@ -118,9 +118,10 @@ class TestRenderGithub:
         ]
         text = ci_report.render_github(ci_report.ReportSummary.from_entry(report_entry(findings=findings)))
         lines = text.splitlines()[1:]
-        assert lines[0].startswith("::error file=a.py line=1::")
-        assert lines[1].startswith("::error file=b.py line=2::")
-        assert lines[2].startswith("::warning file=c.py line=3::")
+        # Workflow command properties are comma-separated per the GitHub spec.
+        assert lines[0].startswith("::error file=a.py,line=1::")
+        assert lines[1].startswith("::error file=b.py,line=2::")
+        assert lines[2].startswith("::warning file=c.py,line=3::")
         assert lines[3].startswith("::notice file=d.py::")  # no line → no line property
         assert lines[4].startswith("::notice::[bizarre]")  # unknown severity + no file
 
@@ -289,7 +290,7 @@ class TestIterateReportCli:
         result = CliRunner().invoke(cli.app, ["iterate", "report", "--github"])
         assert result.exit_code == 1
         assert "::notice::iterate report" in result.output
-        assert "::error file=a.py line=4::" in result.output
+        assert "::error file=a.py,line=4::" in result.output
 
     def test_fail_on_none_overrides_gate(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

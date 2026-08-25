@@ -188,7 +188,10 @@ def render_github(summary: ReportSummary) -> str:
         line_value = finding.get("line")
         if isinstance(line_value, int) and line_value > 0:
             properties.append(f"line={line_value}")
-        suffix = f" {' '.join(properties)}" if properties else ""
+        # GitHub workflow command properties must be comma-separated
+        # (file=a.py,line=42); a space-separated suffix is parsed as one
+        # malformed property and breaks file/line annotation.
+        suffix = f" {','.join(properties)}" if properties else ""
         message = _escape_workflow_data(
             f"[{finding.get('severity') or 'notice'!s}] "
             f"{finding.get('dimension') or 'general'!s}: {finding.get('summary') or ''!s}".strip()

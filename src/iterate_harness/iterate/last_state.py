@@ -95,29 +95,28 @@ def _summarize_checkpoint(
     if not isinstance(per_dimension, dict):
         per_dimension = {}
     severity_counts = {key: 0 for key in _SEVERITY_KEYS}
-    # Preview the most recent review_result findings when available so the
-    # resume panel still shows concrete findings for an interrupted run.
-    preview: list[dict[str, Any]] = []
+    # Collect ALL findings first so severity counts cover the full history;
+    # the preview is truncated independently (most recent N) afterwards.
+    # The old loop stopped counting once the preview limit was reached, which
+    # distorted severity distributions (e.g. 3 low then 2 critical → critical=0).
+    all_findings: list[dict[str, Any]] = []
     for entry in reversed(entries):
         if entry.type != "review_result":
             continue
-        findings = _findings_of(entry)
-        for finding in findings:
+        for finding in _findings_of(entry):
             severity = str(finding.get("severity") or "?")
             if severity in severity_counts:
                 severity_counts[severity] += 1
-            preview.append(
-                {
-                    "severity": severity,
-                    "file": str(finding.get("file") or "?"),
-                    "dimension": str(finding.get("dimension") or "?"),
-                    "summary": str(finding.get("summary") or "")[:120],
-                }
-            )
-            if len(preview) >= MAX_PREVIEW_FINDINGS:
-                break
-        if len(preview) >= MAX_PREVIEW_FINDINGS:
-            break
+            all_findings.append(finding)
+    preview = [
+        {
+            "severity": str(f.get("severity") or "?"),
+            "file": str(f.get("file") or "?"),
+            "dimension": str(f.get("dimension") or "?"),
+            "summary": str(f.get("summary") or "")[:120],
+        }
+        for f in all_findings[:MAX_PREVIEW_FINDINGS]
+    ]
     return {
         "timestamp": str(checkpoint.get("timestamp") or ""),
         "mode": str(checkpoint.get("mode") or "dry-run"),

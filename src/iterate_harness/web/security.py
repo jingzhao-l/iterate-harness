@@ -111,7 +111,9 @@ def resolve_within(base: str | Path, candidate: str, *parts: str) -> Path:
     joined = base_path.joinpath(candidate_path, *parts)
     try:
         resolved = joined.resolve(strict=False)
-    except OSError as exc:  # pragma: no cover - resolve() rarely raises here
+    except (OSError, RuntimeError) as exc:
+        # RuntimeError: symlink loop detected during resolve() — treat the
+        # candidate as unresolvable (never escape into a ValueError->500).
         raise ValueError(f"cannot resolve path {candidate!r}: {exc}") from exc
 
     # The resolved path must stay under the base directory.

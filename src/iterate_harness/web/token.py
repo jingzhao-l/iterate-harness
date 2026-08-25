@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import threading
 from pathlib import Path
 
 from iterate_harness.config.paths import get_config_dir
@@ -24,6 +25,11 @@ log = logging.getLogger(__name__)
 _TOKEN_FILE_NAME = "webui-token"
 #: Entropy of the generated token (urlsafe base64 of 32 random bytes).
 _TOKEN_LENGTH_BYTES = 32
+
+#: Serializes first-time issuance across threads/processes so concurrent
+#: callers cannot each mint (and return) a different token while the file
+#: only keeps one of them.
+_issuance_lock = threading.Lock()
 
 
 def webui_token_path() -> Path:
@@ -38,21 +44,25 @@ def get_or_create_webui_token() -> str:
     browser session that cached it keeps working across server runs. The file
     is written atomically with mode 600.
     """
-    path = webui_token_path()
-    try:
-        existing = path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        existing = ""
-    except OSError as exc:
-        log.warning("Could not read webui token file (%s): %s", path, exc)
-        existing = ""
-    if existing:
-        return existing
+    # The file is written atomically with mode 600. Serialize issuance so
+    # concurrent first calls return the same persisted token; a write that
+    # cannot persist raises so the caller never hands out an unbacked token.
+    with _issuance_lock:
+        path = webui_token_path()
+        try:
+            existing = path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            existing = ""
+        except OSError as exc:
+            log.warning("Could not read webui token file (%s): %s", path, exc)
+            existing = ""
+        if existing:
+            return existing
 
-    token = secrets.token_urlsafe(_TOKEN_LENGTH_BYTES)
-    atomic_write_text(path, token + "\n", mode=0o600)
-    log.debug("Created new WebUI access token at %s", path)
-    return token
+        token = secrets.token_urlsafe(_TOKEN_LENGTH_BYTES)
+        atomic_write_text(path, token + "\n", mode=0o600)
+        log.debug("Created new WebUI access token at %s", path)
+        return token
 
 
 __all__ = ["get_or_create_webui_token", "webui_token_path"]

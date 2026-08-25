@@ -120,10 +120,11 @@ async def _event_generator(project_root: Path, stream_all: bool) -> Any:
     try:
         while True:
             # 1) Drain live hub events (chat / run-state / progress) promptly.
+            #    No ``continue`` here: the snapshot below is time-gated so a
+            #    steady event stream can never starve the status push.
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=_HUB_WAKEUP)
                 yield f"event: {event.type}\ndata: {json.dumps(event.data, ensure_ascii=False)}\n\n"
-                continue
             except asyncio.TimeoutError:
                 pass
 

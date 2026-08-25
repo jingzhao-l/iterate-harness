@@ -240,7 +240,16 @@ def build_review_report(
     sorted_findings = sort_findings(result.findings)
 
     total_rounds = len(filtered_rounds)
-    last_count = result.findings_by_round[total_rounds - 1] if total_rounds > 0 else 0
+    # findings_by_round is sized/indexed by the ACTUAL round number (index
+    # round - 1), not by list position: resume runs may skip round numbers and
+    # duplicate round numbers can inflate the list length. Index by the last
+    # round's real number so convergence reflects the final round's count.
+    last_round_index = filtered_rounds[-1].round - 1 if total_rounds > 0 else -1
+    last_count = (
+        result.findings_by_round[last_round_index]
+        if total_rounds > 0 and 0 <= last_round_index < len(result.findings_by_round)
+        else 0
+    )
     if total_rounds == 0:
         stopped_reason = "no_rounds"
     elif last_count == 0:
@@ -747,8 +756,16 @@ def report_from_dict(data: object) -> ReviewReport:
                         findings.append(parsed)
             else:
                 errors.append(f"rounds[{r_index}].findings must be an array")
-            round_number = r_raw.get("round", r_index + 1)
-            rounds.append(ReviewRound(round=int(round_number), findings=findings))
+            round_raw = r_raw.get("round", r_index + 1)
+            try:
+                round_number = int(round_raw)
+            except (TypeError, ValueError):
+                # Malformed round (null / dict / non-numeric string) must
+                # surface via the ValueError tool contract, not a raw
+                # TypeError, and must not abort parsing of later rounds.
+                errors.append(f"rounds[{r_index}].round must be an integer")
+                round_number = r_index + 1
+            rounds.append(ReviewRound(round=round_number, findings=findings))
 
     if errors:
         raise ValueError("invalid report: " + "; ".join(errors))

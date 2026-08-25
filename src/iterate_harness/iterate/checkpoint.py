@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -74,20 +75,21 @@ def save_checkpoint(
         "cost_usd": cost_usd,
         "mode": mode,
     }
-    temp = target.with_suffix(".json.tmp")
+    # Process-unique temp name (mkstemp) avoids concurrent writers using the
+    # same ".json.tmp" and tearing each other's partial write; os.replace
+    # keeps the swap atomic.
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=target.name, suffix=".tmp")
     try:
-        temp.write_text(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temp, target)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+        os.replace(tmp_name, target)
     except OSError as exc:
         log.warning("iterate checkpoint write failed: %s", exc)
         try:
-            if temp.exists():
-                temp.unlink()
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
         except OSError as exc2:
-            log.debug("Could not remove failed checkpoint temp file %s: %s", temp, exc2)
+            log.debug("Could not remove failed checkpoint temp file %s: %s", tmp_name, exc2)
         return None
     return target
 

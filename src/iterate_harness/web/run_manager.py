@@ -119,6 +119,9 @@ class RunManager:
         self._request_registry: dict[str, asyncio.Future[Any]] = {}
         self._assistant_buffer: str = ""
         self._stopping: bool = False
+        #: run_id that placed the current stop request, so an old run's
+        #: finally block cannot clear a newer run's stop flag.
+        self._stopping_by: str = ""
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -139,6 +142,16 @@ class RunManager:
             self.run_id = run_id
             self.mode = mode
             self.state = "starting"
+        # Pre-validate the kickoff synchronously so an invalid ref / clean
+        # worktree fails fast as a 4xx instead of being swallowed by the
+        # background task (which used to return 200 with a doomed run).
+        try:
+            self._build_kickoff(project_root, mode, changed, ref)
+        except RunManagerError:
+            async with self._lock:
+                self._reset(project_root)
+                self.state = "idle"
+            raise
         await self._publish_chat("system", f"收到启动指令：iterate {mode}", kind="status")
         self._task = asyncio.create_task(
             self._run_loop(project_root, mode, changed, ref, run_id)
@@ -336,7 +349,12 @@ class RunManager:
                     self._bundle = None
                 if self._task is task_handle:
                     self._task = None
-                self._stopping = False
+                # Only clear the stop request that this run placed itself, so
+                # a new run's stop request is never clobbered by an old run's
+                # cleanup racing in behind it.
+                if self._stopping_by == run_id:
+                    self._stopping = False
+                    self._stopping_by = ""
 
     async def _render_event(self, event: Any) -> None:
         """Translate engine stream events into chat/progress hub events."""
@@ -468,6 +486,7 @@ class RunManager:
         async with self._lock:
             if self._stopping:
                 self._stopping = False
+                self._stopping_by = ""
                 return "stop"
             request_id = uuid4().hex
             future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
@@ -521,22 +540,33 @@ class RunManager:
         async with self._lock:
             if self.waiting_for != "user_select":
                 raise RunManagerError("当前没有可恢复的暂停菜单（请直接回答问题或选择）")
-            pending = list(self._request_registry.values())
+            # Skip futures already resolved (e.g. a previous resume/stop beat
+            # us here); resolving a done future raises InvalidStateError → 500.
+            pending = [f for f in self._request_registry.values() if not f.done()]
         if not pending:
             raise RunManagerError("暂停请求已失效")
-        pending[0].set_result("resume")
+        try:
+            pending[0].set_result("resume")
+        except asyncio.InvalidStateError:  # pragma: no cover - raced resolve
+            raise RunManagerError("暂停请求已失效") from None
         await self._publish_chat("user", "resume", kind="decision")
         return {"ok": True, "message": "已继续运行"}
 
     async def _stop(self) -> dict[str, Any]:
         async with self._lock:
-            pending = list(self._request_registry.values())
+            # Skip already-resolved futures so a repeated stop click returns
+            # ok instead of raising InvalidStateError → 500.
+            pending = [f for f in self._request_registry.values() if not f.done()]
             waiting = self.waiting_for
             self._stopping = True
+            self._stopping_by = self.run_id
             self.last_message = "正在停止…"
         if pending:
             if waiting == "user_select":
-                pending[0].set_result("stop")
+                try:
+                    pending[0].set_result("stop")
+                except asyncio.InvalidStateError:  # pragma: no cover - raced resolve
+                    pass
                 return {"ok": True, "message": "正在停止…"}
             # A question/permission is pending with no clean answer channel:
             # abort the run task (engine state is checkpointed for resume).
@@ -554,6 +584,17 @@ class RunManager:
         if task is not None and not task.done():
             task.cancel()
         return {"ok": True, "message": "正在停止…"}
+
+    async def _clear_stopping_if_owned(self, run_id: str) -> None:
+        """Clear the pending stop request only if ``run_id`` placed it.
+
+        Called from a run's cleanup path so a stale task finishing after a
+        newer run started can never cancel the newer run's stop request.
+        """
+        async with self._lock:
+            if self._stopping_by == run_id:
+                self._stopping = False
+                self._stopping_by = ""
 
     async def _nudge(self, content: str) -> None:
         policy = self._policy()
@@ -738,6 +779,7 @@ class RunManager:
         self._request_registry = {}
         self._assistant_buffer = ""
         self._stopping = False
+        self._stopping_by = ""
 
 
 #: Module-level singleton shared by the route layer (design §18.3).
