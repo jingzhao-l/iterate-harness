@@ -34,6 +34,12 @@ ITERATE_STATE_KEY = "iterate_state"
 #: Width (seconds) of the rolling window for ``max_turns_per_minute``.
 RATE_LIMIT_WINDOW_SECONDS = 60
 
+#: Why the loop auto-paused (as opposed to a manual Esc pause). The engine
+#: shows a tailored intervention menu title per reason.
+PAUSE_REASON_ESC = "esc"
+PAUSE_REASON_STALL = "stall"
+PAUSE_REASON_BUDGET = "budget"
+
 
 @dataclass
 class LoopDecision:
@@ -47,6 +53,10 @@ class LoopDecision:
     # ``inject_message`` keeps the original next-round instruction so the
     # "resume" answer can proceed unchanged.
     paused: bool = False
+    # Why the loop auto-paused (stall detection / budget headroom); None when
+    # the pause came from a manual Esc request. The engine picks the menu
+    # title from this (design §18.5).
+    pause_reason: str | None = None
 
 
 @dataclass
@@ -175,6 +185,16 @@ class IterateLoopPolicy:
     # backend interrupt path while an iterate loop is running; consumed at
     # the next round boundary.
     pause_requested: bool = False
+    # Stall-awareness (design §18.5): pause after this many consecutive rounds
+    # with zero new findings (and no explicit converged flag) and ask the user
+    # how to continue — resume / skip / narrow / stop. ``0`` disables the
+    # feature, preserving the historical hard-stop on the first zero round.
+    stall_pause_rounds: int = 2
+    # Budget-headroom pause (design §18.5): before starting another round,
+    # pause when the remaining token/USD budget can't cover at least this many
+    # rounds at the recent burn rate, asking whether to top up / stop.
+    # ``0`` disables the feature.
+    budget_pause_min_rounds: int = 1
 
     cost_meter: CostMeter = field(default=None)  # type: ignore[assignment]
     _rounds_seen: int = 0
@@ -186,6 +206,11 @@ class IterateLoopPolicy:
     # drained into the next-round instruction at the next round boundary so
     # a user's urge to keep going is honored even mid-round.
     _pending_nudges: list[str] = field(default_factory=list)
+    # Stall detection: consecutive rounds with zero new findings (design §18.5).
+    _consecutive_zero_rounds: int = 0
+    # Recent single-round consumption, used for budget-headroom estimation.
+    _last_round_tokens: int = 0
+    _last_round_cost_usd: float = 0.0
 
     def __post_init__(self) -> None:
         if self.cost_meter is None:
@@ -218,7 +243,13 @@ class IterateLoopPolicy:
         model: str,
     ) -> LoopDecision:
         """Evaluate one completed turn; return the engine decision."""
+        tokens_before = self.cost_meter.total_tokens
+        usd_before = self.cost_meter.total_cost_usd
         self.cost_meter.accumulate(usage, model)
+        # Track the most recent single-round consumption so the budget-headroom
+        # pause can compare the remaining budget against the actual burn rate.
+        self._last_round_tokens = max(0, self.cost_meter.total_tokens - tokens_before)
+        self._last_round_cost_usd = max(0.0, self.cost_meter.total_cost_usd - usd_before)
         budget_stop = self._budget_stop_reason()
         if budget_stop is not None:
             snapshot = read_state(tool_metadata) or AggregateSnapshot(mode=self.mode)
@@ -320,11 +351,8 @@ class IterateLoopPolicy:
 
     def _decide(self, snapshot: AggregateSnapshot, progress: object) -> LoopDecision:
         last_new = snapshot.findings_by_round[-1] if snapshot.findings_by_round else 0
-        if snapshot.converged or last_new == 0:
-            reason = "converged (0 new findings in the last round)"
-            if snapshot.rounds_seen >= self.max_review_rounds:
-                reason = f"round cap reached ({self.max_review_rounds}) with 0 new findings"
-            return self._stop_decision(snapshot, reason, progress)
+        if snapshot.converged:
+            return self._stop_decision(snapshot, "converged", progress)
         if snapshot.rounds_seen >= self.max_review_rounds:
             return self._stop_decision(
                 snapshot, f"round cap reached ({self.max_review_rounds})", progress
@@ -337,6 +365,55 @@ class IterateLoopPolicy:
                 + ")",
                 progress,
             )
+        # Budget-headroom pause (design §18.5): the remaining token/USD budget
+        # can no longer cover a full round at the recent burn rate. Pause and
+        # ask the user whether to top up / stop before continuing, instead of
+        # letting the next round hard-stop against the budget.
+        budget_reason = self._budget_pause_reason()
+        if budget_reason is not None:
+            return LoopDecision(
+                inject_message=prompts.budget_headroom_pause_notice(budget_reason),
+                progress=progress,
+                paused=True,
+                pause_reason=PAUSE_REASON_BUDGET,
+            )
+        # Stall-awareness (design §18.5): consecutive rounds with zero new
+        # findings and no explicit converged flag suggest the loop is going in
+        # circles. After ``stall_pause_rounds`` such rounds, pause and ask the
+        # user (resume / skip / narrow / stop) instead of declaring "converged"
+        # on their behalf.
+        if last_new == 0:
+            if self.stall_pause_rounds <= 0:
+                # Feature disabled: preserve the historical hard-stop behavior.
+                return self._stop_decision(
+                    snapshot, "converged (0 new findings in the last round)", progress
+                )
+            self._consecutive_zero_rounds += 1
+            if self._consecutive_zero_rounds >= self.stall_pause_rounds:
+                self._consecutive_zero_rounds = 0
+                return LoopDecision(
+                    inject_message=self._build_next_round_message(snapshot),
+                    progress=progress,
+                    paused=True,
+                    pause_reason=PAUSE_REASON_STALL,
+                )
+        else:
+            self._consecutive_zero_rounds = 0
+        decision = LoopDecision(
+            inject_message=self._build_next_round_message(snapshot),
+            progress=progress,
+        )
+        if self.pause_requested:
+            # Consume the pause at the round boundary: hand control to the
+            # engine's intervention menu; the original next-round instruction
+            # stays on the decision for the "resume" answer.
+            self.pause_requested = False
+            decision.paused = True
+        return decision
+
+    def _build_next_round_message(self, snapshot: AggregateSnapshot) -> str:
+        """Canonical next-round instruction, prefixed with any queued nudges."""
+        last_new = snapshot.findings_by_round[-1] if snapshot.findings_by_round else 0
         inject_message = prompts.next_round_instruction(
             snapshot.rounds_seen,
             last_new,
@@ -351,17 +428,40 @@ class IterateLoopPolicy:
             inject_message = (
                 f"[用户督促]\n{nudge_block}\n\n---\n\n{inject_message}"
             )
-        decision = LoopDecision(
-            inject_message=inject_message,
-            progress=progress,
-        )
-        if self.pause_requested:
-            # Consume the pause at the round boundary: hand control to the
-            # engine's intervention menu; the original next-round instruction
-            # stays on the decision for the "resume" answer.
-            self.pause_requested = False
-            decision.paused = True
-        return decision
+        return inject_message
+
+    def _budget_pause_reason(self) -> str | None:
+        """Why the remaining budget can't cover another round (or None).
+
+        Uses the most recent round's actual consumption as the burn rate so a
+        pause only fires when the headroom is genuinely tight, not on the
+        first round with an arbitrarily small budget.
+        """
+        min_rounds = self.budget_pause_min_rounds
+        if min_rounds <= 0:
+            return None
+        reasons: list[str] = []
+        token_budget = self.total_token_budget
+        if token_budget is not None:
+            used_tokens = self.cost_meter.total_tokens
+            remaining_tokens = max(0, token_budget - used_tokens)
+            round_tokens = max(self._last_round_tokens, 1)
+            if remaining_tokens < min_rounds * round_tokens:
+                reasons.append(
+                    f"token headroom ({remaining_tokens:,}) below {min_rounds} "
+                    f"round(s) at the recent burn rate ({round_tokens:,}/round)"
+                )
+        usd_budget = self.budget_usd
+        if usd_budget is not None:
+            used_usd = self.cost_meter.total_cost_usd
+            remaining_usd = max(0.0, usd_budget - used_usd)
+            round_cost = self._last_round_cost_usd
+            if round_cost > 0 and remaining_usd < min_rounds * round_cost:
+                reasons.append(
+                    f"monetary headroom (${remaining_usd:.4f}) below {min_rounds} "
+                    f"round(s) at the recent burn rate (${round_cost:.4f}/round)"
+                )
+        return "; ".join(reasons) if reasons else None
 
     def _stop_decision(
         self, snapshot: AggregateSnapshot, reason: str, progress: object

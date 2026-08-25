@@ -385,6 +385,20 @@ def resume_kickoff(
     preview = "\n".join(preview_lines) or "- (no finding previews recorded)"
     mode = str(last_summary.get("mode") or "normal")
     resume_suffix = template_suffix(template, mode)
+    deferred = last_summary.get("deferred_architectural")
+    deferred_block = ""
+    if isinstance(deferred, list) and deferred:
+        lines = [
+            f"- [{str(d.get('file') or '?')}] ({str(d.get('dimension') or '?')}): "
+            f"{str(d.get('summary') or '')}"
+            for d in deferred[:20]
+        ]
+        deferred_block = (
+            "\nPreviously deferred architectural findings (left unfixed for a "
+            "follow-up — do not silently drop them):\n"
+            + "\n".join(lines)
+            + "\n"
+        )
     if interrupted:
         return (
             f"Resume the interrupted iterate run on this project. Goal: {goal}. "
@@ -398,6 +412,7 @@ def resume_kickoff(
             "the canonical loop (dry-run rules if the last run was dry-run, "
             "normal fix rules otherwise) within a fresh cap of "
             f"{max_rounds} rounds. Previously reported findings:\n{preview}\n"
+            f"{deferred_block}"
             "Do NOT re-report findings that no longer reproduce; log the "
             "resume as a decision entry before the first new round."
             + resume_suffix
@@ -412,6 +427,7 @@ def resume_kickoff(
         "the last run was dry-run, normal fix rules otherwise) within a "
         f"fresh cap of {max_rounds} rounds. Previously reported findings:\n"
         f"{preview}\n"
+        f"{deferred_block}"
         "Do NOT re-report findings that no longer reproduce; log the resume "
         "as a decision entry before the first new round."
         + resume_suffix
@@ -456,15 +472,23 @@ def convergence_stop_notice(reason: str, total_findings: int) -> str:
     )
 
 
-def pause_menu_question(round_number: int, new_findings: int) -> str:
+def pause_menu_question(round_number: int, new_findings: int, reason: str | None = None) -> str:
     """The Esc intervention menu (design §11.2.1) shown at a round boundary.
 
     Answers (parsed by the engine): ``s`` skip the current top finding,
     ``n <dims>`` narrow the review dimensions, ``x`` stop now, empty/other
     resumes the normal loop.
     """
+    head = f"Iterate loop paused (round {round_number}, {new_findings} new finding(s))"
+    if reason == "stall":
+        head = (
+            f"Iterate loop paused: no new findings for {round_number} round(s) — "
+            "review may be stalled"
+        )
+    elif reason == "budget":
+        head = f"Iterate loop paused: budget headroom low (round {round_number}, {new_findings} new finding(s))"
     return (
-        f"Iterate loop paused (round {round_number}, {new_findings} new finding(s)). "
+        f"{head}.\n"
         "Choose an action:\n"
         "  s = skip the current top finding, then continue\n"
         "  n <dimensions> = narrow the review to the given dimensions, then continue\n"
@@ -473,9 +497,35 @@ def pause_menu_question(round_number: int, new_findings: int) -> str:
     )
 
 
-def pause_menu_title(round_number: int, new_findings: int) -> str:
+def pause_menu_title(round_number: int, new_findings: int, reason: str | None = None) -> str:
     """Title for the componentized (directional-key) pause menu."""
+    if reason == "stall":
+        return (
+            f"Iterate loop paused: no new findings for a while — "
+            f"round {round_number}, {new_findings} new finding(s)"
+        )
+    if reason == "budget":
+        return (
+            f"Iterate loop paused: budget headroom low — "
+            f"round {round_number}, {new_findings} new finding(s)"
+        )
     return f"Iterate loop paused — round {round_number}, {new_findings} new finding(s)"
+
+
+def budget_headroom_pause_notice(reason: str) -> str:
+    """Engine-injected notice when the loop pauses for budget headroom.
+
+    The user is asked to either resume (spending past the headroom; the hard
+    stop still applies once the budget is exhausted) or stop the loop now
+    (design §18.5).
+    """
+    return (
+        f"[iterate] Loop paused before the next round: {reason}.\n"
+        "The run budget is running low. Choose an action:\n"
+        "  resume = continue the loop (the configured budget hard-stop still applies)\n"
+        "  stop = stop the loop now and produce the final report\n"
+        "  (or use the conversation panel to top up the budget / inject a nudge)"
+    )
 
 
 def pause_menu_options() -> list[dict[str, str]]:

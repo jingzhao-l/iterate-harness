@@ -20,6 +20,16 @@ function canSend(state: string | undefined, waitingFor: string | undefined): boo
 // messages are folded behind a notice instead of being dropped from the store.
 const MAX_VISIBLE_MESSAGES = 200;
 
+// One-click nudge phrases (design §18.4 UserInputBar "快捷短语按钮"): each
+// sends a steer through the existing nudge channel. The stop phrase maps to
+// the destructive stop confirmation instead of a plain chat message.
+const QUICK_PHRASES = [
+  "继续，请寻找新的发现",
+  "请聚焦安全维度审查",
+  "请聚焦正确性维度审查",
+];
+const QUICK_PHRASE_STOP = "停止当前运行";
+
 export default function ChatPanel(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [showStart, setShowStart] = useState(false);
@@ -137,6 +147,23 @@ export default function ChatPanel(): React.JSX.Element {
   };
 
   const handleStart = (): void => setShowStart(true);
+
+  // Quick-phrase chip: stop maps to the destructive confirmation; the other
+  // phrases send a nudge via the normal chat channel.
+  const handleQuickPhrase = (phrase: string): void => {
+    if (phrase === QUICK_PHRASE_STOP) {
+      setConfirmStop(true);
+      return;
+    }
+    if (!canSend(chatStatus?.state, chatStatus?.waiting_for) || chatSending) return;
+    setChatSending(true);
+    api
+      .chatSend(phrase)
+      .catch((error) => {
+        pushToast("error", `发送失败：${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => setChatSending(false));
+  };
 
   const hasPending =
     chatStatus &&
@@ -322,6 +349,27 @@ export default function ChatPanel(): React.JSX.Element {
 
           {/* Input bar */}
           <div className="chat-input-bar">
+            <div className="quick-phrases">
+              {QUICK_PHRASES.map((phrase) => (
+                <button
+                  key={phrase}
+                  type="button"
+                  className="quick-phrase"
+                  disabled={chatSending || !canSend(chatStatus?.state, chatStatus?.waiting_for)}
+                  onClick={() => handleQuickPhrase(phrase)}
+                >
+                  {phrase}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="quick-phrase quick-phrase-danger"
+                disabled={chatSending}
+                onClick={() => handleQuickPhrase(QUICK_PHRASE_STOP)}
+              >
+                {QUICK_PHRASE_STOP}
+              </button>
+            </div>
             <textarea
               className="chat-input"
               placeholder={

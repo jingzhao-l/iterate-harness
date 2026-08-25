@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -21,5 +22,11 @@ export default defineConfig({
         changeOrigin: false,
       },
     },
+  },
+  test: {
+    // Unit tests cover pure logic only (no DOM), so the node environment is
+    // enough; the API layer is mocked per test file.
+    environment: "node",
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });

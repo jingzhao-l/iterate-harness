@@ -178,3 +178,44 @@ def findings_from_report(data: dict[str, Any] | None) -> list[dict[str, Any]]:
                 return findings
 
     return []
+
+
+def extract_deferred_architectural(project_root: str | Path) -> list[dict[str, Any]]:
+    """Architectural (non-atomic) findings from the most recent review result.
+
+    Used to persist a cross-session "deferred architectural" list in the
+    checkpoint (design §11.2.2 状态继承), so a resumed run knows what broad
+    changes were deliberately left for a follow-up instead of re-reporting or
+    silently dropping them. Returns ``[]`` when the log has no architectural
+    findings or the log is missing/malformed.
+    """
+    try:
+        entries = read_entries(project_root)
+    except Exception:  # noqa: BLE001 - never break the checkpoint path
+        return []
+    for entry in reversed(entries):
+        if entry.type not in ("review_result", "report"):
+            continue
+        data = entry.data if isinstance(entry.data, dict) else {}
+        findings = data.get("findings")
+        if not isinstance(findings, list):
+            continue
+        deferred: list[dict[str, Any]] = []
+        for finding in findings:
+            if not isinstance(finding, dict) or finding.get("is_atomic") is True:
+                continue
+            file = finding.get("file")
+            dimension = finding.get("dimension")
+            summary = finding.get("summary")
+            if not file and not summary:
+                continue
+            deferred.append(
+                {
+                    "file": str(file or "?"),
+                    "dimension": str(dimension or "?"),
+                    "summary": str(summary or "")[:200],
+                }
+            )
+        if deferred:
+            return deferred
+    return []

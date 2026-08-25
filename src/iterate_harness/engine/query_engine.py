@@ -45,6 +45,8 @@ def _default_iterate_policy(cwd: Path) -> object | None:
             total_token_budget=project.config.token_budget,
             budget_usd=project.config.budget_usd,
             max_turns_per_minute=project.config.max_turns_per_minute,
+            stall_pause_rounds=kernel.stall_pause_rounds,
+            budget_pause_min_rounds=kernel.budget_pause_min_rounds,
             worktree_isolation=(
                 kernel.worktree_isolation or project.config.worktree_isolation
             ),

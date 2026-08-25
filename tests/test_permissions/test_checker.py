@@ -226,3 +226,64 @@ class TestSensitivePathProtection:
         checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))
         decision = checker.evaluate("read_file", is_read_only=True, file_path=test_path)
         assert decision.allowed is False, f"Pattern {pattern!r} did not block {test_path}"
+
+
+class TestRiskAreaGate:
+    """design §11.2.2 risk_areas 强制审批 — mutating tools on risk-area
+    paths require explicit confirmation even in full_auto mode."""
+
+    def _checker(self) -> PermissionChecker:
+        return PermissionChecker(
+            PermissionSettings(mode=PermissionMode.FULL_AUTO),
+            risk_area_patterns=("*/db/*", "*/migrations/*"),
+        )
+
+    def test_write_in_risk_area_requires_confirmation_in_full_auto(self):
+        checker = self._checker()
+        decision = checker.evaluate(
+            "write_file",
+            is_read_only=False,
+            file_path="/proj/db/migrate.sql",
+            content="ALTER TABLE users ...;",
+        )
+        assert decision.allowed is False
+        assert decision.requires_confirmation is True
+        assert "risk area" in decision.reason
+
+    def test_read_in_risk_area_is_not_gated(self):
+        checker = self._checker()
+        decision = checker.evaluate("read_file", is_read_only=True, file_path="/proj/db/migrate.sql")
+        assert decision.allowed is True
+
+    def test_write_outside_risk_area_unaffected(self):
+        checker = self._checker()
+        decision = checker.evaluate(
+            "write_file", is_read_only=False, file_path="/proj/src/app.py", content="x = 1"
+        )
+        assert decision.allowed is True  # full_auto
+
+    def test_risk_area_gate_ignored_without_file_path(self):
+        checker = self._checker()
+        decision = checker.evaluate("bash", is_read_only=False, command="echo hello")
+        assert decision.allowed is True
+
+    def test_build_permission_checker_wires_risk_area_paths(self):
+        from iterate_harness.config.settings import Settings
+        from iterate_harness.iterate.settings import IterateSettings
+        from iterate_harness.permissions.checker import build_permission_checker
+
+        settings = Settings.model_construct(
+            permission=PermissionSettings(mode=PermissionMode.FULL_AUTO),
+            iterate=IterateSettings(risk_area_paths=["db/*"]),
+        )
+        checker = build_permission_checker(settings)
+        decision = checker.evaluate(
+            "write_file", is_read_only=False, file_path="/proj/db/migrate.sql", content="x"
+        )
+        assert decision.allowed is False
+        assert decision.requires_confirmation is True
+        # Non-risk paths stay full-auto.
+        allowed = checker.evaluate(
+            "write_file", is_read_only=False, file_path="/proj/src/app.py", content="x"
+        )
+        assert allowed.allowed is True

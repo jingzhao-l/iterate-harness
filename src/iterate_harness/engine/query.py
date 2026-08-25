@@ -915,6 +915,9 @@ async def run_query(
                 # resumed via /iterate resume (design §failure recovery).
                 try:
                     from iterate_harness.iterate.checkpoint import save_checkpoint
+                    from iterate_harness.iterate.decision_log import (
+                        extract_deferred_architectural,
+                    )
 
                     save_checkpoint(
                         context.cwd,
@@ -927,6 +930,12 @@ async def run_query(
                         output_tokens=decision.progress.output_tokens,
                         cost_usd=decision.progress.cost_usd,
                         mode=decision.progress.mode,
+                        # Architectural (non-atomic) findings from the latest
+                        # review result — persisted so a resumed run inherits
+                        # them (design §11.2.2 状态继承).
+                        deferred_architectural=extract_deferred_architectural(
+                            context.cwd
+                        ),
                     )
                 except Exception as exc:  # checkpoint must never break the loop
                     log.warning("iterate checkpoint save failed: %s", exc)
@@ -948,10 +957,57 @@ async def run_query(
                         )
                     ), None
             inject_message = decision.inject_message
+            if (
+                isinstance(decision.progress, ReviewProgressEvent)
+                and decision.stop_reason is None
+                and decision.progress.mode != "dry-run"
+            ):
+                # is_atomic 实测校验 (design §11.2.2): measure the actual
+                # post-fix diff; when it exceeds the atomic cap the fix leaked
+                # architectural changes — log it and steer the next round.
+                try:
+                    from iterate_harness.iterate import fix_scope
+                    from iterate_harness.iterate.decision_log import (
+                        append_entry,
+                        make_entry,
+                    )
+                    from iterate_harness.iterate.settings import (
+                        DEFAULT_ATOMIC_MAX_LINES,
+                    )
+
+                    assessment = fix_scope.assess_fix_scope(
+                        context.cwd, DEFAULT_ATOMIC_MAX_LINES
+                    )
+                    if assessment.over_limit:
+                        append_entry(
+                            context.cwd,
+                            make_entry(
+                                entry_type="decision",
+                                round_number=decision.progress.round,
+                                data={
+                                    "kind": "degraded-to-architectural",
+                                    "detail": (
+                                        f"post-fix diff {assessment.total_lines} lines "
+                                        f"(+{assessment.added_lines}/-{assessment.removed_lines}) "
+                                        f"exceeds atomic.max_lines ({assessment.max_lines})"
+                                    ),
+                                },
+                            ),
+                        )
+                        inject_message = (
+                            fix_scope.fix_scope_over_limit_hint(assessment)
+                            + "\n\n"
+                            + (inject_message or "")
+                        )
+                except Exception:  # fix-scope check must never break the loop
+                    log.warning("iterate fix-scope check failed", exc_info=True)
             if decision.paused:
-                # Esc intervention (design §11.2.1): surface the pause menu
+                # Esc intervention (design §11.2.1) / auto-pause (design §18.5:
+                # stall detection or budget headroom): surface the pause menu
                 # at the round boundary and follow the chosen action.
-                action, message = await _handle_iterate_pause(context, decision.progress)
+                action, message = await _handle_iterate_pause(
+                    context, decision.progress, decision.pause_reason
+                )
                 if action == "stop":
                     # Abnormal termination: drop the isolated workspace
                     # without merging (auto-rollback).
@@ -1336,6 +1392,7 @@ PAUSE_ACTION_RESUME = "resume"
 async def _handle_iterate_pause(
     context: "QueryContext",
     progress: object | None,
+    pause_reason: str | None = None,
 ) -> tuple[str, str | None]:
     """Surface the pause menu and map the answer to a loop action.
 
@@ -1347,7 +1404,8 @@ async def _handle_iterate_pause(
 
     Backends with a directional-key UI (React TUI) get the componentized
     menu via ``ask_user_select``; everything else falls back to the
-    free-text question prompt.
+    free-text question prompt. ``pause_reason`` (stall / budget / None for a
+    manual Esc) only changes the menu title — the actions are shared.
     """
     round_number = int(getattr(progress, "round", 0) or 0)
     new_findings = int(getattr(progress, "new_findings", 0) or 0)
@@ -1358,9 +1416,11 @@ async def _handle_iterate_pause(
         return PAUSE_ACTION_STOP, None
     if select_cb is not None:
         return await _handle_iterate_pause_select(
-            context, round_number, new_findings, select_cb, prompt_cb
+            context, round_number, new_findings, select_cb, prompt_cb, pause_reason
         )
-    return await _handle_iterate_pause_text(context, round_number, new_findings, prompt_cb)
+    return await _handle_iterate_pause_text(
+        context, round_number, new_findings, prompt_cb, pause_reason
+    )
 
 
 async def _handle_iterate_pause_select(
@@ -1369,6 +1429,7 @@ async def _handle_iterate_pause_select(
     new_findings: int,
     select_cb: "AskUserSelect",
     prompt_cb: AskUserPrompt | None,
+    pause_reason: str | None = None,
 ) -> tuple[str, str | None]:
     """Pause menu over the directional-key select channel."""
     from iterate_harness.iterate import prompts
@@ -1376,7 +1437,7 @@ async def _handle_iterate_pause_select(
     try:
         answer = (
             await select_cb(
-                prompts.pause_menu_title(round_number, new_findings),
+                prompts.pause_menu_title(round_number, new_findings, pause_reason),
                 prompts.pause_menu_options(),
             )
             or ""
@@ -1413,13 +1474,17 @@ async def _handle_iterate_pause_text(
     round_number: int,
     new_findings: int,
     prompt_cb: AskUserPrompt | None,
+    pause_reason: str | None = None,
 ) -> tuple[str, str | None]:
     """Pause menu over the free-text question channel (fallback UIs)."""
     from iterate_harness.iterate import prompts
 
     assert prompt_cb is not None  # guarded by the caller
     try:
-        answer = (await prompt_cb(prompts.pause_menu_question(round_number, new_findings)) or "").strip()
+        answer = (
+            await prompt_cb(prompts.pause_menu_question(round_number, new_findings, pause_reason))
+            or ""
+        ).strip()
     except Exception:
         log.exception("iterate pause prompt failed; stopping the loop")
         await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "prompt error")

@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -22,7 +23,8 @@
     "@types/react-dom": "18.3.1",
     "@vitejs/plugin-react": "4.3.4",
     "typescript": "5.7.3",
-    "vite": "6.4.3"
+    "vite": "6.4.3",
+    "vitest": "3.2.4"
   },
   "allowScripts": {
     "esbuild@0.25.12": true

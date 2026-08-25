@@ -9,7 +9,8 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { Finding, TimelineEntry, TriageDecision } from "../types";
 
 // Compose the triage dedup key exactly like the backend (file:::line:::dimension).
-function triageKey(finding: Finding): string {
+// Exported for unit tests (design §17.9 quality gates).
+export function triageKey(finding: Finding): string {
   return `${finding.file ?? ""}:::${finding.line ?? ""}:::${finding.dimension ?? ""}`;
 }
 

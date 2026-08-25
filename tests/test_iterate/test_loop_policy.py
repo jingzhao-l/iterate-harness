@@ -453,3 +453,163 @@ class TestDimensionCostUsd:
         assert isinstance(event, ReviewProgressEvent)
         # exact split: 0.5M*$2 + 0.25M*$4 = 1.0 + 1.0 = 2.0
         assert event.dimension_cost_usd == {"security": 2.0}
+
+
+class TestStallPause:
+    """design §18.5: consecutive zero-new-finding rounds pause for user input."""
+
+    def test_zero_round_alone_does_not_pause(self):
+        policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=2)
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=2, findings_by_round=[3, 0])},
+            UsageSnapshot(),
+            "m",
+        )
+        assert decision.paused is False
+        assert decision.stop_reason is None
+        assert decision.inject_message is not None  # keep looping
+
+    def test_consecutive_zero_rounds_pause_after_threshold(self):
+        policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=2)
+        # Round 1: 3 findings, round 2: 0, round 3: 0 → stall pause.
+        first = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=1, findings_by_round=[3])},
+            UsageSnapshot(),
+            "m",
+        )
+        assert first.paused is False
+        second = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=2, findings_by_round=[3, 0])},
+            UsageSnapshot(),
+            "m",
+        )
+        assert second.paused is False
+        third = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=3, findings_by_round=[3, 0, 0])},
+            UsageSnapshot(),
+            "m",
+        )
+        assert third.paused is True
+        assert third.pause_reason == "stall"
+        assert third.stop_reason is None
+        assert third.progress is not None
+
+    def test_zero_round_resets_on_new_findings(self):
+        policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=2)
+        policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=1, findings_by_round=[3])}, UsageSnapshot(), "m"
+        )
+        policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=2, findings_by_round=[3, 0])}, UsageSnapshot(), "m"
+        )
+        # New findings reset the counter.
+        growth = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=3, findings_by_round=[3, 0, 2])},
+            UsageSnapshot(),
+            "m",
+        )
+        assert growth.paused is False
+        # Counter restarts at 1: a single subsequent zero round is not enough.
+        again = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=4, findings_by_round=[3, 0, 2, 0])},
+            UsageSnapshot(),
+            "m",
+        )
+        assert again.paused is False
+
+    def test_stall_pause_disabled_preserves_hard_stop(self):
+        policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=0)
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=2, findings_by_round=[3, 0])},
+            UsageSnapshot(),
+            "m",
+        )
+        assert decision.stop_reason is not None
+        assert "0 new findings" in decision.stop_reason
+
+    def test_stall_pause_preserves_queued_nudge(self):
+        policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=1)
+        policy.inject_nudge("keep looking for security issues")
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=2, findings_by_round=[3, 0])},
+            UsageSnapshot(),
+            "m",
+        )
+        assert decision.paused is True
+        assert decision.pause_reason == "stall"
+        assert "keep looking for security issues" in decision.inject_message
+
+
+class TestBudgetHeadroomPause:
+    """design §18.5: pause before the budget hard-stop so the user can top up."""
+
+    def test_token_headroom_below_one_round_pauses(self):
+        policy = IterateLoopPolicy(max_review_rounds=5, total_token_budget=100)
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=30, output_tokens=30),
+            "m",
+        )
+        # Burn rate 60 tokens/round; remaining 40 < 60 → pause, not stop.
+        assert decision.stop_reason is None
+        assert decision.paused is True
+        assert decision.pause_reason == "budget"
+        assert "token headroom" in decision.inject_message
+
+    def test_usd_headroom_below_one_round_pauses(self):
+        policy = IterateLoopPolicy(
+            max_review_rounds=5,
+            budget_usd=10.0,
+            price_overrides={"m1": (3.0, 15.0)},
+        )
+        # 0.5M in ($1.5) + 0.5M out ($7.5) = $9.0 → remaining $1.0 < $9.0.
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=500_000, output_tokens=500_000),
+            "m1",
+        )
+        assert decision.stop_reason is None
+        assert decision.paused is True
+        assert decision.pause_reason == "budget"
+        assert "monetary headroom" in decision.inject_message
+
+    def test_over_budget_is_hard_stop_not_pause(self):
+        policy = IterateLoopPolicy(
+            max_review_rounds=5,
+            budget_usd=5.0,
+            price_overrides={"m1": (3.0, 15.0)},
+        )
+        # $18 > $5 → hard stop wins over the headroom pause.
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=1_000_000, output_tokens=1_000_000),
+            "m1",
+        )
+        assert decision.stop_reason is not None
+        assert "monetary budget exhausted" in decision.stop_reason
+
+    def test_budget_pause_disabled(self):
+        policy = IterateLoopPolicy(
+            max_review_rounds=5,
+            budget_usd=5.0,
+            budget_pause_min_rounds=0,
+            price_overrides={"m1": (3.0, 0.0)},
+        )
+        # $3 spent, $2 left, but the feature is disabled → normal continue.
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=1_000_000, output_tokens=0),
+            "m1",
+        )
+        assert decision.paused is False
+        assert decision.stop_reason is None
+
+    def test_no_budget_configured_never_pauses(self):
+        policy = IterateLoopPolicy(max_review_rounds=5)
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state()},
+            UsageSnapshot(input_tokens=1_000_000, output_tokens=1_000_000),
+            "m",
+        )
+        assert decision.paused is False
+        assert decision.stop_reason is None

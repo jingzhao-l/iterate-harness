@@ -161,7 +161,8 @@ export const useWebUi = create<WebUiState>((set, get) => ({
 }));
 
 // Map a live run-state hub event onto the snake_case ChatRunStatus shape.
-function applyRunStateEvent(payload: RunStateEvent): Partial<ChatRunStatus> {
+// Exported for unit tests (design §17.9 quality gates).
+export function applyRunStateEvent(payload: RunStateEvent): Partial<ChatRunStatus> {
   const patch: Partial<ChatRunStatus> = {};
   if (payload.state !== undefined) patch.state = payload.state;
   if (payload.waitingFor !== undefined) patch.waiting_for = payload.waitingFor;
@@ -178,7 +179,8 @@ function applyRunStateEvent(payload: RunStateEvent): Partial<ChatRunStatus> {
 }
 
 // Map a live progress-update hub event onto the snake_case ChatRunStatus shape.
-function applyProgressEvent(payload: ProgressUpdateEvent): Partial<ChatRunStatus> {
+// Exported for unit tests (design §17.9 quality gates).
+export function applyProgressEvent(payload: ProgressUpdateEvent): Partial<ChatRunStatus> {
   const patch: Partial<ChatRunStatus> = {};
   if (payload.round !== undefined) patch.round = payload.round;
   if (payload.newFindings !== undefined) patch.new_findings = payload.newFindings;

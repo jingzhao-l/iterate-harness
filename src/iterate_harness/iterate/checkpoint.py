@@ -54,6 +54,7 @@ def save_checkpoint(
     output_tokens: int,
     cost_usd: float,
     mode: str,
+    deferred_architectural: list[dict[str, Any]] | None = None,
 ) -> Path | None:
     """Persist the latest convergence state atomically.
 
@@ -74,6 +75,7 @@ def save_checkpoint(
         "output_tokens": output_tokens,
         "cost_usd": cost_usd,
         "mode": mode,
+        "deferred_architectural": list(deferred_architectural or []),
     }
     # Process-unique temp name (mkstemp) avoids concurrent writers using the
     # same ".json.tmp" and tearing each other's partial write; os.replace

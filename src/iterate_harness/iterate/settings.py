@@ -48,6 +48,15 @@ class IterateSettings(BaseModel):
     # Turn-level rate cap (requests per minute) for long-running loops.
     # ``None`` disables throttling.
     max_turns_per_minute: int | None = None
+    # Stall-awareness (design §18.5): pause after this many consecutive
+    # rounds with zero new findings (and no explicit converged flag) and ask
+    # the user how to continue. ``0`` disables (loop stops on the first zero
+    # round, historical behavior).
+    stall_pause_rounds: int = 2
+    # Budget-headroom pause (design §18.5): pause before a round when the
+    # remaining token/USD budget can't cover at least this many rounds at the
+    # recent burn rate, asking whether to top up / stop. ``0`` disables.
+    budget_pause_min_rounds: int = 1
     # Session workspace isolation (design §11.3.2 finding #7): when True and a
     # normal-mode iterate loop is active, the engine swaps the loop's working
     # directory to a dedicated ``iterate/round-N`` git worktree so concurrent

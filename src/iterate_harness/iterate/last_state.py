@@ -36,13 +36,23 @@ def summarize_last_run(project_root: str) -> dict[str, Any] | None:
 
     report = _last_entry(entries, "report")
     if report is not None:
-        return _summarize_report(entries, report)
+        summary = _summarize_report(entries, report)
+    else:
+        checkpoint = load_checkpoint(project_root)
+        if checkpoint is not None:
+            summary = _summarize_checkpoint(entries, checkpoint)
+        else:
+            return None
 
+    # Carry the persisted deferred-architectural list so a resume prompt can
+    # re-surface what was deliberately left unfixed (design §11.2.2).
     checkpoint = load_checkpoint(project_root)
-    if checkpoint is not None:
-        return _summarize_checkpoint(entries, checkpoint)
-
-    return None
+    raw_deferred = (checkpoint or {}).get("deferred_architectural")
+    if isinstance(raw_deferred, list):
+        cleaned = [entry for entry in raw_deferred if isinstance(entry, dict)]
+        if cleaned:
+            summary["deferred_architectural"] = cleaned
+    return summary
 
 
 def _summarize_report(entries: list[DecisionLogEntry], report: DecisionLogEntry) -> dict[str, Any]:

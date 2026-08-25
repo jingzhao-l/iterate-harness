@@ -63,11 +63,17 @@ class PermissionChecker:
         settings: PermissionSettings,
         *,
         forbidden_content_patterns: tuple[re.Pattern[str], ...] = (),
+        risk_area_patterns: tuple[str, ...] = (),
     ) -> None:
         self._settings = settings
         # Iterate hard boundary: mutating write payloads matching any of
         # these regexes are rejected outright (see build_permission_checker).
         self._forbidden_content_patterns = forbidden_content_patterns
+        # Iterate hard boundary: any MUTATING tool touching one of these
+        # absolute-glob paths requires explicit user confirmation even in
+        # full_auto mode (design §11.2.2 "risk_areas 强制审批"). Reads are
+        # not gated — only writes that could change risk-area content.
+        self._risk_area_patterns = risk_area_patterns
         # Parse path rules from settings
         self._path_rules: list[PathRule] = []
         for rule in getattr(settings, "path_rules", []):
@@ -120,6 +126,24 @@ class PermissionChecker:
                             f"'{pattern.pattern}' (iterate.forbidden_fix_patterns)"
                         ),
                     )
+
+        # Iterate risk-area boundary (iterate.risk_area_paths + project
+        # personalization.risk_areas, design §11.2.2): mutating tools that
+        # target a risk-area path require explicit user confirmation even in
+        # full_auto mode. Checked before tool allowlists so the gate cannot
+        # be bypassed by an allowlisted tool. Reads stay ungated.
+        if file_path and self._risk_area_patterns and not is_read_only:
+            for candidate_path in _policy_match_paths(file_path):
+                for pattern in self._risk_area_patterns:
+                    if fnmatch.fnmatch(candidate_path, pattern):
+                        return PermissionDecision(
+                            allowed=False,
+                            requires_confirmation=True,
+                            reason=(
+                                f"Path {file_path} is in a configured risk area "
+                                f"(matched '{pattern}'); explicit approval required"
+                            ),
+                        )
 
         # Explicit tool deny list
         if tool_name in self._settings.denied_tools:
@@ -212,6 +236,10 @@ def build_permission_checker(settings: Settings) -> PermissionChecker:
       and enforced against mutating write payloads (``content`` /
       ``new_string`` / ``diff`` / ``patch`` tool inputs).  Invalid regexes are
       skipped with a warning instead of crashing startup.
+    - ``settings.iterate.risk_area_paths`` (plus the project's
+      ``personalization.risk_areas``) are normalized into absolute-glob
+      patterns that gate MUTATING tool calls behind an explicit user
+      confirmation — even in full_auto mode (design §11.2.2 hard boundary).
 
     When ``settings.iterate.enabled`` is ``False`` the permission settings
     pass through untouched.
@@ -241,7 +269,17 @@ def build_permission_checker(settings: Settings) -> PermissionChecker:
         except re.error:
             log.warning("Skipping invalid iterate forbidden_fix_pattern: %r", raw_pattern)
 
-    return PermissionChecker(merged, forbidden_content_patterns=tuple(compiled_patterns))
+    risk_area_patterns: list[str] = []
+    for raw in (*iterate.risk_area_paths, *_project_risk_area_paths()):
+        normalized = _to_deny_path_glob(raw)
+        if normalized and normalized not in risk_area_patterns:
+            risk_area_patterns.append(normalized)
+
+    return PermissionChecker(
+        merged,
+        forbidden_content_patterns=tuple(compiled_patterns),
+        risk_area_patterns=tuple(risk_area_patterns),
+    )
 
 
 def _project_protected_paths() -> tuple[str, ...]:
@@ -250,18 +288,45 @@ def _project_protected_paths() -> tuple[str, ...]:
     Never raises: an unreadable/missing config simply contributes no rules
     (fail-open for availability, the kernel deny list above still applies).
     """
+    personalization = _project_personalization()
+    raw = personalization.get("protected_paths") if personalization else None
+    if not isinstance(raw, list):
+        return ()
+    return tuple(pattern for pattern in raw if isinstance(pattern, str) and pattern.strip())
+
+
+def _project_risk_area_paths() -> tuple[str, ...]:
+    """``personalization.risk_areas`` from the cwd's iterate.config.yaml.
+
+    Accepts both a list of plain path globs (``["db/*"]``) and a list of
+    ``{"path": ..., "reason": ...}`` entries so the wizard's structured shape
+    round-trips into the permission gate. Never raises: a missing/unreadable
+    config contributes no rules (fail-open).
+    """
+    personalization = _project_personalization()
+    raw = personalization.get("risk_areas") if personalization else None
+    if not isinstance(raw, list):
+        return ()
+    paths: list[str] = []
+    for entry in raw:
+        if isinstance(entry, str) and entry.strip():
+            paths.append(entry.strip())
+        elif isinstance(entry, dict):
+            path = entry.get("path")
+            if isinstance(path, str) and path.strip():
+                paths.append(path.strip())
+    return tuple(paths)
+
+
+def _project_personalization() -> dict[str, object]:
+    """The current project's ``personalization`` config block (or ``{}``)."""
     try:
         from iterate_harness.iterate.config_loader import load_effective_config
 
         personalization = load_effective_config(str(Path.cwd())).config.personalization
     except Exception:  # noqa: BLE001 - permission bootstrap must never crash
-        return ()
-    if not isinstance(personalization, dict):
-        return ()
-    raw = personalization.get("protected_paths")
-    if not isinstance(raw, list):
-        return ()
-    return tuple(pattern for pattern in raw if isinstance(pattern, str) and pattern.strip())
+        return {}
+    return personalization if isinstance(personalization, dict) else {}
 
 
 def _to_deny_path_glob(pattern: str) -> str | None:

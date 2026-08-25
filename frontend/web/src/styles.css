@@ -1053,10 +1053,50 @@ table.data tr.row-active td {
 /* input bar */
 .chat-input-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--border);
   align-items: flex-end;
+}
+
+/* Quick nudge phrases above the input (design §18.4 UserInputBar). */
+.quick-phrases {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.quick-phrase {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--heading);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.quick-phrase:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.quick-phrase:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.quick-phrase-danger {
+  color: var(--critical);
+  border-color: var(--critical);
+}
+
+.quick-phrase-danger:hover:not(:disabled) {
+  background: rgba(185, 28, 28, 0.08);
+  border-color: var(--critical);
 }
 
 .chat-input {
