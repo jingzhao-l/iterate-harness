@@ -33,6 +33,10 @@ interface WebUiState {
   logRevision: number;
   // Live SSE connection state (design §17 UX: visible indicator in the sidebar).
   connectionState: "connecting" | "connected" | "reconnecting" | "disconnected";
+  // Number of open modal dialogs. Global keyboard shortcuts (App g-buffer,
+  // "/" toggle) are suppressed while any modal is open so typing inside a
+  // dialog can never trigger navigation behind it.
+  modalCount: number;
   // Chat / human-in-the-loop (design §18).
   chatMessages: ChatMessage[];
   chatStatus: ChatRunStatus | null;
@@ -49,6 +53,7 @@ interface WebUiState {
   setConnectionState: (
     state: "connecting" | "connected" | "reconnecting" | "disconnected",
   ) => void;
+  setModalOpen: (open: boolean) => void;
   setChatStatus: (status: ChatRunStatus | null) => void;
   patchChatStatus: (patch: Partial<ChatRunStatus>) => void;
   pushChatMessage: (message: ChatMessage) => void;
@@ -69,6 +74,7 @@ export const useWebUi = create<WebUiState>((set, get) => ({
   lastError: null,
   logRevision: 0,
   connectionState: "connecting",
+  modalCount: 0,
   chatMessages: [],
   chatStatus: null,
   chatLoading: false,
@@ -103,6 +109,12 @@ export const useWebUi = create<WebUiState>((set, get) => ({
   bumpLogRevision: () => set((state) => ({ logRevision: state.logRevision + 1 })),
 
   setConnectionState: (connectionState) => set({ connectionState }),
+
+  // Modal lifetime counter: +1 while any dialog is open, -1 on close. Kept
+  // out of the global shortcut handler path so an open dialog can never be
+  // navigated away from behind the user's back.
+  setModalOpen: (open) =>
+    set((state) => ({ modalCount: Math.max(0, state.modalCount + (open ? 1 : -1)) })),
 
   setChatStatus: (chatStatus) => set({ chatStatus }),
 

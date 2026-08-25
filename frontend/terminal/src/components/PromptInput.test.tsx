@@ -173,6 +173,55 @@ test('keeps forward delete behavior when cursor is inside the line', async () =>
 	}
 });
 
+test('does not insert ctrl combination control characters as text', async () => {
+	const stdin = createTestStdin();
+	const stdout = createTestStdout();
+	let currentValue = '';
+
+	const instance = render(<PromptHarness onInputChange={(value) => {
+		currentValue = value;
+	}} />, {
+		stdin: stdin as unknown as NodeJS.ReadStream & {fd: 0},
+		stdout: stdout as unknown as NodeJS.WriteStream,
+		debug: true,
+		patchConsole: false,
+		// Keep the app alive so Ctrl+C can be observed by the input handler
+		// instead of exiting the test app.
+		exitOnCtrlC: false,
+	});
+	const exitPromise = instance.waitUntilExit();
+
+	try {
+		await nextLoopTurn();
+
+		await sendKey(stdin, 'a');
+		await waitForValue(() => currentValue, 'a');
+
+		// Ctrl+W / Ctrl+E / Ctrl+C must never be inserted as text.
+		await sendKey(stdin, '\x17');
+		await nextLoopTurn();
+		assert.equal(currentValue, 'a');
+
+		await sendKey(stdin, '\x05');
+		await nextLoopTurn();
+		assert.equal(currentValue, 'a');
+
+		await sendKey(stdin, '\x03');
+		await nextLoopTurn();
+		assert.equal(currentValue, 'a');
+
+		// Normal typing still works after a ctrl keypress.
+		await sendKey(stdin, 'b');
+		await waitForValue(() => currentValue, 'ab');
+	} finally {
+		instance.unmount();
+		await exitPromise;
+		instance.cleanup();
+		stdin.destroy();
+		stdout.destroy();
+	}
+});
+
 test('accepts explicit /stop submission while busy', async () => {
 	const stdin = createTestStdin();
 	const stdout = createTestStdout();

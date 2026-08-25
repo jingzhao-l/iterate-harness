@@ -27,6 +27,13 @@ function statusIcon(status: SwarmTeammate['status']): string {
 	}
 }
 
+const STATUS_LABELS: Record<SwarmTeammate['status'], string> = {
+	running: 'RUN',
+	idle: 'IDLE',
+	done: 'DONE',
+	error: 'ERR',
+};
+
 function formatDuration(seconds: number): string {
 	if (seconds < 60) {
 		return `${seconds}s`;
@@ -40,18 +47,22 @@ function SwarmPanelInner({
 	teammates,
 	notifications,
 	collapsed: initialCollapsed = false,
+	active = true,
 }: {
 	teammates: SwarmTeammate[];
 	notifications: SwarmNotification[];
 	collapsed?: boolean;
+	active?: boolean;
 }): React.JSX.Element | null {
 	const [collapsed, setCollapsed] = useState(initialCollapsed);
 
+	// Only respond to ctrl+w while this panel owns the keys (no modal/picker
+	// overlay), so shortcuts never fire while another surface is focused.
 	useInput((chunk, key) => {
 		if (key.ctrl && chunk === 'w') {
 			setCollapsed((c) => !c);
 		}
-	});
+	}, {isActive: active});
 
 	if (teammates.length === 0 && notifications.length === 0) {
 		return null;
@@ -96,6 +107,7 @@ function SwarmPanelInner({
 									<Text bold color={teammate.status === 'running' ? 'green' : teammate.status === 'error' ? 'red' : undefined}>
 										{teammate.name}
 									</Text>
+									<Text dimColor> {STATUS_LABELS[teammate.status]}</Text>
 									{teammate.duration !== undefined && (
 										<Text dimColor> ({formatDuration(teammate.duration)})</Text>
 									)}

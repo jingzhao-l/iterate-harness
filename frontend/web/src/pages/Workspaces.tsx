@@ -83,6 +83,11 @@ export default function Workspaces(): React.JSX.Element {
         <section className="panel">
           <h2>工作区列表</h2>
           <p className="empty">加载失败：{error}</p>
+          <div style={{ marginTop: 12 }}>
+            <button className="btn primary" onClick={() => void load()} disabled={loading}>
+              重试
+            </button>
+          </div>
         </section>
       ) : workspaces.length === 0 ? (
         <section className="panel">

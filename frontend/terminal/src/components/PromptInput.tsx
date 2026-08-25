@@ -78,7 +78,10 @@ function MultilineTextInput({
 				return;
 			}
 
-			if (key.upArrow || key.downArrow || key.tab || (key.shift && key.tab) || key.escape || (key.ctrl && input === 'c')) {
+			// Ctrl combos (Ctrl+W/T/A/E/U/D, Ctrl+C, ...) are control actions
+			// handled by the App shell (interrupt, exit); never insert them
+			// as text. Only Ctrl+C is intentionally released to App's handler.
+			if (key.upArrow || key.downArrow || key.tab || (key.shift && key.tab) || key.escape || key.ctrl) {
 				return;
 			}
 

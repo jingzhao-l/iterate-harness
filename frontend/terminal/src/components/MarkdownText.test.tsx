@@ -117,3 +117,34 @@ test('preserves nested markdown structure inside blockquotes', async () => {
 	assert.ok(lines.some((line) => line.includes('• first')), `Expected blockquote output to include a rendered bullet: ${JSON.stringify(lines)}`);
 	assert.ok(lines.some((line) => line.includes('• second')), `Expected blockquote output to include the second rendered bullet: ${JSON.stringify(lines)}`);
 });
+
+test('renders nested list items recursively instead of flattening them', async () => {
+	const lines = await renderMarkdownLines('- a\n  - b\n  - c\n- d');
+
+	for (const expected of ['• a', '• b', '• c', '• d']) {
+		assert.ok(
+			lines.some((line) => line.includes(expected)),
+			`Expected a line containing ${JSON.stringify(expected)}, got: ${JSON.stringify(lines)}`,
+		);
+	}
+});
+
+test('keeps loose list paragraphs and code blocks on separate lines', async () => {
+	const lines = await renderMarkdownLines(
+		'- first paragraph\n\n  second paragraph\n\n  ```js\n  const x = 1;\n  ```\n\n- done',
+	);
+
+	assert.ok(lines.some((line) => line.includes('• first paragraph')), JSON.stringify(lines));
+	assert.ok(lines.some((line) => line.includes('second paragraph')), JSON.stringify(lines));
+	assert.ok(lines.some((line) => line.includes('const x = 1;')), JSON.stringify(lines));
+	assert.ok(lines.some((line) => line.includes('• done')), JSON.stringify(lines));
+});
+
+test('shows the url after a link label', async () => {
+	const lines = await renderMarkdownLines('[docs](https://example.com/docs)');
+
+	assert.ok(
+		lines.some((line) => line.includes('docs (https://example.com/docs)')),
+		`Expected the url to appear after the label, got: ${JSON.stringify(lines)}`,
+	);
+});

@@ -36,6 +36,7 @@ export default function Dashboard(): React.JSX.Element {
   const lastError = useWebUi((state) => state.lastError);
   const refreshStatus = useWebUi((state) => state.refreshStatus);
   const chatStatus = useWebUi((state) => state.chatStatus);
+  const chatLoading = useWebUi((state) => state.chatLoading);
   const pushToast = useWebUi((state) => state.pushToast);
   const [showStart, setShowStart] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -91,6 +92,10 @@ export default function Dashboard(): React.JSX.Element {
   const { budget, config } = status;
   const lastRun = status.last_run;
   const runActive = chatStatus?.state === "running" || chatStatus?.state === "starting" || chatStatus?.state === "paused";
+  // While the chat status is still loading we can't tell whether a run is
+  // active — keep the launch button disabled instead of risking a duplicate
+  // run that would bounce off the backend's "already running" guard.
+  const runUnknown = !chatStatus && chatLoading;
 
   // Persistent run-status banner, decoupled from the chat panel: it reads the
   // real status source (store.status converged + store.chatStatus run state fed
@@ -130,10 +135,16 @@ export default function Dashboard(): React.JSX.Element {
         <button
           className="btn primary start-run-btn"
           onClick={() => setShowStart(true)}
-          disabled={runActive}
-          title={runActive ? "已有运行中的 iterate 循环" : "启动一次 iterate 循环"}
+          disabled={runActive || runUnknown}
+          title={
+            runActive
+              ? "已有运行中的 iterate 循环"
+              : runUnknown
+                ? "正在读取运行状态…"
+                : "启动一次 iterate 循环"
+          }
         >
-          {runActive ? "运行中…" : "启动迭代"}
+          {runActive ? "运行中…" : runUnknown ? "读取中…" : "启动迭代"}
         </button>
       </div>
 

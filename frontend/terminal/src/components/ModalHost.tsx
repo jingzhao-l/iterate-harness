@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {Box, Text, useInput} from 'ink';
 import TextInput from 'ink-text-input';
 
@@ -35,14 +35,24 @@ function QuestionModal({
 }): React.JSX.Element {
 	const [extraLines, setExtraLines] = useState<string[]>([]);
 
+	// ink-text-input fires onSubmit for shift+enter too. Set the flag BEFORE
+	// TextInput's handler runs (this hook registers first) so that shift+enter
+	// only appends a newline and never triggers an immediate submit.
+	const shiftEnterRef = useRef(false);
+
 	useInput((_chunk, key) => {
 		if (key.shift && key.return) {
+			shiftEnterRef.current = true;
 			setExtraLines((lines) => [...lines, modalInput]);
 			setModalInput('');
 		}
 	});
 
 	const handleSubmit = (value: string): void => {
+		if (shiftEnterRef.current) {
+			shiftEnterRef.current = false;
+			return;
+		}
 		const allLines = [...extraLines, value];
 		setExtraLines([]);
 		onSubmit(allLines.join('\n'));

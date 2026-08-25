@@ -20,6 +20,7 @@ const PROTOCOL_PREFIX = 'OHJSON:';
 const ASSISTANT_DELTA_FLUSH_MS = 50;
 const ASSISTANT_DELTA_FLUSH_CHARS = 384;
 const TRANSCRIPT_EVENT_FLUSH_MS = 50;
+const CONNECT_TIMEOUT_MS = 20_000;
 
 const stableStringify = (value: unknown): string => JSON.stringify(value);
 
@@ -77,6 +78,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 	const [busy, setBusy] = useState(false);
 	const [busyLabel, setBusyLabel] = useState<string | undefined>(undefined);
 	const [ready, setReady] = useState(false);
+	const [connectError, setConnectError] = useState<string | null>(null);
 	const [todoMarkdown, setTodoMarkdown] = useState('');
 	const [swarmTeammates, setSwarmTeammates] = useState<SwarmTeammateSnapshot[]>([]);
 	const [swarmNotifications, setSwarmNotifications] = useState<SwarmNotificationSnapshot[]>([]);
@@ -86,6 +88,10 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 	const statusRef = useRef<Record<string, unknown>>({});
 	const childRef = useRef<ChildProcessWithoutNullStreams | null>(null);
 	const sentInitialPrompt = useRef(false);
+	// Mirrors of busy/ready so the mount-once event handlers (which capture the
+	// first render's closure) always read the latest values.
+	const busyRef = useRef(false);
+	const readyRef = useRef(false);
 	const lastStatusSnapshotRef = useRef('');
 	const lastTasksSnapshotRef = useRef('');
 	const lastMcpSnapshotRef = useRef('');
@@ -150,6 +156,14 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 		}
 	};
 
+	useEffect(() => {
+		busyRef.current = busy;
+	}, [busy]);
+
+	useEffect(() => {
+		readyRef.current = ready;
+	}, [ready]);
+
 	const sendRequest = (payload: Record<string, unknown>): void => {
 		const child = childRef.current;
 		if (!child || child.stdin.destroyed) {
@@ -181,7 +195,28 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			handleEvent(event);
 		});
 
+		// If the backend never signals `ready`, surface a clear error instead
+		// of hanging on a spinner forever.
+		const connectTimeout = setTimeout(() => {
+			if (!readyRef.current) {
+				setConnectError(
+					`Timed out waiting for backend to connect (${CONNECT_TIMEOUT_MS / 1000}s). Press Ctrl+C to exit.`,
+				);
+			}
+		}, CONNECT_TIMEOUT_MS);
+
+		child.on('error', (err) => {
+			clearTimeout(connectTimeout);
+			setConnectError(`Failed to start backend: ${err.message}. Press Ctrl+C to exit.`);
+			setReady(false);
+			setBusy(false);
+			setBusyLabel(undefined);
+			flushTranscriptItems();
+			queueTranscriptItem({role: 'system', text: `backend error: ${err.message}`});
+		});
+
 		child.on('exit', (code) => {
+			clearTimeout(connectTimeout);
 			flushTranscriptItems();
 			queueTranscriptItem({role: 'system', text: `backend exited with code ${code ?? 0}`});
 			process.exitCode = code ?? 0;
@@ -214,6 +249,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 		process.on('SIGTERM', killChild);
 
 		return () => {
+			clearTimeout(connectTimeout);
 			reader.close();
 			killChild();
 			process.removeListener('exit', killChild);
@@ -225,6 +261,8 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 	const handleEvent = (event: BackendEvent): void => {
 		if (event.type === 'ready') {
 			setReady(true);
+			readyRef.current = true;
+			setConnectError(null);
 			const statusSnapshot = stableStringify(event.state ?? {});
 			lastStatusSnapshotRef.current = statusSnapshot;
 			const nextStatus = event.state ?? {};
@@ -252,6 +290,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 				sentInitialPrompt.current = true;
 				sendRequest({type: 'submit_line', line: config.initial_prompt});
 				setBusy(true);
+				busyRef.current = true;
 			}
 			return;
 		}
@@ -301,7 +340,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 				return;
 			}
 			queueTranscriptItem({role: 'status', text: message});
-			if (busy) {
+			if (busyRef.current) {
 				setBusyLabel(message);
 			}
 			return;
@@ -520,6 +559,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			busy,
 			busyLabel,
 			ready,
+			connectError,
 			todoMarkdown,
 			swarmTeammates,
 			swarmNotifications,
@@ -532,6 +572,6 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			setBusyLabel,
 			sendRequest,
 		}),
-		[assistantBuffer, bridgeSessions, busy, busyLabel, commands, lastLoopState, mcpServers, modal, ready, reviewProgress, reviewRoundTrend, selectRequest, status, swarmNotifications, swarmTeammates, tasks, todoMarkdown, transcript]
+		[assistantBuffer, bridgeSessions, busy, busyLabel, commands, connectError, lastLoopState, mcpServers, modal, ready, reviewProgress, reviewRoundTrend, selectRequest, status, swarmNotifications, swarmTeammates, tasks, todoMarkdown, transcript]
 	);
 }

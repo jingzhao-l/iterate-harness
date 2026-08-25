@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useWebUi } from "../store";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { Finding, TimelineEntry, TriageDecision } from "../types";
 
 // Compose the triage dedup key exactly like the backend (file:::line:::dimension).
@@ -29,6 +30,10 @@ const SEVERITY_LABELS: Record<string, string> = {
   medium: "中",
   low: "低",
 };
+
+// Findings table rows per page — the backend returns the full findings list,
+// so we cap the rendered rows to keep long runs fluid (frontend pagination).
+const FINDINGS_PAGE_SIZE = 50;
 
 function asString(value: unknown): string {
   if (value === null || value === undefined) return "—";
@@ -175,6 +180,7 @@ export default function Runs(): React.JSX.Element {
   const [findingsError, setFindingsError] = useState<string | null>(null);
   const [severityFilter, setSeverityFilter] = useState("");
   const [dimensionFilter, setDimensionFilter] = useState("");
+  const [findingsPage, setFindingsPage] = useState(0);
 
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
@@ -184,6 +190,21 @@ export default function Runs(): React.JSX.Element {
   const [triageError, setTriageError] = useState<string | null>(null);
   const [showTriaged, setShowTriaged] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [clearBusy, setClearBusy] = useState(false);
+
+  // Changing any filter must jump back to the first findings page.
+  useEffect(() => {
+    setFindingsPage(0);
+  }, [severityFilter, dimensionFilter, showTriaged]);
+
+  // The SSE stream bumps logRevision on every decision-log append. Debounce it
+  // so a burst of live events coalesces into one refetch instead of one per
+  // event (which would re-render the whole findings table every second).
+  const [debouncedRevision, setDebouncedRevision] = useState(logRevision);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedRevision(logRevision), 400);
+    return () => clearTimeout(timer);
+  }, [logRevision]);
 
   // Load persisted triage decisions once (reload when the project root changes).
   useEffect(() => {
@@ -241,6 +262,7 @@ export default function Runs(): React.JSX.Element {
   );
 
   const clearTriage = useCallback((): void => {
+    setClearBusy(true);
     setTriageError(null);
     api
       .clearTriage(projectRoot)
@@ -248,7 +270,10 @@ export default function Runs(): React.JSX.Element {
       .catch((error) => {
         setTriageError(error instanceof Error ? error.message : String(error));
       })
-      .finally(() => setConfirmClear(false));
+      .finally(() => {
+        setConfirmClear(false);
+        setClearBusy(false);
+      });
   }, [projectRoot]);
 
   const triagedCount = Object.keys(triage).length;
@@ -292,7 +317,7 @@ export default function Runs(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [typeFilter, timelinePage, logRevision, timelineRetry, projectRoot]);
+  }, [typeFilter, timelinePage, debouncedRevision, timelineRetry, projectRoot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -322,7 +347,7 @@ export default function Runs(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [severityFilter, dimensionFilter, logRevision, findingsRetry, projectRoot]);
+  }, [severityFilter, dimensionFilter, debouncedRevision, findingsRetry, projectRoot]);
 
   const toggleExpanded = (index: number): void => {
     setExpanded((previous) => {
@@ -332,6 +357,18 @@ export default function Runs(): React.JSX.Element {
       return next;
     });
   };
+
+  // Apply the "only triaged" filter, then paginate the visible rows.
+  const filteredFindings = findings.filter((finding) => {
+    if (!showTriaged) return true;
+    return triage[triageKey(finding)] !== undefined;
+  });
+  const findingsPageCount = Math.max(1, Math.ceil(filteredFindings.length / FINDINGS_PAGE_SIZE));
+  const safeFindingsPage = Math.min(findingsPage, findingsPageCount - 1);
+  const pageFindings = filteredFindings.slice(
+    safeFindingsPage * FINDINGS_PAGE_SIZE,
+    (safeFindingsPage + 1) * FINDINGS_PAGE_SIZE,
+  );
 
   return (
     <>
@@ -479,8 +516,8 @@ export default function Runs(): React.JSX.Element {
               </button>
             </div>
           </>
-        ) : findings.length === 0 ? (
-          <p className="empty">暂无 findings</p>
+        ) : filteredFindings.length === 0 ? (
+          <p className="empty">{showTriaged ? "暂无已审批的 findings" : "暂无 findings"}</p>
         ) : (
           <table className="data">
             <thead>
@@ -494,17 +531,12 @@ export default function Runs(): React.JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {findings
-                .filter((finding) => {
-                  if (!showTriaged) return true;
-                  return triage[triageKey(finding)] !== undefined;
-                })
-                .map((finding, index) => {
-                  const key = triageKey(finding);
-                  const decision = triage[key];
-                  const busy = triageBusyKey === key;
-                  return (
-                    <tr key={index} className={decision ? `triage-${decision.decision}` : undefined}>
+              {pageFindings.map((finding) => {
+                const key = triageKey(finding);
+                const decision = triage[key];
+                const busy = triageBusyKey === key;
+                return (
+                  <tr key={key} className={decision ? `triage-${decision.decision}` : undefined}>
                       <td>
                         <span className={`badge ${severityColor(asString(finding.severity).toLowerCase())}`}>
                           {SEVERITY_LABELS[asString(finding.severity).toLowerCase()] ??
@@ -554,6 +586,28 @@ export default function Runs(): React.JSX.Element {
             </tbody>
           </table>
         )}
+        {findingsPageCount > 1 && (
+          <div className="pager">
+            <button
+              className="btn"
+              disabled={safeFindingsPage === 0}
+              onClick={() => setFindingsPage((page) => Math.max(0, page - 1))}
+            >
+              ← 上一页
+            </button>
+            <span className="muted">
+              第 {safeFindingsPage + 1} / {findingsPageCount} 页 · 共{" "}
+              {filteredFindings.length} 条
+            </span>
+            <button
+              className="btn"
+              disabled={safeFindingsPage >= findingsPageCount - 1}
+              onClick={() => setFindingsPage((page) => page + 1)}
+            >
+              下一页 →
+            </button>
+          </div>
+        )}
         {triagedCount > 0 && (
           <div className="pager" style={{ justifyContent: "flex-end" }}>
             <button
@@ -568,20 +622,16 @@ export default function Runs(): React.JSX.Element {
       </section>
 
       {confirmClear && (
-        <div className="modal-backdrop" onClick={() => setConfirmClear(false)}>
-          <div className="modal" onClick={(event) => event.stopPropagation()}>
-            <h3>清除审批记录</h3>
-            <p>将删除全部 {triagedCount} 条 findings 审批记录，此操作不可撤销。</p>
-            <div className="actions">
-              <button className="btn" onClick={() => setConfirmClear(false)}>
-                取消
-              </button>
-              <button className="btn danger" onClick={clearTriage}>
-                确认清除
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="清除审批记录"
+          confirmLabel="确认清除"
+          danger
+          busy={clearBusy}
+          onCancel={() => setConfirmClear(false)}
+          onConfirm={clearTriage}
+        >
+          将删除全部 {triagedCount} 条 findings 审批记录，此操作不可撤销。
+        </ConfirmDialog>
       )}
     </>
   );

@@ -21,18 +21,22 @@ function parseTodoItems(markdown: string): TodoItem[] {
 function TodoPanelInner({
 	markdown,
 	compact: initialCompact = false,
+	active = true,
 }: {
 	markdown: string;
 	compact?: boolean;
+	active?: boolean;
 }): React.JSX.Element | null {
 	const [compact, setCompact] = useState(initialCompact);
 	const items = parseTodoItems(markdown);
 
+	// Only respond to ctrl+t while this panel owns the keys (no modal/picker
+	// overlay), so shortcuts never fire while another surface is focused.
 	useInput((chunk, key) => {
 		if (key.ctrl && chunk === 't') {
 			setCompact((c) => !c);
 		}
-	});
+	}, {isActive: active});
 
 	if (items.length === 0) {
 		return null;

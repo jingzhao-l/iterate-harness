@@ -10,6 +10,8 @@ import {WelcomeBanner} from './WelcomeBanner.js';
 type ToolPair = readonly [TranscriptItem, TranscriptItem];
 type GroupedItem = TranscriptItem | ToolPair;
 
+const MAX_VISIBLE_ITEMS = 40;
+
 function groupToolPairs(items: TranscriptItem[]): GroupedItem[] {
 	const result: GroupedItem[] = [];
 	let i = 0;
@@ -42,12 +44,25 @@ function ConversationViewInner({
 }): React.JSX.Element {
 	const {theme} = useTheme();
 	const isCompactStyle = outputStyle === 'compact';
-	const visible = items.slice(-40);
+	// Fold older items, but never split a tool/tool_result pair across the
+	// fold boundary: back up by one when the slice would start mid-pair.
+	let start = Math.max(0, items.length - MAX_VISIBLE_ITEMS);
+	if (start > 0 && items[start]?.role === 'tool_result' && items[start - 1]?.role === 'tool') {
+		start -= 1;
+	}
+	const foldedCount = start;
+	const visible = items.slice(start);
 	const grouped = groupToolPairs(visible);
 
 	return (
 		<Box flexDirection="column" flexGrow={1}>
 			{showWelcome && items.length === 0 ? <WelcomeBanner version={version} /> : null}
+
+			{foldedCount > 0 ? (
+				<Box marginTop={0}>
+					<Text dimColor>{`… 更早 ${foldedCount} 条已折叠`}</Text>
+				</Box>
+			) : null}
 
 			{grouped.map((group, index) => {
 				if (Array.isArray(group)) {

@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import RunStatusCard from "./RunStatusCard";
 import { StartDialog } from "./StartDialog";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type { ChatMessage } from "../types";
 import { api } from "../api";
 import { useWebUi } from "../store";
@@ -15,11 +16,17 @@ function canSend(state: string | undefined, waitingFor: string | undefined): boo
   return state === "running" || (state === "paused" && waitingFor !== "none");
 }
 
+// Rendering more than this many bubbles at once hurts long sessions; older
+// messages are folded behind a notice instead of being dropped from the store.
+const MAX_VISIBLE_MESSAGES = 200;
+
 export default function ChatPanel(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [showStart, setShowStart] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [input, setInput] = useState("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const chatMessages = useWebUi((state) => state.chatMessages);
   const chatStatus = useWebUi((state) => state.chatStatus);
@@ -57,10 +64,26 @@ export default function ChatPanel(): React.JSX.Element {
     return () => window.removeEventListener("iterate:toggle-chat", onToggle);
   }, []);
 
-  // Auto-scroll to bottom on new messages.
+  // Auto-scroll to bottom on new messages — but only when the user is already
+  // near the bottom. Smooth-scrolling every new bubble fights a user who
+  // scrolled up to re-read earlier content, and on a fast message stream it
+  // keeps cancelling the previous animation.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
+    const el = listRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [chatMessages.length]);
+
+  // Escape closes the panel (mirrors the "/" shortcut that opens it).
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open]);
 
   const handleSend = async (): Promise<void> => {
     const text = input.trim();
@@ -86,7 +109,7 @@ export default function ChatPanel(): React.JSX.Element {
     }
   };
 
-  const handleControl = async (action: "pause" | "resume" | "stop"): Promise<void> => {
+  const runControl = async (action: "pause" | "resume" | "stop"): Promise<void> => {
     try {
       const result = await api.chatControl(action);
       if (result.message) pushToast("info", result.message);
@@ -94,6 +117,23 @@ export default function ChatPanel(): React.JSX.Element {
       const message = error instanceof Error ? error.message : String(error);
       pushToast("error", message);
     }
+  };
+
+  const handleControl = (action: "pause" | "resume" | "stop"): void => {
+    if (action === "stop") {
+      // Destructive — require the same secondary confirmation the dashboard
+      // banner uses, so the panel and dashboard behave consistently.
+      setConfirmStop(true);
+      return;
+    }
+    void runControl(action);
+  };
+
+  const handleStopConfirm = async (): Promise<void> => {
+    setStopping(true);
+    await runControl("stop");
+    setStopping(false);
+    setConfirmStop(false);
   };
 
   const handleStart = (): void => setShowStart(true);
@@ -106,16 +146,24 @@ export default function ChatPanel(): React.JSX.Element {
 
   const decisionOption = chatStatus?.options ?? null;
 
+  // Fold old messages so a long session never renders hundreds of bubbles.
+  const visibleMessages = chatMessages.slice(-MAX_VISIBLE_MESSAGES);
+  const foldedCount = chatMessages.length - visibleMessages.length;
+
   return (
     <>
-      {/* Toggle button — always visible bottom-right */}
+      {/* Toggle button — always visible bottom-right. The label is stable so
+          screen readers never announce just the "!" pending badge. */}
       <button
         className={`chat-toggle ${hasPending ? "has-pending" : ""}`}
         onClick={() => setOpen((prev) => !prev)}
-        title={open ? "收起对话面板" : "打开对话面板"}
+        aria-label={open ? "收起对话面板" : "打开对话面板"}
+        aria-expanded={open}
       >
         {hasPending ? (
-          <span className="chat-toggle-badge">!</span>
+          <span className="chat-toggle-badge" aria-hidden="true">
+            !
+          </span>
         ) : (
           <svg
             className="chat-toggle-icon"
@@ -136,10 +184,15 @@ export default function ChatPanel(): React.JSX.Element {
 
       {/* Slide-out panel */}
       {open && (
-        <aside className="chat-panel">
+        <aside className="chat-panel" role="region" aria-label="对话控制">
           <div className="chat-header">
             <span className="chat-title">对话控制</span>
-            <button className="btn" onClick={() => setOpen(false)}>
+            <button
+              className="btn"
+              onClick={() => setOpen(false)}
+              autoFocus
+              aria-label="关闭对话面板"
+            >
               关闭
             </button>
           </div>
@@ -226,7 +279,7 @@ export default function ChatPanel(): React.JSX.Element {
             )}
 
             {/* Message list */}
-            <div className="chat-messages">
+            <div className="chat-messages" ref={listRef}>
               {chatError && (
                 <div className="chat-error-banner" role="alert">
                   <span>{chatError}</span>
@@ -256,10 +309,14 @@ export default function ChatPanel(): React.JSX.Element {
                   暂无对话记录。启动迭代后，系统消息和决策请求将显示在此处。
                 </p>
               )}
-              {chatMessages.map((msg) => (
+              {foldedCount > 0 && (
+                <p className="muted" style={{ textAlign: "center", padding: "8px 12px" }}>
+                  … 更早的 {foldedCount} 条消息已折叠
+                </p>
+              )}
+              {visibleMessages.map((msg) => (
                 <ChatBubble key={msg.id} message={msg} />
               ))}
-              <div ref={messagesEndRef} />
             </div>
           </div>
 
@@ -300,6 +357,21 @@ export default function ChatPanel(): React.JSX.Element {
             pushToast("success", "迭代已启动");
           }}
         />
+      )}
+
+      {/* Destructive stop — same confirmation contract as the dashboard. */}
+      {confirmStop && (
+        <ConfirmDialog
+          title="停止迭代"
+          confirmLabel="确认停止"
+          danger
+          busy={stopping}
+          onCancel={() => setConfirmStop(false)}
+          onConfirm={() => void handleStopConfirm()}
+        >
+          将停止当前运行的迭代循环。已完成的轮次结果会保留在决策日志中，可稍后通过
+          <code> /iterate resume</code> 恢复。确定停止吗？
+        </ConfirmDialog>
       )}
     </>
   );

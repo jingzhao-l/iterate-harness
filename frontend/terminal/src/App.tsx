@@ -1,4 +1,4 @@
-import React, {useDeferredValue, useEffect, useMemo, useState} from 'react';
+import React, {useDeferredValue, useEffect, useMemo, useRef, useState} from 'react';
 import {Box, Text, useApp, useInput} from 'ink';
 
 import {CommandPicker} from './components/CommandPicker.js';
@@ -8,6 +8,7 @@ import {ModalHost} from './components/ModalHost.js';
 import {PromptInput} from './components/PromptInput.js';
 import {ReviewProgressPanel} from './components/ReviewProgressPanel.js';
 import {SelectModal, type SelectOption} from './components/SelectModal.js';
+import {Spinner} from './components/Spinner.js';
 import {StatusBar} from './components/StatusBar.js';
 import {SwarmPanel} from './components/SwarmPanel.js';
 import {TodoPanel} from './components/TodoPanel.js';
@@ -16,6 +17,8 @@ import {ThemeProvider, useTheme} from './theme/ThemeContext.js';
 import type {FrontendConfig} from './types.js';
 
 const rawReturnSubmit = process.env.ITERATE_FRONTEND_RAW_RETURN === '1';
+const HISTORY_LIMIT = 100;
+const SHUTDOWN_GRACE_MS = 300;
 const scriptedSteps = (() => {
 	const raw = process.env.ITERATE_FRONTEND_SCRIPT;
 	if (!raw) {
@@ -66,12 +69,15 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const [modalInput, setModalInput] = useState('');
 	const [history, setHistory] = useState<string[]>([]);
 	const [historyIndex, setHistoryIndex] = useState(-1);
-	const [lastEscapeAt, setLastEscapeAt] = useState(0);
+	const [transientMessage, setTransientMessage] = useState<string | null>(null);
 	const [scriptIndex, setScriptIndex] = useState(0);
 	const [pickerIndex, setPickerIndex] = useState(0);
 	const [selectModal, setSelectModal] = useState<SelectModalState>(null);
 	const [selectIndex, setSelectIndex] = useState(0);
 	const session = useBackendSession(config, () => exit());
+	// Guards for one-shot key flows (raw-return question submit, Ctrl+C exit).
+	const questionHandledRef = useRef(false);
+	const exitRequestedRef = useRef(false);
 	const deferredTranscript = useDeferredValue(session.transcript);
 	const deferredAssistantBuffer = useDeferredValue(session.assistantBuffer);
 	const deferredStatus = useDeferredValue(session.status);
@@ -82,6 +88,14 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const deferredReviewProgress = useDeferredValue(session.reviewProgress);
 	const deferredReviewRoundTrend = useDeferredValue(session.reviewRoundTrend);
 	const deferredLastLoopState = useDeferredValue(session.lastLoopState);
+
+	useEffect(() => {
+		if (!transientMessage) {
+			return;
+		}
+		const timer = setTimeout(() => setTransientMessage(null), 2500);
+		return () => clearTimeout(timer);
+	}, [transientMessage]);
 
 	// Backend select_prompt modal (iterate pause menu) — reuse the shared
 	// selectIndex state; reset whenever a new prompt arrives.
@@ -139,6 +153,9 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	}, [session.commands, input]);
 
 	const showPicker = commandHints.length > 0 && !session.busy && !session.modal && !selectModal;
+	// Panels' keyboard shortcuts (ctrl+w / ctrl+t) only fire when no modal or
+	// picker is open, so they never steal keys meant for those surfaces.
+	const panelInputsActive = !session.modal && !selectModal && !backendSelectPrompt && !showPicker;
 	const outputStyle = String(session.status.output_style ?? 'default');
 
 	useEffect(() => {
@@ -216,8 +233,14 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				session.setBusyLabel('Stopping current operation...');
 				return;
 			}
-			session.sendRequest({type: 'shutdown'});
-			exit();
+			if (!exitRequestedRef.current) {
+				exitRequestedRef.current = true;
+				session.sendRequest({type: 'shutdown'});
+				// Give the backend a moment to flush and ack the shutdown
+				// request before unmounting, so graceful shutdown is not
+				// skipped by an immediate exit.
+				setTimeout(() => exit(), SHUTDOWN_GRACE_MS);
+			}
 			return;
 		}
 
@@ -260,8 +283,12 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		}
 
 		// --- Scripted raw return ---
-		if (rawReturnSubmit && key.return) {
+		// Only handles question-modal submission; normal input is submitted by
+		// TextInput's onSubmit (suppressed while the command picker is open) so
+		// Enter neither double-submits nor bypasses command completion.
+		if (rawReturnSubmit && key.return && !key.shift && !showPicker) {
 			if (session.modal?.kind === 'question') {
+				questionHandledRef.current = true;
 				session.sendRequest({
 					type: 'question_response',
 					request_id: session.modal.request_id,
@@ -271,10 +298,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				setModalInput('');
 				return;
 			}
-			if (!session.modal && !session.busy && input.trim()) {
-				onSubmit(input);
-				return;
-			}
+			return;
 		}
 
 		// --- Permission modal (MUST be before busy check — modal appears while busy) ---
@@ -300,8 +324,20 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			return;
 		}
 
-		// --- Question modal (also appears while busy) ---
-		if (session.modal?.kind === 'question') {
+		// --- Question / MCP auth modal (also appears while busy) ---
+		if (session.modal?.kind === 'question' || session.modal?.kind === 'mcp_auth') {
+			// Esc cancels/rejects the pending request instead of falling
+			// through to the interrupt or idle-Esc branches.
+			if (isEscape) {
+				session.sendRequest({
+					type: 'question_response',
+					request_id: session.modal.request_id,
+					answer: '',
+				});
+				session.setModal(null);
+				setModalInput('');
+				return;
+			}
 			return; // Let TextInput in ModalHost handle input
 		}
 
@@ -331,7 +367,13 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				return;
 			}
 			if (key.escape) {
-				answerSelect(backendSelectPrompt.cancelValue || backendSelectPrompt.options[0]!.value);
+				if (backendSelectPrompt.cancelValue) {
+					answerSelect(backendSelectPrompt.cancelValue);
+				} else {
+					// No explicit cancel value — send an explicit empty cancel
+					// instead of accidentally selecting the first option.
+					answerSelect('');
+				}
 				return;
 			}
 			const num = parseInt(chunk, 10);
@@ -396,19 +438,19 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			}
 			if (isEscape) {
 				setInput('');
+				setHistoryIndex(-1);
 				return;
 			}
 		}
 
 		if (isEscape) {
-			const now = Date.now();
-			if (input && now - lastEscapeAt < 500) {
+			// Single Esc clears the input (with feedback); busy Esc is handled
+			// above as an interrupt.
+			if (input) {
 				setInput('');
 				setHistoryIndex(-1);
-				setLastEscapeAt(0);
-				return;
+				setTransientMessage('input cleared');
 			}
-			setLastEscapeAt(now);
 			return;
 		}
 
@@ -432,8 +474,30 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		// PromptInput.  Do NOT duplicate it here — that causes double requests.
 	});
 
+	const addHistory = (value: string): void => {
+		const line = value.trim();
+		setHistory((items) => {
+			const next = [...items, line];
+			if (next.length > HISTORY_LIMIT) {
+				next.splice(0, next.length - HISTORY_LIMIT);
+			}
+			// Drop adjacent duplicates (e.g. repeat /plan toggles).
+			const deduped: string[] = [];
+			for (const item of next) {
+				if (deduped[deduped.length - 1] !== item) {
+					deduped.push(item);
+				}
+			}
+			return deduped;
+		});
+	};
+
 	const onSubmit = (value: string): void => {
 		if (session.modal?.kind === 'question') {
+			if (questionHandledRef.current) {
+				questionHandledRef.current = false;
+				return;
+			}
 			session.sendRequest({
 				type: 'question_response',
 				request_id: session.modal.request_id,
@@ -448,18 +512,23 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				session.sendRequest({type: 'interrupt'});
 				session.setBusyLabel('Stopping current operation...');
 				setInput('');
+				return;
+			}
+			// Give feedback instead of silently dropping the submit while busy.
+			if (value.trim() && session.busy) {
+				setTransientMessage('busy — press esc to stop or type /stop');
 			}
 			return;
 		}
 		// Check if it's an interactive command
 		if (handleCommand(value)) {
-			setHistory((items) => [...items, value]);
+			addHistory(value);
 			setHistoryIndex(-1);
 			setInput('');
 			return;
 		}
 		session.sendRequest({type: 'submit_line', line: value});
-		setHistory((items) => [...items, value]);
+		addHistory(value);
 		setHistoryIndex(-1);
 		setInput('');
 		session.setBusy(true);
@@ -505,16 +574,15 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			) : null}
 
 			{/* Frontend select modal (permissions picker, etc.) */}
+		{/* Frontend select modal takes priority over the backend select prompt
+			so the two never stack. */}
 		{selectModal ? (
 			<SelectModal
 				title={selectModal.title}
 				options={selectModal.options}
 				selectedIndex={selectIndex}
 			/>
-		) : null}
-
-		{/* Backend select prompt (iterate pause menu) */}
-		{backendSelectPrompt && backendSelectPrompt.options.length > 0 ? (
+		) : backendSelectPrompt && backendSelectPrompt.options.length > 0 ? (
 			<SelectModal
 				title={backendSelectPrompt.title}
 				options={backendSelectPrompt.options}
@@ -529,7 +597,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 
 			{/* Todo panel */}
 		{session.ready && deferredTodoMarkdown ? (
-			<TodoPanel markdown={deferredTodoMarkdown} />
+			<TodoPanel markdown={deferredTodoMarkdown} active={panelInputsActive} />
 		) : null}
 
 		{/* Iterate last-run resume hint (hidden once a live loop dashboard appears) */}
@@ -544,7 +612,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 
 			{/* Swarm panel */}
 			{session.ready && (deferredSwarmTeammates.length > 0 || deferredSwarmNotifications.length > 0) ? (
-				<SwarmPanel teammates={deferredSwarmTeammates} notifications={deferredSwarmNotifications} />
+				<SwarmPanel teammates={deferredSwarmTeammates} notifications={deferredSwarmNotifications} active={panelInputsActive} />
 			) : null}
 
 			{/* Status bar (only after backend is ready) */}
@@ -554,9 +622,15 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 
 			{/* Input — show loading indicator until backend is ready */}
 			{!session.ready ? (
-				<Box>
-					<Text color={theme.colors.warning}>Connecting to backend...</Text>
-				</Box>
+				session.connectError ? (
+					<Box flexDirection="column">
+						<Text color={theme.colors.error}>{session.connectError}</Text>
+					</Box>
+				) : (
+					<Box>
+						<Spinner label="Connecting to backend..." />
+					</Box>
+				)
 			) : session.modal || selectModal ? null : (
 				<PromptInput
 					busy={session.busy}
@@ -578,9 +652,16 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 						<Text color={theme.colors.primary}>/</Text> commands{'  '}
 						<Text color={theme.colors.primary}>tab</Text> mode{'  '}
 						<Text color={theme.colors.primary}>{'\u2191\u2193'}</Text> history{'  '}
-						<Text color={theme.colors.primary}>{session.busy ? '/stop' : 'esc'}</Text> stop{'  '}
+						<Text color={theme.colors.primary}>{session.busy ? '/stop' : 'esc'}</Text>{' '}
+						{session.busy ? 'stop' : 'clear input'}{'  '}
 						<Text color={theme.colors.primary}>ctrl+c</Text> {session.busy ? 'stop' : 'exit'}
 					</Text>
+				</Box>
+			) : null}
+
+			{transientMessage ? (
+				<Box>
+					<Text color={theme.colors.info} dimColor>{transientMessage}</Text>
 				</Box>
 			) : null}
 		</Box>

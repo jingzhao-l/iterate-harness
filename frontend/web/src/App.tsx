@@ -55,6 +55,7 @@ const CONN_LABELS: Record<string, string> = {
 function ProjectRootInput(): React.JSX.Element {
   const projectRoot = useWebUi((state) => state.projectRoot);
   const setProjectRoot = useWebUi((state) => state.setProjectRoot);
+  const pushToast = useWebUi((state) => state.pushToast);
   const [value, setValue] = useState(projectRoot);
 
   useEffect(() => {
@@ -63,7 +64,15 @@ function ProjectRootInput(): React.JSX.Element {
 
   const commit = (): void => {
     const trimmed = value.trim();
-    if (trimmed !== projectRoot) setProjectRoot(trimmed);
+    if (trimmed !== projectRoot) {
+      setProjectRoot(trimmed);
+      // The switch tears down + rebuilds the SSE subscription; acknowledge it
+      // so the user knows the path was accepted (and isn't left guessing).
+      pushToast(
+        "info",
+        trimmed ? `已切换项目根目录：${trimmed}` : "已切换为自动探测项目根目录",
+      );
+    }
   };
 
   return (
@@ -96,6 +105,7 @@ export default function App(): React.JSX.Element {
   const toasts = useWebUi((state) => state.toasts);
   const dismissToast = useWebUi((state) => state.dismissToast);
   const connectionState = useWebUi((state) => state.connectionState);
+  const modalCount = useWebUi((state) => state.modalCount);
   const navigate = useNavigate();
   const gBuffer = useRef<string | null>(null);
   const gBufferTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -108,6 +118,11 @@ export default function App(): React.JSX.Element {
   // Global keyboard shortcuts.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      // An open modal (ConfirmDialog/StartDialog) suppresses all global
+      // shortcuts so typing inside the dialog can never navigate the page
+      // behind it or toggle the chat panel.
+      if (modalCount > 0) return;
+
       const target = event.target as HTMLElement | null;
       // Don't hijack typing in inputs/textareas/contenteditable.
       if (
@@ -130,8 +145,17 @@ export default function App(): React.JSX.Element {
         return;
       }
 
-      // "g <key>" jump navigation.
-      if (event.key.toLowerCase() === "g" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      // "g <key>" jump navigation. The first "g" arms the buffer; a second
+      // single character consumes it (G_BUFFER_ROUTES includes g→/reports, so
+      // "gg" jumps to Reports). Any unmapped second key disarms the buffer so
+      // a stray keystroke can't leave the shortcut armed for 800ms.
+      if (
+        event.key.toLowerCase() === "g" &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        gBuffer.current !== "g"
+      ) {
         event.preventDefault();
         if (gBufferTimer.current) clearTimeout(gBufferTimer.current);
         gBuffer.current = "g";
@@ -142,11 +166,12 @@ export default function App(): React.JSX.Element {
       }
 
       if (gBuffer.current === "g" && event.key.length === 1) {
-        const route = G_BUFFER_ROUTES[event.key.toLowerCase()];
+        const key = event.key.toLowerCase();
+        if (gBufferTimer.current) clearTimeout(gBufferTimer.current);
+        gBuffer.current = null;
+        const route = G_BUFFER_ROUTES[key];
         if (route) {
           event.preventDefault();
-          gBuffer.current = null;
-          if (gBufferTimer.current) clearTimeout(gBufferTimer.current);
           navigate(route);
         }
       }
@@ -154,7 +179,7 @@ export default function App(): React.JSX.Element {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navigate]);
+  }, [navigate, modalCount]);
 
   return (
     <div className="app-shell">
@@ -195,7 +220,9 @@ export default function App(): React.JSX.Element {
         </ErrorBoundary>
       </main>
 
-      <div className="toasts">
+      {/* Announce new toasts to assistive technology; each toast also carries
+          role="status" so the live region is announced on insert. */}
+      <div className="toasts" aria-live="polite">
         {toasts.map((toast) => (
           <div
             key={toast.id}

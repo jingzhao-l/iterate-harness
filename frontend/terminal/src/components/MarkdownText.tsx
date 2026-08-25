@@ -6,6 +6,28 @@ import stringWidth from 'string-width';
 import {useTheme} from '../theme/ThemeContext.js';
 import type {ThemeConfig} from '../theme/builtinThemes.js';
 
+// Soft cap for code lines: terminal windows are rarely wider than 100 cols,
+// and Ink will wrap otherwise-unwrappable long lines unpredictably.
+const MAX_CODE_LINE_WIDTH = 100;
+const CODE_TRUNCATION_SUFFIX = '…';
+
+function truncateCodeLine(line: string): string {
+	if (stringWidth(line) <= MAX_CODE_LINE_WIDTH) {
+		return line;
+	}
+	let width = 0;
+	let out = '';
+	for (const char of line) {
+		const charWidth = stringWidth(char);
+		if (width + charWidth > MAX_CODE_LINE_WIDTH - 1) {
+			break;
+		}
+		out += char;
+		width += charWidth;
+	}
+	return `${out}${CODE_TRUNCATION_SUFFIX}`;
+}
+
 function getInlineFallbackText(token: Token): string {
 	if ('text' in token && typeof token.text === 'string') {
 		return token.text;
@@ -33,7 +55,10 @@ function getInlineDisplayText(tokens: Token[] | undefined): string {
 				return (token as Tokens.Codespan).text;
 			case 'link': {
 				const l = token as Tokens.Link;
-				return l.text || l.href;
+				const label = l.text || l.href;
+				// Keep table width math in sync with the inline renderer, which
+				// appends the URL after the label.
+				return label !== l.href ? `${label} (${l.href})` : label;
 			}
 			case 'image': {
 				const image = token as Tokens.Image;
@@ -107,6 +132,9 @@ function renderInline(tokens: Token[] | undefined, theme: ThemeConfig): React.Re
 				return (
 					<Text key={i} color={theme.colors.info}>
 						{label}
+						{label !== l.href ? (
+							<Text dimColor> ({l.href})</Text>
+						) : null}
 					</Text>
 				);
 			}
@@ -134,6 +162,70 @@ function renderBlocks(tokens: Token[] | undefined, theme: ThemeConfig): React.Re
 	return tokens.map((token, i) => (
 		<MarkdownBlock key={i} token={token} theme={theme} />
 	));
+}
+
+function renderListItem(
+	item: Tokens.ListItem,
+	index: number,
+	list: Tokens.List,
+	theme: ThemeConfig,
+): React.JSX.Element {
+	const bullet = list.ordered ? `${(Number(list.start) || 1) + index}. ` : '• ';
+	const blocks = item.tokens;
+	// Tight items wrap all content in a single text token with inline children.
+	const isTight = blocks.length === 1 && blocks[0]?.type === 'text';
+	if (isTight) {
+		const textToken = blocks[0] as Tokens.Text;
+		const inline =
+			textToken.tokens && textToken.tokens.length > 0 ? renderInline(textToken.tokens, theme) : textToken.text;
+		return (
+			<Box flexDirection="row">
+				<Text color={theme.colors.primary}>{bullet}</Text>
+				<Box flexGrow={1}>
+					<Text>{inline}</Text>
+				</Box>
+			</Box>
+		);
+	}
+	// Loose / nested items contain block tokens (paragraph, nested list, code).
+	// Render the first meaningful block on the bullet line and the rest below,
+	// preserving nesting instead of flattening it into a single line.
+	let bulletRendered = false;
+	return (
+		<Box flexDirection="column">
+			{blocks.map((block, i) => {
+				if (block.type === 'space') {
+					return null;
+				}
+				const content =
+					block.type === 'paragraph' ? (
+						renderInline((block as Tokens.Paragraph).tokens, theme)
+					) : block.type === 'text' ? (
+						((block as Tokens.Text).tokens?.length ?? 0) > 0
+							? renderInline((block as Tokens.Text).tokens, theme)
+							: (block as Tokens.Text).text
+					) : (
+						<MarkdownBlock token={block} theme={theme} />
+					);
+				if (!bulletRendered) {
+					bulletRendered = true;
+					return (
+						<Box key={i} flexDirection="row">
+							<Text color={theme.colors.primary}>{bullet}</Text>
+							<Box flexGrow={1}>
+								<Text>{content}</Text>
+							</Box>
+						</Box>
+					);
+				}
+				return (
+					<Box key={i} marginLeft={2}>
+						{content}
+					</Box>
+				);
+			})}
+		</Box>
+	);
 }
 
 function MarkdownBlock({
@@ -185,7 +277,7 @@ function MarkdownBlock({
 					) : null}
 					{lines.map((line, i) => (
 						<Text key={i} color={theme.colors.accent}>
-							{line}
+							{truncateCodeLine(line)}
 						</Text>
 					))}
 				</Box>
@@ -212,26 +304,9 @@ function MarkdownBlock({
 			const l = token as Tokens.List;
 			return (
 				<Box flexDirection="column" marginTop={0} marginLeft={2}>
-					{l.items.map((item, i) => {
-						// For tight lists, item.tokens = [{type:'text', tokens:[...inline]}]
-						// For loose lists, item.tokens = [{type:'paragraph', tokens:[...inline]}]
-						const inlineTokens: Token[] = item.tokens.flatMap((t) =>
-							'tokens' in t && t.tokens ? (t.tokens as Token[]) : [],
-						);
-						const bullet = l.ordered ? `${(Number(l.start) || 1) + i}. ` : '• ';
-						return (
-							<Box key={i} flexDirection="row">
-								<Text color={theme.colors.primary}>{bullet}</Text>
-								<Box flexGrow={1}>
-									<Text>
-										{inlineTokens.length > 0
-											? renderInline(inlineTokens, theme)
-											: item.text}
-									</Text>
-								</Box>
-							</Box>
-						);
-					})}
+					{l.items.map((item, i) => (
+						<React.Fragment key={i}>{renderListItem(item, i, l, theme)}</React.Fragment>
+					))}
 				</Box>
 			);
 		}

@@ -1,11 +1,14 @@
 // StartDialog — modal to launch an iterate loop from the WebUI (design §18.3
 // POST /chat/start). Lets the user pick the mode (review/run/resume), whether
 // to limit to changed files, and the git ref for the changed-files diff.
+// Application modal: Escape closes, focus is trapped + restored, Enter submits
+// (wrapped in a <form>), and the mode options carry aria-pressed state.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { StartRequest } from "../types";
 import { api } from "../api";
 import { useWebUi } from "../store";
+import { useDialog } from "./useDialog";
 
 interface StartDialogProps {
   onClose: () => void;
@@ -34,6 +37,11 @@ const MODES: Array<{
   },
 ];
 
+// Git refs must be non-empty and must not contain whitespace or the special
+// characters git itself forbids (~ ^ : ? * [ \ and a trailing dot-slash
+// tricks). We validate on the client so a typo surfaces before the POST.
+const REF_INVALID_RE = /[\s~^:?*[\]\\]/;
+
 export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX.Element {
   const [mode, setMode] = useState<StartRequest["mode"]>("review");
   const [changed, setChanged] = useState(false);
@@ -43,6 +51,19 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
   const pushToast = useWebUi((state) => state.pushToast);
   const setChatStatus = useWebUi((state) => state.setChatStatus);
   const projectRoot = useWebUi((state) => state.projectRoot);
+
+  // While a request is in flight the dialog stays open and is not dismissible.
+  const { containerRef, titleId } = useDialog<HTMLFormElement>({
+    open: true,
+    onClose: busy ? undefined : onClose,
+  });
+
+  const refError = useMemo(() => {
+    if (mode === "resume" || !changed) return null;
+    if (!ref.trim()) return "请输入 git ref（如 HEAD 或 main）";
+    if (REF_INVALID_RE.test(ref)) return "git ref 不能包含空格或特殊字符（~ ^ : ? * [ \\）";
+    return null;
+  }, [mode, changed, ref]);
 
   // "changed"/"ref" only apply to review/run (the diff baseline for a
   // changed-only pass). "resume" continues from the last checkpoint, so those
@@ -54,11 +75,11 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
   };
 
   const handleStart = async (): Promise<void> => {
-    if (busy) return;
+    if (busy || refError) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await api.chatStart({ mode, changed, ref }, projectRoot);
+      const result = await api.chatStart({ mode, changed, ref: ref.trim() }, projectRoot);
       // Optimistically set an "starting" status so the panel reflects it immediately.
       setChatStatus({
         state: "starting",
@@ -89,17 +110,31 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
 
   return (
     <div className="modal-backdrop" onClick={busy ? undefined : onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
-        <h3>启动迭代</h3>
+      <form
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-busy={busy}
+        ref={containerRef}
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void handleStart();
+        }}
+      >
+        <h3 id={titleId}>启动迭代</h3>
         <p className="muted" style={{ margin: "0 0 14px" }}>
           在服务器进程内启动一次 iterate 循环，进度与决策会实时推送到对话面板。
         </p>
 
-        <div className="mode-options">
+        <div className="mode-options" role="group" aria-label="运行模式">
           {MODES.map((option) => (
             <button
               key={option.value}
+              type="button"
               className={`mode-option ${mode === option.value ? "active" : ""}`}
+              aria-pressed={mode === option.value}
               onClick={() => selectMode(option.value)}
               disabled={busy}
             >
@@ -131,21 +166,23 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
               disabled={busy}
               placeholder="HEAD"
               style={{ marginTop: 6 }}
+              aria-invalid={refError !== null}
             />
+            {refError && <span className="field-error">{refError}</span>}
           </label>
         )}
 
         {error && <p className="form-error">{error}</p>}
 
         <div className="actions" style={{ marginTop: 16 }}>
-          <button className="btn" onClick={onClose} disabled={busy}>
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>
             取消
           </button>
-          <button className="btn primary" onClick={() => void handleStart()} disabled={busy}>
+          <button type="submit" className="btn primary" disabled={busy || refError !== null}>
             {busy ? "启动中…" : "启动"}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

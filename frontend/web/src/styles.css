@@ -8,14 +8,14 @@
   --border: #e2e8f0;
   --border-strong: #cbd5e1;
   --text: #0f172a;
-  --text-muted: #64748b;
-  --text-soft: #94a3b8;
+  --text-muted: #475569;
+  --text-soft: #64748b;
   --heading: #334155;
   --accent: #2563eb;
   --accent-soft: #eff6ff;
   --critical: #b91c1c;
   --high: #ea580c;
-  --medium: #ca8a04;
+  --medium: #a16207;
   --low: #2563eb;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --radius: 10px;
@@ -32,15 +32,15 @@
   --border: #1f2b45;
   --border-strong: #33445f;
   --text: #e6edf7;
-  --text-muted: #94a3b8;
-  --text-soft: #64748b;
+  --text-muted: #a8b6c8;
+  --text-soft: #94a3b8;
   --heading: #cbd5e1;
   --accent: #3b82f6;
   --accent-soft: #172554;
   --critical: #f87171;
   --high: #fb923c;
-  --medium: #facc15;
-  --low: #60a5fa;
+  --medium: #a16207;
+  --low: #2563eb;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
@@ -124,11 +124,18 @@ pre {
   color: var(--heading);
   font-weight: 500;
   transition: background 0.12s ease;
+  text-decoration: none;
 }
 
 .nav a:hover {
   background: var(--accent-soft);
-  text-decoration: none;
+}
+
+/* Visible focus ring for keyboard-only navigation (Tab through the sidebar). */
+.nav a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: var(--accent-soft);
 }
 
 .nav a.active {
@@ -576,6 +583,14 @@ textarea.code-input {
   color: var(--critical);
   font-size: 12.5px;
   margin: 8px 0 0;
+}
+
+/* Inline field validation hint (StartDialog git-ref input). */
+.field-error {
+  display: block;
+  color: var(--critical);
+  font-size: 12px;
+  margin-top: 4px;
 }
 
 /* ---- link-style buttons (report list) ---- */
@@ -1027,7 +1042,7 @@ table.data tr.row-active td {
 
 .bubble-time {
   display: block;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-soft);
   margin-top: 4px;
   font-family: var(--mono);
@@ -1291,7 +1306,7 @@ tr.triage-reject td {
 
 .tool-card-time {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-soft);
 }
 
