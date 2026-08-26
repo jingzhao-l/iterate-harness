@@ -595,20 +595,23 @@ class TestIterateScheduleCommand:
     def test_schedule_add_requires_cron(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(app, ["iterate", "schedule", "add"])
+        plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert result.exit_code != 0
-        assert "--cron is required" in result.output
+        assert "--cron is required" in plain_output
 
     def test_schedule_invalid_action_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(app, ["iterate", "schedule", "pause"])
+        plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert result.exit_code != 0
-        assert "action must be add|remove|status" in result.output
+        assert "action must be add|remove|status" in plain_output
 
     def test_schedule_invalid_cron_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(app, ["iterate", "schedule", "add", "--cron", "not-cron"])
+        plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert result.exit_code != 0
-        assert "cron" in result.output
+        assert "cron" in plain_output
 
 
 class TestIterateCronCommand:
