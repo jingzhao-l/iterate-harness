@@ -161,6 +161,8 @@ class QueryContext:
     max_turns: int | None = 200
     hook_executor: HookExecutor | None = None
     tool_metadata: dict[str, object] | None = None
+    # LLM reasoning effort ('low' | 'medium' | 'high'); None = provider default.
+    reasoning_effort: str | None = None
     # Iterate loop policy (design §11.4.1 kernel fix #1): when set, the
     # engine consults it after every turn's tool results to enforce
     # deterministic review convergence. ``None`` keeps upstream behavior.
@@ -767,6 +769,7 @@ async def run_query(
                     system_prompt=context.system_prompt,
                     max_tokens=effective_max_tokens,
                     tools=context.tool_registry.to_api_schema(),
+                    reasoning_effort=context.reasoning_effort,
                 )
             ):
                 if isinstance(event, ApiTextDeltaEvent):

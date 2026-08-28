@@ -498,3 +498,113 @@ def test_version_flag_emits_no_update_hint_when_disabled(tmp_path: Path, monkeyp
     assert result.exit_code == 0
     assert __version__ in result.output
     assert "Run `ih update`" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# Auto-update (background throttled check + silent install)
+# ---------------------------------------------------------------------------
+
+
+def _clear_ci_env(monkeypatch) -> None:
+    """Remove CI-detection vars so a normal auto-update path can run hermetically."""
+    for var in update_module.CI_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_auto_update_enabled_by_default(monkeypatch):
+    monkeypatch.delenv(update_module.AUTO_UPDATE_ENV, raising=False)
+    assert update_module.auto_update_enabled() is True
+
+
+def test_auto_update_can_be_disabled(monkeypatch):
+    monkeypatch.setenv(update_module.AUTO_UPDATE_ENV, "0")
+    assert update_module.auto_update_enabled() is False
+
+
+def test_auto_update_interval_parses(monkeypatch):
+    monkeypatch.setenv(update_module.AUTO_UPDATE_INTERVAL_ENV, "6")
+    assert update_module.auto_update_interval_hours() == 6
+    monkeypatch.setenv(update_module.AUTO_UPDATE_INTERVAL_ENV, "not-a-number")
+    assert update_module.auto_update_interval_hours() == update_module.AUTO_UPDATE_DEFAULT_INTERVAL_HOURS
+    monkeypatch.setenv(update_module.AUTO_UPDATE_INTERVAL_ENV, "0")
+    assert update_module.auto_update_interval_hours() == 1  # clamped to a minimum of 1h
+
+
+def test_should_run_auto_update_when_no_state():
+    assert update_module.should_run_auto_update({}) is True
+
+
+def test_should_run_auto_update_throttled():
+    recent = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert update_module.should_run_auto_update({"last_attempt_at": recent.isoformat()}) is False
+    old = datetime.now(timezone.utc) - timedelta(hours=25)
+    assert update_module.should_run_auto_update({"last_attempt_at": old.isoformat()}) is True
+
+
+def test_run_auto_update_installs_newer_version(tmp_path: Path, monkeypatch):
+    _clear_ci_env(monkeypatch)
+    state_file = tmp_path / "auto-update-state.json"
+    commands: list[list[str]] = []
+    result = update_module.run_auto_update(
+        get_fn=response_for,
+        runner=make_runner(commands),
+        state_path=state_file,
+    )
+    assert result is not None
+    assert result.success is True
+    assert commands, "an install command should have been attempted"
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["last_status"] == "ok"
+    assert state["last_attempt_version"] == "9.9.9"
+
+
+def test_run_auto_update_skips_when_already_current(tmp_path: Path, monkeypatch):
+    _clear_ci_env(monkeypatch)
+    state_file = tmp_path / "auto-update-state.json"
+    monkeypatch.setattr(update_module, "__version__", "9.9.9")
+    result = update_module.run_auto_update(get_fn=response_for, state_path=state_file)
+    assert result is None
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["last_status"] == "up-to-date"
+
+
+def test_run_auto_update_skips_in_ci(tmp_path: Path, monkeypatch):
+    state_file = tmp_path / "auto-update-state.json"
+    monkeypatch.setenv("CI", "1")
+    result = update_module.run_auto_update(get_fn=response_for, state_path=state_file)
+    assert result is None
+    assert not state_file.exists()  # no state touched when skipped
+
+
+def test_run_auto_update_respects_throttle(tmp_path: Path, monkeypatch):
+    _clear_ci_env(monkeypatch)
+    state_file = tmp_path / "auto-update-state.json"
+    recent = datetime.now(timezone.utc) - timedelta(minutes=5)
+    state_file.write_text(
+        json.dumps({"last_attempt_at": recent.isoformat(), "last_status": "up-to-date"}),
+        encoding="utf-8",
+    )
+    fetched: list[str] = []
+
+    def counting_get(url: str, *, timeout: float, headers: dict[str, str]) -> FakeResponse:
+        fetched.append(url)
+        return response_for(url, timeout=timeout, headers=headers)
+
+    result = update_module.run_auto_update(get_fn=counting_get, state_path=state_file)
+    assert result is None
+    assert fetched == []  # throttle window means no network call at all
+
+
+def test_run_auto_update_disabled_skips_everything(tmp_path: Path, monkeypatch):
+    state_file = tmp_path / "auto-update-state.json"
+    monkeypatch.setenv(update_module.AUTO_UPDATE_ENV, "0")
+    result = update_module.run_auto_update(get_fn=response_for, state_path=state_file)
+    assert result is None
+    assert not state_file.exists()
+
+
+def test_cli_start_spawns_no_thread_when_disabled(monkeypatch):
+    runner = CliRunner()
+    monkeypatch.setenv(update_module.AUTO_UPDATE_ENV, "0")
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0

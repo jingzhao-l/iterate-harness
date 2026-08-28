@@ -178,6 +178,32 @@ class TestLoadEffectiveConfig:
         assert effective.source == "defaults"
         assert effective.override is None
 
+    def test_reasoning_effort_defaults_to_none(self, tmp_path):
+        d = make_temp_dir(tmp_path)
+        d.mkdir()
+        effective = load_effective_config(d)
+        assert effective.config.reasoning_effort is None
+
+    def test_reasoning_effort_parsed_from_config(self, tmp_path):
+        d = make_temp_dir(tmp_path)
+        write_config(d, "reasoning_effort: low\n")
+        effective = load_effective_config(d)
+        assert effective.config.reasoning_effort == "low"
+
+    def test_reasoning_effort_rejects_invalid_values(self, tmp_path):
+        d = make_temp_dir(tmp_path)
+        write_config(d, "reasoning_effort: turbo\n")
+        effective = load_effective_config(d)
+        assert effective.config.reasoning_effort is None
+
+    def test_config_from_dict_accepts_all_valid_values(self):
+        for value in ("low", "medium", "high"):
+            cfg = config_from_dict({"reasoning_effort": value})
+            assert cfg.reasoning_effort == value
+
+    def test_default_config_dict_carries_reasoning_effort(self):
+        assert _default_config_dict()["reasoning_effort"] is None
+
     def test_nested_partial_git_override_keeps_other_git_defaults(self, tmp_path):
         d = make_temp_dir(tmp_path)
         write_config(d, "git:\n  target_branch: develop\n")

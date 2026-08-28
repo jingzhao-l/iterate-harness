@@ -562,3 +562,153 @@ def perform_update(
     if verified and compare_versions(current, verified) > 0:
         result.message = f"{result.message} (now running {verified})"
     return result
+
+
+# ---------------------------------------------------------------------------
+# Auto-update (throttled background check + silent install on CLI start)
+# ---------------------------------------------------------------------------
+
+AUTO_UPDATE_ENV = "ITERATE_AUTO_UPDATE"
+AUTO_UPDATE_INTERVAL_ENV = "ITERATE_AUTO_UPDATE_INTERVAL_HOURS"
+AUTO_UPDATE_STATE_FILE = "auto-update-state.json"
+AUTO_UPDATE_DEFAULT_INTERVAL_HOURS = 24
+
+# Presence of any of these means we are inside a CI runner: auto-updating
+# there would silently mutate the build environment, so it is skipped.
+CI_ENV_VARS = ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "TRAVIS", "CIRCLECI", "JENKINS_URL")
+
+
+def auto_update_enabled() -> bool:
+    """Return whether the automatic update check is enabled (default: on)."""
+    raw = os.environ.get(AUTO_UPDATE_ENV, "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def auto_update_interval_hours() -> int:
+    """Return the throttling interval for auto-update checks (min 1h)."""
+    raw = os.environ.get(AUTO_UPDATE_INTERVAL_ENV, "").strip()
+    try:
+        hours = int(raw)
+    except (TypeError, ValueError):
+        return AUTO_UPDATE_DEFAULT_INTERVAL_HOURS
+    return max(1, hours)
+
+
+def _is_ci_environment() -> bool:
+    return any(os.environ.get(name) for name in CI_ENV_VARS)
+
+
+def get_auto_update_state_path() -> Path:
+    """Return the path of the auto-update throttle state file."""
+    return get_config_dir() / AUTO_UPDATE_STATE_FILE
+
+
+def read_auto_update_state(state_path: Optional[Path] = None) -> dict[str, str]:
+    """Read the auto-update state (best-effort; returns {} on any problem)."""
+    path = state_path if state_path is not None else get_auto_update_state_path()
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {str(key): str(value) for key, value in payload.items() if value}
+
+
+def write_auto_update_state(state: dict[str, str], state_path: Optional[Path] = None) -> None:
+    """Persist the auto-update state (best-effort; failures are logged only)."""
+    path = state_path if state_path is not None else get_auto_update_state_path()
+    try:
+        path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    except OSError as error:
+        log.debug("could not persist auto-update state: %s", error)
+
+
+def should_run_auto_update(
+    state: dict[str, str],
+    interval_hours: int = AUTO_UPDATE_DEFAULT_INTERVAL_HOURS,
+) -> bool:
+    """Return True when the throttle window since the last attempt has passed."""
+    last_attempt = state.get("last_attempt_at")
+    if not last_attempt:
+        return True
+    try:
+        timestamp = datetime.fromisoformat(last_attempt)
+    except ValueError:
+        return True
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - timestamp
+    return age > timedelta(hours=interval_hours)
+
+
+def run_auto_update(
+    *,
+    get_fn: Optional[_GetFn] = None,
+    runner: Optional[Callable[[list[str]], subprocess.CompletedProcess[str]]] = None,
+    state_path: Optional[Path] = None,
+    timeout: float = HTTP_TIMEOUT_SECONDS,
+) -> Optional[UpdateResult]:
+    """Check for a newer release and silently install it when due.
+
+    Designed to run in a background thread during normal CLI use: it never
+    raises, respects ``ITERATE_AUTO_UPDATE`` (default on) and skips CI
+    environments. Returns the UpdateResult when an install was attempted,
+    otherwise None.
+    """
+    if not auto_update_enabled():
+        return None
+    if _is_ci_environment():
+        log.debug("auto-update skipped: CI environment detected")
+        return None
+
+    state_file = state_path if state_path is not None else get_auto_update_state_path()
+    state = read_auto_update_state(state_file)
+    if not should_run_auto_update(state, auto_update_interval_hours()):
+        return None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    latest = fetch_latest_version(get_fn=get_fn, timeout=timeout)
+    if latest is None:
+        write_auto_update_state(
+            {"last_attempt_at": now_iso, "last_attempt_version": "", "last_status": "unreachable"},
+            state_file,
+        )
+        return None
+
+    installed = __version__
+    if compare_versions(installed, latest) <= 0:
+        write_auto_update_state(
+            {"last_attempt_at": now_iso, "last_attempt_version": latest, "last_status": "up-to-date"},
+            state_file,
+        )
+        return None
+
+    method = current_install_method()
+    try:
+        result = apply_update(
+            method=method,
+            home=Path.home(),
+            latest_version=latest,
+            runner=runner,
+        )
+    except Exception as error:  # auto-update is best-effort; never crash the caller
+        log.debug("auto-update failed: %s", error)
+        write_auto_update_state(
+            {"last_attempt_at": now_iso, "last_attempt_version": latest, "last_status": "error"},
+            state_file,
+        )
+        return None
+
+    status = "ok" if result.success else "failed"
+    write_auto_update_state(
+        {"last_attempt_at": now_iso, "last_attempt_version": latest, "last_status": status},
+        state_file,
+    )
+    print(
+        f"iterate-harness auto-updated {installed} -> {latest} ({result.method}).",
+        file=sys.stderr,
+    )
+    return result

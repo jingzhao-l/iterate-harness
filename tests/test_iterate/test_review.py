@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from iterate_harness.iterate.review import (
+    ReviewAttachment,
     SEVERITY_RANK,
     aggregate_rounds,
     build_review_plan,
@@ -13,6 +14,8 @@ from iterate_harness.iterate.review import (
     finding_key,
     findings_schema,
     normalize_summary,
+    parse_attachments,
+    plan_to_dict,
     reviewer_task_prompt,
     sort_findings,
 )
@@ -314,3 +317,69 @@ class TestBuildReviewPlan:
         plan = build_review_plan(config=base_config(), mode="dry-run", max_review_rounds=4)
         assert [d.id for d in plan.dimensions] == ["correctness", "security"]
         assert "COVERAGE RULE" not in plan.dimensions[0].reviewer_prompt
+
+    def test_parse_attachments_drops_malformed_entries(self):
+        raw = [
+            {"path": "screens/a.png", "caption": "layout bug"},
+            {"data": "QUJD", "media_type": "image/png"},
+            {"path": "   "},  # blank path — dropped
+            {"caption": "no source"},  # no path/data — dropped
+            "not-a-dict",  # non-dict — dropped
+            42,  # non-dict — dropped
+        ]
+        parsed = parse_attachments(raw)
+        assert len(parsed) == 2
+        assert parsed[0].path == "screens/a.png"
+        assert parsed[0].caption == "layout bug"
+        assert parsed[1].data == "QUJD"
+        assert parsed[1].media_type == "image/png"
+
+    def test_parse_attachments_empty_input(self):
+        assert parse_attachments(None) == []
+        assert parse_attachments([]) == []
+        assert parse_attachments("nope") == []
+
+    def test_reviewer_prompt_injects_attachment_clause_when_provided(self):
+        prompt = reviewer_task_prompt(
+            dimension="security",
+            goal="Improve quality",
+            scope="full",
+            mode="dry-run",
+            output_language="English",
+            attachments=[
+                ReviewAttachment(path="screens/hits.png", caption="layout bug"),
+                ReviewAttachment(data="QUJD", media_type="image/png", caption="repro"),
+            ],
+        )
+        assert "ATTACHED VISUAL CONTEXT" in prompt
+        assert "screens/hits.png (layout bug)" in prompt
+        assert "inline image/png image (repro)" in prompt
+        assert "image_to_text" in prompt
+
+    def test_reviewer_prompt_omits_attachment_clause_by_default(self):
+        prompt = reviewer_task_prompt(
+            dimension="security",
+            goal="Improve quality",
+            scope="full",
+            mode="dry-run",
+            output_language="English",
+        )
+        assert "ATTACHED VISUAL CONTEXT" not in prompt
+
+    def test_plan_threads_attachments_into_every_reviewer_prompt(self):
+        plan = build_review_plan(
+            config=base_config(),
+            mode="dry-run",
+            max_review_rounds=2,
+            raw_attachments=[{"path": "mock/onboarding.png", "caption": "onboarding"}],
+        )
+        assert len(plan.attachments) == 1
+        assert plan.attachments[0].path == "mock/onboarding.png"
+        for dimension in plan.dimensions:
+            assert "mock/onboarding.png (onboarding)" in dimension.reviewer_prompt
+
+    def test_plan_without_attachments_serializes_empty_list(self):
+        plan = build_review_plan(config=base_config(), mode="dry-run", max_review_rounds=2)
+        assert plan.attachments == []
+        serialized = plan_to_dict(plan)
+        assert serialized["attachments"] == []

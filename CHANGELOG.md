@@ -2,6 +2,30 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [1.16.2] - 2026-08-28
+
+### Added
+
+- **Pure-automatic background self-update** (`update.py`, `cli.py`): on every
+  `ih` startup a daemon thread silently checks the GitHub release feed for a
+  newer version and installs it without any confirmation. Throttled to once per
+  day by default (`ITERATE_AUTO_UPDATE_INTERVAL_HOURS`), skips CI environments,
+  and can be disabled with `ITERATE_AUTO_UPDATE=0`. The npm wrapper applies the
+  new wheel automatically on the next run once published.
+- **`reasoning_effort` config** (`iterate/types.py`, `iterate/config_loader.py`,
+  `engine/query_engine.py`, `api/openai_client.py`, `config/config.schema.json`):
+  `low` / `medium` / `high` threaded through schema → loader → engine →
+  OpenAI-compatible request body. `low` saves tokens on quick review rounds,
+  `high` deepens critical passes; unset follows the provider default. Invalid
+  values degrade to the provider default rather than raising.
+
+### Fixed
+
+- Auto-update tests were environment-dependent: inside CI (or any shell with
+  `CI=true`) they were silently skipped, so the actual install path never got
+  asserted. Normal-path cases now clear the CI-detect variables, making them
+  hermetic on GitHub Actions and locally.
+
 ## [1.16.1] - 2026-08-28
 
 ### Changed

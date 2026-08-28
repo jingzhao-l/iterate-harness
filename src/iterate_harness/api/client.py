@@ -36,6 +36,10 @@ class ApiMessageRequest:
     system_prompt: str | None = None
     max_tokens: int = 4096
     tools: list[dict[str, Any]] = field(default_factory=list)
+    # LLM reasoning effort ('low' | 'medium' | 'high'); None = provider default.
+    # Only forwarded to providers that accept the OpenAI ``reasoning_effort``
+    # parameter (DeepSeek reasoning models etc.). Ignored otherwise.
+    reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True)

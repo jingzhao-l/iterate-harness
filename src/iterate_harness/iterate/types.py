@@ -229,6 +229,11 @@ class IterateConfig:
     # when exceeded, the policy injects a backoff message instead of
     # hammering the endpoint. ``None`` disables throttling.
     max_turns_per_minute: int | None = None
+    # LLM reasoning effort for review passes ('low' | 'medium' | 'high').
+    # None = follow the provider default. Threaded into the OpenAI-compatible
+    # request body so quick rounds can save tokens and critical rounds can
+    # deepen analysis (dsh 0.1.1-rc.7+ exposes the same 'low' effort).
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
     # Session workspace isolation (design §11.3.2 finding #7): when True, a
     # normal-mode iterate loop runs its fix rounds inside a dedicated git
     # worktree (``iterate/round-N``) so concurrent sessions never write the

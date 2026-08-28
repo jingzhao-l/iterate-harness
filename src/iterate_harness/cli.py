@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
@@ -780,6 +781,27 @@ def _version_callback(value: bool) -> None:
 
             maybe_print_update_hint(current=__version__)
         raise typer.Exit()
+
+
+def _maybe_start_background_auto_update() -> None:
+    """Start a best-effort background auto-update check (daemon thread).
+
+    The check is throttled (default: once per 24h), skips CI environments
+    and never raises — it must never delay or break CLI startup.
+    """
+    try:
+        from iterate_harness import update as update_module
+
+        if not update_module.auto_update_enabled():
+            return
+        if update_module._is_ci_environment():
+            return
+        threading.Thread(
+            target=update_module.run_auto_update,
+            daemon=True,
+        ).start()
+    except Exception:  # pragma: no cover - defensive; startup must not fail
+        return
 
 
 app = typer.Typer(
@@ -2702,6 +2724,7 @@ def main(
     ),
 ) -> None:
     """Start an interactive session or run a single prompt."""
+    _maybe_start_background_auto_update()
     if ctx.invoked_subcommand is not None:
         return
 

@@ -327,6 +327,41 @@ def findings_schema() -> dict[str, object]:
     }
 
 
+def _attachment_clause(attachments: list[ReviewAttachment]) -> str:
+    """Build the "attached visual context" instruction block for a reviewer prompt.
+
+    ``path``/``data`` attachments (screenshots, mockups, failure repros) are
+    evidence a reviewer must weigh alongside the code — this clause names each
+    one and mandates that the reviewer inspect/consider it (e.g. by opening the
+    file with a vision-capable tool or the ``image_to_text`` bridge) before
+    judging. Returns ``""`` when there are no attachments.
+    """
+    if not attachments:
+        return ""
+    lines: list[str] = []
+    for attachment in attachments:
+        if attachment.path:
+            suffix = f" ({attachment.caption})" if attachment.caption else ""
+            lines.append(f"- {attachment.path}{suffix}")
+        elif attachment.data:
+            kind = attachment.media_type or "image"
+            suffix = f" ({attachment.caption})" if attachment.caption else ""
+            lines.append(f"- inline {kind} image{suffix}")
+    if not lines:
+        return ""
+    return (
+        "ATTACHED VISUAL CONTEXT (mandatory): the following image attachment(s) "
+        "were provided with this review — each one is part of the evidence you "
+        "must weigh:\n"
+        + "\n".join(lines)
+        + "\nYou MUST inspect/consider EVERY attachment before judging your "
+        "dimension (open it with a vision-capable tool, or use image_to_text if "
+        "your model cannot see images). If an attachment is inaccessible, state "
+        "that and judge solely on the code. Do not ignore an attachment just "
+        "because it is not code."
+    )
+
+
 def reviewer_task_prompt(
     *,
     dimension: str,
@@ -338,6 +373,7 @@ def reviewer_task_prompt(
     atomic_max_lines: int = DEFAULT_ATOMIC_MAX_LINES,
     changed_files: list[str] | None = None,
     scope_files: list[str] | None = None,
+    attachments: list[ReviewAttachment] | None = None,
 ) -> str:
     """Build the task prompt for one dimension's reviewer subagent.
 
@@ -358,6 +394,10 @@ def reviewer_task_prompt(
         f"Goal: {goal}",
         f"Scope: {'entire codebase' if scope == 'full' else 'changed files only'}.",
     ]
+    if attachments:
+        clause = _attachment_clause(attachments)
+        if clause:
+            parts.append(clause)
     if scope_files:
         listing = "\n".join(f"- {path}" for path in scope_files if isinstance(path, str))
         parts.append(
@@ -525,6 +565,71 @@ class DimensionPlan:
 
 
 @dataclass
+class ReviewAttachment:
+    """An image/visual attachment threaded into a review (screenshot, mockup, failure repro).
+
+    ``path`` resolves relative to the project root; ``data`` is a base64
+    payload described by ``media_type``. ``caption`` gives human context.
+    Reviewers are told (via ``reviewer_task_prompt``) to inspect/consider every
+    attachment before judging their dimension.
+    """
+
+    path: str | None = None
+    data: str | None = None
+    media_type: str = "image/png"
+    caption: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to the tool-layer wire shape (camelCase)."""
+        out: dict[str, object] = {}
+        if self.path:
+            out["path"] = self.path
+        if self.data:
+            out["data"] = self.data
+            out["media_type"] = self.media_type
+        if self.caption:
+            out["caption"] = self.caption
+        return out
+
+
+def parse_attachments(raw: object) -> list[ReviewAttachment]:
+    """Defensively normalize arbitrary input into a list of attachments.
+
+    Only entries carrying a non-empty ``path`` or ``data`` survive; everything
+    else is dropped (never raises). Mirrors the TS plugin's tool-side guard.
+    """
+    if not isinstance(raw, list):
+        return []
+    result: list[ReviewAttachment] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        data = entry.get("data")
+        if not (isinstance(path, str) and path.strip()) and not (
+            isinstance(data, str) and data.strip()
+        ):
+            continue
+        result.append(
+            ReviewAttachment(
+                path=path if isinstance(path, str) and path.strip() else None,
+                data=data if isinstance(data, str) and data.strip() else None,
+                media_type=(
+                    entry["media_type"]
+                    if isinstance(entry.get("media_type"), str) and entry["media_type"]
+                    else "image/png"
+                ),
+                caption=(
+                    entry["caption"]
+                    if isinstance(entry.get("caption"), str) and entry["caption"]
+                    else None
+                ),
+            )
+        )
+    return result
+
+
+@dataclass
 class ReviewPlan:
     """Canonical review spec handed to the orchestrator."""
 
@@ -534,6 +639,7 @@ class ReviewPlan:
     dimensions: list[DimensionPlan]
     max_review_rounds: int
     known_intentional: list[KnownIntentional] = field(default_factory=list)
+    attachments: list[ReviewAttachment] = field(default_factory=list)
 
 
 def _resource_prompt_clause(resources: DimensionResources | None) -> str:
@@ -562,6 +668,8 @@ def build_review_plan(
     known_intentional: list[KnownIntentional] | None = None,
     changed_files: list[str] | None = None,
     scope_files: list[str] | None = None,
+    attachments: list[ReviewAttachment] | None = None,
+    raw_attachments: object = None,
 ) -> ReviewPlan:
     """Build a review plan: rounds, dimensions, and per-dimension prompts.
 
@@ -596,6 +704,14 @@ def build_review_plan(
     else:
         batches = [None]
 
+    # Prefer the already-parsed list; otherwise defensively parse the raw wire
+    # value (tool-layer passes the JSON array through as `raw_attachments`).
+    safe_attachments = (
+        parse_attachments(raw_attachments)
+        if raw_attachments is not None
+        else [a for a in (attachments or []) if isinstance(a, ReviewAttachment)]
+    )
+
     dimensions: list[DimensionPlan] = []
     for d in config.dimensions:
         for index, batch in enumerate(batches):
@@ -613,6 +729,7 @@ def build_review_plan(
                         atomic_max_lines=config.atomic.max_lines,
                         changed_files=safe_changed or None,
                         scope_files=batch,
+                        attachments=safe_attachments,
                     )
                     + _resource_prompt_clause(config.dimension_resources.get(d)),
                     resources=config.dimension_resources.get(d),
@@ -626,6 +743,7 @@ def build_review_plan(
         dimensions=dimensions,
         max_review_rounds=max_review_rounds,
         known_intentional=known_intentional or [],
+        attachments=safe_attachments,
     )
 
 
@@ -654,6 +772,7 @@ def plan_to_dict(plan: ReviewPlan) -> dict[str, object]:
             {"file": k.file, "line": k.line, "dimension": k.dimension, "reason": k.reason}
             for k in plan.known_intentional
         ],
+        "attachments": [a.to_dict() for a in plan.attachments],
     }
 
 

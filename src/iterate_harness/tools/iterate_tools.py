@@ -219,6 +219,19 @@ class IterateReviewInput(BaseModel):
         default=None,
         description="Changed-only quick review: repo-relative delta files to pin the review scope",
     )
+    attachments: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Optional (plan only): image/visual attachments to thread into the "
+            "review, e.g. [{\"path\": \"screens/hits.png\", \"caption\": "
+            "\"reproduced layout bug\"}]. Each entry: {path?, data?, "
+            "media_type?, caption?} — path resolves relative to the project "
+            "root, data is a base64 payload (media_type e.g. image/png), "
+            "caption gives human context. Injected as a mandatory clause into "
+            "every dimension reviewer prompt so screenshots/mockups/failure "
+            "repros are weighed alongside the code."
+        ),
+    )
     dimension_usage: dict[str, int] | None = Field(
         default=None,
         description=(
@@ -277,6 +290,7 @@ class IterateReviewTool(BaseTool):
             known_intentional=_load_known_intentional(context),
             changed_files=args.changed_files,
             scope_files=scope_files,
+            raw_attachments=args.attachments,
         )
         return _json_output({"plan": review.plan_to_dict(plan)})
 

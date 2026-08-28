@@ -298,6 +298,10 @@ class OpenAICompatibleClient:
             "stream_options": {"include_usage": True},
         }
         params.update(_token_limit_param_for_model(request.model, request.max_tokens))
+        # Reasoning effort: only forwarded when configured — reasoning-model
+        # providers accept it, plain chat models may reject the extra field.
+        if request.reasoning_effort:
+            params["reasoning_effort"] = request.reasoning_effort
         if openai_tools:
             params["tools"] = openai_tools
             # Some providers (Kimi) error on empty reasoning_content in

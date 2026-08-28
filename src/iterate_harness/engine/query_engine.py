@@ -59,6 +59,20 @@ def _default_iterate_policy(cwd: Path) -> object | None:
         return None
 
 
+def _default_reasoning_effort(cwd: Path) -> str | None:
+    """Read the project's configured ``reasoning_effort`` (None = provider default).
+
+    Mirrors the defensive wiring of :func:`_default_iterate_policy`: settings
+    are read best-effort so a broken/unreadable config never breaks the engine.
+    """
+    try:
+        from iterate_harness.iterate.settings import project_config
+
+        return project_config(cwd).config.reasoning_effort
+    except Exception:  # noqa: BLE001 - config wiring must never break the engine
+        return None
+
+
 class QueryEngine:
     """Owns conversation history and the tool-aware model loop."""
 
@@ -81,6 +95,7 @@ class QueryEngine:
         hook_executor: HookExecutor | None = None,
         tool_metadata: dict[str, object] | None = None,
         iterate_policy: object | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._api_client = api_client
         self._tool_registry = tool_registry
@@ -102,6 +117,11 @@ class QueryEngine:
         # Iterate enforcement: auto-enable from kernel settings unless the
         # caller supplies an explicit policy. Passing ``False`` disables.
         self._iterate_policy = iterate_policy if iterate_policy is not None else _default_iterate_policy(self._cwd)
+        # Reasoning effort: explicit argument wins, else the project config
+        # (`iterate.config.yaml` `reasoning_effort`), else provider default.
+        self._reasoning_effort = (
+            reasoning_effort if reasoning_effort is not None else _default_reasoning_effort(self._cwd)
+        )
 
     @property
     def messages(self) -> list[ConversationMessage]:
@@ -250,6 +270,7 @@ class QueryEngine:
             hook_executor=self._hook_executor,
             tool_metadata=self._tool_metadata,
             iterate_policy=self._iterate_policy if self._iterate_policy else None,
+            reasoning_effort=self._reasoning_effort,
         )
         query_messages = list(self._messages)
         coordinator_context = self._build_coordinator_context_message()
@@ -281,6 +302,7 @@ class QueryEngine:
             hook_executor=self._hook_executor,
             tool_metadata=self._tool_metadata,
             iterate_policy=self._iterate_policy if self._iterate_policy else None,
+            reasoning_effort=self._reasoning_effort,
         )
         async for event, usage in run_query(context, self._messages):
             if usage is not None:

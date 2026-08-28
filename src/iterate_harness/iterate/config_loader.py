@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import yaml
 
@@ -113,6 +114,7 @@ def _default_config_dict() -> dict[str, object]:
         "token_budget": cfg.token_budget,
         "budget_usd": cfg.budget_usd,
         "max_turns_per_minute": cfg.max_turns_per_minute,
+        "reasoning_effort": cfg.reasoning_effort,
         "worktree_isolation": cfg.worktree_isolation,
         "thresholds": thresholds_to_dict(cfg.thresholds),
     }
@@ -224,6 +226,21 @@ def parse_worktree_isolation(raw: object) -> tuple[bool, list[str]]:
     if isinstance(raw, bool):
         return raw, []
     return False, ["worktree_isolation must be a boolean"]
+
+
+#: Accepted ``reasoning_effort`` values (OpenAI-compatible ``reasoning_effort``).
+REASONING_EFFORT_VALUES: frozenset[str] = frozenset({"low", "medium", "high"})
+
+
+def parse_reasoning_effort(raw: object) -> Literal["low", "medium", "high"] | None:
+    """Parse ``reasoning_effort`` (``low``/``medium``/``high``; ``None``=provider default).
+
+    Invalid values degrade to ``None`` (provider default) rather than raising,
+    mirroring the defensive fallback used by the other scalar parsers.
+    """
+    if isinstance(raw, str) and raw in REASONING_EFFORT_VALUES:
+        return raw  # type: ignore[return-value]  # membership is exhaustive
+    return None
 
 
 def _parse_scope_chunk_size(raw: object, fallback: int) -> int:
@@ -426,6 +443,7 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     token_budget, _budget_errors = parse_token_budget(data.get("token_budget"))
     budget_usd, _budget_usd_errors = parse_budget_usd(data.get("budget_usd"))
     max_turns_per_minute, _rate_errors = parse_rate_limit(data.get("max_turns_per_minute"))
+    reasoning_effort = parse_reasoning_effort(data.get("reasoning_effort"))
     worktree_isolation, _worktree_errors = parse_worktree_isolation(data.get("worktree_isolation"))
     thresholds, _threshold_errors = parse_thresholds(data.get("thresholds"))
 
@@ -443,6 +461,7 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
         token_budget=token_budget,
         budget_usd=budget_usd,
         max_turns_per_minute=max_turns_per_minute,
+        reasoning_effort=reasoning_effort,
         worktree_isolation=worktree_isolation,
         thresholds=thresholds,
         onboarding=dict(onboarding) if isinstance(onboarding, dict) else None,
