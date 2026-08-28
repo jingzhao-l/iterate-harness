@@ -18,6 +18,14 @@ All notable changes to iterate-harness should be recorded in this file.
   OpenAI-compatible request body. `low` saves tokens on quick review rounds,
   `high` deepens critical passes; unset follows the provider default. Invalid
   values degrade to the provider default rather than raising.
+- **Visual-attachment passthrough into reviews** (`iterate/review.py`,
+  `iterate/__init__.py`, `tools/iterate_tools.py`):
+  `iterate_review` `plan` now accepts `attachments` entries
+  (`{path?, data?, media_type?, caption?}`); screenshots/mockups/failure
+  repros are injected as a mandatory "ATTACHED VISUAL CONTEXT" clause into
+  every dimension reviewer prompt via `reviewer_task_prompt`, and the plan
+  serializes them (`plan_to_dict`). Entries with neither `path` nor `data`
+  are defensively dropped.
 
 ### Fixed
 
