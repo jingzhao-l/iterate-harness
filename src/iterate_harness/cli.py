@@ -2003,10 +2003,15 @@ def _specialize_setup_target(manager, target: str) -> str:
         if choice == "openai-compatible":
             return choice
         presets = {
-            "openrouter": ("OpenRouter", "https://openrouter.ai/api/v1", ""),
-            "orcarouter": ("OrcaRouter", "https://api.orcarouter.ai/v1", "orcarouter/auto"),
+            "openrouter": ("OpenRouter", "https://openrouter.ai/api/v1", "", "openai_api_key"),
+            "orcarouter": (
+                "OrcaRouter",
+                "https://api.orcarouter.ai/v1",
+                "orcarouter/auto",
+                "orcarouter_api_key",
+            ),
         }
-        label, suggested_base_url, suggested_model = presets[choice]
+        label, suggested_base_url, suggested_model, auth_source = presets[choice]
         base_url = _text_prompt("Base URL", default=suggested_base_url).strip()
         if not base_url:
             raise typer.BadParameter("Base URL cannot be empty.")
@@ -2019,7 +2024,7 @@ def _specialize_setup_target(manager, target: str) -> str:
             label=label,
             provider="openai",
             api_format="openai",
-            auth_source=default_auth_source_for_provider("openai", "openai"),
+            auth_source=auth_source,
             base_url=base_url,
             model=model,
             lock_model=False,

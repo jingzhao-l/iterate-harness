@@ -2,7 +2,7 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
-## [Unreleased]
+## [1.16.0] - 2026-08-28
 
 ### Added
 
@@ -20,6 +20,17 @@ All notable changes to iterate-harness should be recorded in this file.
 - **Docs**: OrcaRouter section moved above Quick Start in `README.md` /
   `README.zh-CN.md`, highlighting the free-model tier and clarifying that only
   `ORCA_KEY` is required (base URL / model are baked into the profile).
+
+### Fixed
+
+- **OrcaRouter setup auth source consistency** (`cli.py`): the interactive
+  `ih setup` OrcaRouter preset now stores the key under the `orcarouter_api_key`
+  credential slot (`ORCA_KEY` domain) instead of the OpenAI slot, matching the
+  built-in profile so `ORCA_KEY`-based auth works after guided setup.
+- **Custom profile signup-url inheritance** (`config/settings.py`): a
+  user-defined profile overriding a built-in one now inherits the built-in
+  `signup_url` when it does not set its own, keeping the referral link active
+  for customized OrcaRouter profiles.
 
 ## [1.15.0] - 2026-08-26
 

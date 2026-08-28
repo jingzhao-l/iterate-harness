@@ -571,6 +571,8 @@ class Settings(BaseModel):
             builtin = merged.get(name)
             if builtin is not None and profile.base_url is None and builtin.base_url is not None:
                 profile = profile.model_copy(update={"base_url": builtin.base_url})
+            if builtin is not None and profile.signup_url is None and builtin.signup_url is not None:
+                profile = profile.model_copy(update={"signup_url": builtin.signup_url})
             merged[name] = profile
         return merged
 
