@@ -68,9 +68,14 @@ ApiStreamEvent = ApiTextDeltaEvent | ApiMessageCompleteEvent | ApiRetryEvent
 
 
 class SupportsStreamingMessages(Protocol):
-    """Protocol used by the query engine in tests and production."""
+    """Protocol used by the query engine in tests and production.
 
-    async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+    Declared as a plain generator-returning method (not ``async def``): the
+    implementations are async generators, whose call result is an
+    ``AsyncIterator`` rather than a coroutine.
+    """
+
+    def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield streamed events for the request."""
 
 
@@ -91,17 +96,17 @@ def _get_retry_delay(attempt: int, exc: Exception | None = None) -> float:
 
     # Check for Retry-After header
     if isinstance(exc, APIStatusError):
-        retry_after = getattr(exc, "headers", {})
-        if hasattr(retry_after, "get"):
-            val = retry_after.get("retry-after")
+        headers = getattr(exc, "headers", None)
+        if isinstance(headers, dict):
+            val = headers.get("retry-after")
             if val:
                 try:
                     return min(float(val), MAX_DELAY)
-                except (ValueError, TypeError) as exc:
-                    log.debug("Ignoring invalid retry-after header %r: %s", val, exc)
+                except (ValueError, TypeError) as invalid_exc:
+                    log.debug("Ignoring invalid retry-after header %r: %s", val, invalid_exc)
 
-    delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
-    jitter = random.uniform(0, delay * 0.25)
+    delay: float = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
+    jitter: float = random.uniform(0.0, delay * 0.25)
     return delay + jitter
 
 

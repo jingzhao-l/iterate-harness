@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from iterate_harness.config.settings import Settings
 from iterate_harness.hooks.events import HookEvent
 from iterate_harness.hooks.schemas import HookDefinition
+from iterate_harness.plugins.types import LoadedPlugin
 
 
 class HookRegistry:
@@ -37,7 +39,7 @@ class HookRegistry:
         return "\n".join(lines)
 
 
-def load_hook_registry(settings, plugins=None) -> HookRegistry:
+def load_hook_registry(settings: Settings, plugins: list[LoadedPlugin] | None = None) -> HookRegistry:
     """Load hooks from the current settings object."""
     registry = HookRegistry()
     for raw_event, hooks in settings.hooks.items():
@@ -50,11 +52,12 @@ def load_hook_registry(settings, plugins=None) -> HookRegistry:
     for plugin in plugins or []:
         if not plugin.enabled:
             continue
-        for raw_event, hooks in plugin.hooks.items():
+        for raw_event, plugin_event_hooks in plugin.hooks.items():
             try:
                 event = HookEvent(raw_event)
             except ValueError:
                 continue
-            for hook in hooks:
-                registry.register(event, hook)
+            for plugin_hook in plugin_event_hooks:
+                if isinstance(plugin_hook, HookDefinition):
+                    registry.register(event, plugin_hook)
     return registry

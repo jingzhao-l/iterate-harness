@@ -18,6 +18,8 @@ from urllib.parse import urlparse
 import typer
 
 from iterate_harness import __version__
+from iterate_harness.auth.manager import AuthManager
+from iterate_harness.config.settings import ProviderProfile
 from iterate_harness.iterate.batch import DEFAULT_SCHEDULE_TIMEOUT_SECONDS
 from iterate_harness.iterate.decision_log import DecisionLogEntry
 
@@ -253,6 +255,13 @@ def _candidate_entry(name: str, description: str, *, score: int, reasons: list[s
     }
 
 
+def _entry_sort_key(entry: dict[str, object]) -> tuple[int, str]:
+    """Sort matched candidates by descending score, then name."""
+    raw_score = entry["score"]
+    score = int(raw_score) if isinstance(raw_score, (int, str)) else 0
+    return (-score, str(entry["name"]))
+
+
 def _recommend_preview_candidates(
     prompt: str | None,
     *,
@@ -286,8 +295,10 @@ def _recommend_preview_candidates(
 
     tool_matches: list[dict[str, object]] = []
     for tool in tool_schemas:
-        optional = ", ".join(str(item) for item in tool.get("optional_args") or [])
-        required = ", ".join(str(item) for item in tool.get("required_args") or [])
+        optional_args = tool.get("optional_args")
+        required_args = tool.get("required_args")
+        optional = ", ".join(str(item) for item in (optional_args if isinstance(optional_args, list) else []))
+        required = ", ".join(str(item) for item in (required_args if isinstance(required_args, list) else []))
         score, reasons = _score_candidate_match(
             stripped,
             str(tool.get("name") or ""),
@@ -307,11 +318,13 @@ def _recommend_preview_candidates(
 
     command_matches: list[dict[str, object]] = []
     for command in command_entries:
+        behavior = command.get("behavior")
+        behavior_detail = str(behavior.get("detail") or "") if isinstance(behavior, dict) else ""
         score, reasons = _score_candidate_match(
             stripped,
             str(command.get("name") or ""),
             str(command.get("description") or ""),
-            str(command.get("behavior", {}).get("detail") or ""),
+            behavior_detail,
         )
         if score >= 8:
             command_matches.append(
@@ -323,9 +336,9 @@ def _recommend_preview_candidates(
                 )
             )
 
-    skill_matches.sort(key=lambda entry: (-int(entry["score"]), str(entry["name"])))
-    tool_matches.sort(key=lambda entry: (-int(entry["score"]), str(entry["name"])))
-    command_matches.sort(key=lambda entry: (-int(entry["score"]), str(entry["name"])))
+    skill_matches.sort(key=_entry_sort_key)
+    tool_matches.sort(key=_entry_sort_key)
+    command_matches.sort(key=_entry_sort_key)
     return {
         "skills": skill_matches[:5],
         "tools": tool_matches[:8],
@@ -360,7 +373,8 @@ def _evaluate_dry_run_readiness(
             reasons.append("Runtime client resolution failed. Interactive commands may still work, but model execution would fail.")
             next_actions.append("If you expect a model call later, fix authentication or provider profile configuration first.")
 
-    mcp_errors = int(validation.get("mcp_errors") or 0)
+    raw_mcp_errors = validation.get("mcp_errors")
+    mcp_errors = int(raw_mcp_errors) if isinstance(raw_mcp_errors, (int, str)) else 0
     if mcp_errors > 0 and level != "blocked":
         level = "warning"
         reasons.append(f"{mcp_errors} configured MCP server(s) have obvious configuration errors.")
@@ -535,7 +549,7 @@ def _build_dry_run_preview(
             "detail": "IterateHarness would start and wait for user input. No model or tool call happens until you submit one.",
         }
 
-    preview = {
+    preview: dict[str, object] = {
         "mode": "dry-run",
         "cwd": resolved_cwd,
         "config_path": str(get_config_file_path()),
@@ -582,33 +596,48 @@ def _build_dry_run_preview(
             }
             for plugin in plugins
         ],
-        "mcp_servers": [
-            _validate_mcp_server(name, config)
-            for name, config in sorted(mcp_servers.items())
-        ],
-        "system_prompt_preview": _safe_short(system_prompt_text, limit=600),
     }
-    mcp_errors = sum(1 for entry in preview["mcp_servers"] if entry.get("status") == "error")
-    preview["validation"]["mcp_errors"] = mcp_errors
+    validated_mcp_servers: list[dict[str, object]] = [
+        _validate_mcp_server(name, config)
+        for name, config in sorted(mcp_servers.items())
+    ]
+    preview["mcp_servers"] = validated_mcp_servers
+    preview["system_prompt_preview"] = _safe_short(system_prompt_text, limit=600)
+    mcp_errors = sum(1 for entry in validated_mcp_servers if entry.get("status") == "error")
+    validation_section = preview["validation"]
+    if isinstance(validation_section, dict):
+        validation_section["mcp_errors"] = mcp_errors
+    raw_entrypoint = preview["entrypoint"]
+    raw_validation = preview["validation"]
     preview["readiness"] = _evaluate_dry_run_readiness(
         prompt=preview_prompt,
-        entrypoint=preview["entrypoint"],
-        validation=preview["validation"],
+        entrypoint=raw_entrypoint if isinstance(raw_entrypoint, dict) else {},
+        validation=raw_validation if isinstance(raw_validation, dict) else {},
     )
     return preview
 
 
 def _format_dry_run_preview(preview: dict[str, object]) -> str:
-    settings = preview.get("settings") if isinstance(preview.get("settings"), dict) else {}
-    validation = preview.get("validation") if isinstance(preview.get("validation"), dict) else {}
-    entrypoint = preview.get("entrypoint") if isinstance(preview.get("entrypoint"), dict) else {}
-    readiness = preview.get("readiness") if isinstance(preview.get("readiness"), dict) else {}
-    recommendations = preview.get("recommendations") if isinstance(preview.get("recommendations"), dict) else {}
-    plugins = preview.get("plugins") if isinstance(preview.get("plugins"), list) else []
-    skills = preview.get("skills") if isinstance(preview.get("skills"), list) else []
-    commands = preview.get("commands") if isinstance(preview.get("commands"), list) else []
-    tools = preview.get("tools") if isinstance(preview.get("tools"), list) else []
-    mcp_servers = preview.get("mcp_servers") if isinstance(preview.get("mcp_servers"), list) else []
+    raw_settings = preview.get("settings")
+    settings = raw_settings if isinstance(raw_settings, dict) else {}
+    raw_validation = preview.get("validation")
+    validation = raw_validation if isinstance(raw_validation, dict) else {}
+    raw_entrypoint = preview.get("entrypoint")
+    entrypoint = raw_entrypoint if isinstance(raw_entrypoint, dict) else {}
+    raw_readiness = preview.get("readiness")
+    readiness = raw_readiness if isinstance(raw_readiness, dict) else {}
+    raw_recommendations = preview.get("recommendations")
+    recommendations = raw_recommendations if isinstance(raw_recommendations, dict) else {}
+    raw_plugins = preview.get("plugins")
+    plugins = raw_plugins if isinstance(raw_plugins, list) else []
+    raw_skills = preview.get("skills")
+    skills = raw_skills if isinstance(raw_skills, list) else []
+    raw_commands = preview.get("commands")
+    commands = raw_commands if isinstance(raw_commands, list) else []
+    raw_tools = preview.get("tools")
+    tools = raw_tools if isinstance(raw_tools, list) else []
+    raw_mcp_servers = preview.get("mcp_servers")
+    mcp_servers = raw_mcp_servers if isinstance(raw_mcp_servers, list) else []
 
     lines = [
         "IterateHarness Dry Run",
@@ -1042,6 +1071,7 @@ def iterate_init(
             final_goal = typer.prompt("Review goal", default=final_goal)
         rounds = typer.prompt("Max review rounds", default=3, type=int)
 
+    assert chosen is not None  # loop above re-prompts until the selection is valid
     config = init_wizard.build_config_dict(
         goal=final_goal, dimensions=chosen, max_rounds=rounds, test_command=profile.test_command
     )
@@ -1164,7 +1194,8 @@ def iterate_resume(
             print(f"Session not found: {session_id}", file=sys.stderr)
             raise typer.Exit(1)
     else:
-        session_data = load_session_snapshot(cwd) or (list_session_snapshots(cwd, limit=1) or [None])[0]
+        snapshots = list_session_snapshots(cwd, limit=1)
+        session_data = load_session_snapshot(cwd) or (snapshots[0] if snapshots else None)
         if session_data is None:
             print("No previous session found in this directory.", file=sys.stderr)
             raise typer.Exit(1)
@@ -1333,8 +1364,8 @@ def iterate_report(
         print(ci_report.render_text(summary, gate, language=language))
     if csv_out:
         csv_path = csv_out if csv_out != "-" else str(Path.cwd() / ".iterate" / "report.csv")
-        result = ci_report.render_csv(summary, csv_path)
-        print(f"CSV report: {result}", file=sys.stderr)
+        csv_result = ci_report.render_csv(summary, csv_path)
+        print(f"CSV report: {csv_result}", file=sys.stderr)
     exit_code = max(
         ci_report.severity_gate(summary, threshold),
         ci_report.threshold_exit_code(gate),
@@ -1704,7 +1735,7 @@ def _text_prompt(message: str, *, default: str = "") -> str:
         if result is None:
             raise typer.Abort()
         return str(result)
-    return typer.prompt(message, default=default)
+    return str(typer.prompt(message, default=default))
 
 
 def _secret_prompt(message: str) -> str:
@@ -1716,7 +1747,7 @@ def _secret_prompt(message: str) -> str:
         if result is None:
             raise typer.Abort()
         return str(result)
-    return typer.prompt(message, hide_input=True)
+    return str(typer.prompt(message, hide_input=True))
 
 
 def _confirm_prompt(message: str, *, default: bool = False) -> bool:
@@ -1755,7 +1786,7 @@ def _select_from_menu(
     return selected[0]
 
 
-def _prompt_model_for_profile(profile) -> str:
+def _prompt_model_for_profile(profile: ProviderProfile) -> str:
     from iterate_harness.config.settings import (
         CLAUDE_MODEL_ALIAS_OPTIONS,
         display_model_setting,
@@ -1820,28 +1851,29 @@ def _select_setup_workflow(
             label = str(info["label"])
             hint = hints.get(name)
             missing = _styled_missing_suffix(info)
+            prompt_title: str | list[tuple[str, str]]
             if hint is None:
                 if missing is None:
-                    title = label
+                    prompt_title = label
                 else:
                     suffix, suffix_style = missing
-                    title = [("", label), (suffix_style, suffix)]
+                    prompt_title = [("", label), (suffix_style, suffix)]
             else:
                 hint_text, hint_style = hint
                 if missing is None:
-                    title = [
+                    prompt_title = [
                         ("", f"{label}  "),
                         (hint_style, hint_text),
                     ]
                 else:
                     suffix, suffix_style = missing
-                    title = [
+                    prompt_title = [
                         ("", f"{label}  "),
                         (hint_style, hint_text),
                         ("", "  "),
                         (suffix_style, suffix.strip()),
                     ]
-            choices.append(questionary.Choice(title=title, value=name, checked=(name == default_value)))
+            choices.append(questionary.Choice(title=prompt_title, value=name, checked=(name == default_value)))
 
         result = questionary.select("Choose a provider workflow:", choices=choices, default=default_value).ask()
         if result is None:
@@ -1878,7 +1910,7 @@ def _prompt_api_key_for_profile(label: str) -> str:
     return key
 
 
-def _configure_custom_profile_via_setup(manager) -> str:
+def _configure_custom_profile_via_setup(manager: AuthManager) -> str:
     from iterate_harness.config.settings import ProviderProfile, default_auth_source_for_provider
 
     family = _select_from_menu(
@@ -1920,7 +1952,7 @@ def _configure_custom_profile_via_setup(manager) -> str:
 
 
 def _ensure_preset_profile(
-    manager,
+    manager: AuthManager,
     *,
     name: str,
     label: str,
@@ -1949,7 +1981,7 @@ def _ensure_preset_profile(
     return name
 
 
-def _specialize_setup_target(manager, target: str) -> str:
+def _specialize_setup_target(manager: AuthManager, target: str) -> str:
     """Expand a top-level family choice into a concrete workflow profile."""
     from iterate_harness.config.settings import default_auth_source_for_provider
 
@@ -2033,7 +2065,7 @@ def _specialize_setup_target(manager, target: str) -> str:
     return target
 
 
-def _ensure_profile_auth(manager, profile_name: str) -> None:
+def _ensure_profile_auth(manager: AuthManager, profile_name: str) -> None:
     from iterate_harness.auth.flows import ApiKeyFlow
     from iterate_harness.config.settings import auth_source_provider_name, auth_source_uses_api_key
 
@@ -2059,7 +2091,7 @@ def _ensure_profile_auth(manager, profile_name: str) -> None:
     print(f"{profile.label} API key saved.", flush=True)
 
 
-def _maybe_update_profile_auth(manager, profile_name: str) -> bool:
+def _maybe_update_profile_auth(manager: AuthManager, profile_name: str) -> bool:
     """Ask whether to replace an already configured profile API key."""
     from iterate_harness.config.settings import auth_source_uses_api_key
 

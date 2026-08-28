@@ -26,7 +26,7 @@ import logging
 import shutil
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
 from . import init_wizard, onboarding, prompts
 
@@ -235,6 +235,7 @@ def run_onboard(
         _print_flush(f"  - {line}")
 
     chosen, final_goal, rounds = _confirm_questions(yes=yes, profile=profile, goal=goal)
+    assert chosen is not None  # _confirm_questions re-prompts until the selection is valid
 
     config = init_wizard.build_config_dict(
         goal=final_goal,

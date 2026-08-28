@@ -2,6 +2,19 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [1.16.1] - 2026-08-28
+
+### Changed
+
+- **Type-annotation cleanup across the codebase** (`cli.py`, `ui/runtime.py`,
+  `ui/backend_host.py`, `api/client.py`, `api/openai_client.py`,
+  `plugins/loader.py`, `plugins/types.py`, `hooks/*`): resolved all mypy
+  strict errors in the touched modules — parameter/return annotations,
+  dict generic arguments, `SupportsStreamingMessages` protocol shape (async
+  generator vs coroutine), isinstance narrowing for dry-run preview data,
+  and variable-shadowing fixes. No runtime behavior changes; tests unchanged
+  (1977 passed).
+
 ## [1.16.0] - 2026-08-28
 
 ### Added

@@ -14,12 +14,14 @@ from iterate_harness.api.provider import auth_status, detect_provider
 from iterate_harness.bridge import get_bridge_manager
 from iterate_harness.commands import (
     CommandContext,
+    CommandRegistry,
     CommandResult,
     MemoryCommandBackend,
     create_default_command_registry,
     lookup_skill_slash_command,
 )
 from iterate_harness.config import get_config_file_path, load_settings
+from iterate_harness.config.settings import ResolvedAuth, Settings
 from iterate_harness.engine import QueryEngine
 from iterate_harness.engine.messages import (
     ConversationMessage,
@@ -29,12 +31,14 @@ from iterate_harness.engine.messages import (
 )
 from iterate_harness.engine.query import MaxTurnsExceeded
 from iterate_harness.engine.stream_events import StreamEvent
-from iterate_harness.hooks import HookEvent, HookExecutionContext, HookExecutor, load_hook_registry
+from iterate_harness.hooks import HookEvent, HookExecutionContext, HookExecutor
 from iterate_harness.hooks.hot_reload import HookReloader
+from iterate_harness.hooks.loader import load_hook_registry
 from iterate_harness.mcp.client import McpClientManager
 from iterate_harness.mcp.config import load_mcp_server_configs
 from iterate_harness.permissions import build_permission_checker
-from iterate_harness.plugins import load_plugins
+from iterate_harness.plugins import LoadedPlugin
+from iterate_harness.plugins.loader import load_plugins
 from iterate_harness.prompts import build_runtime_system_prompt
 from iterate_harness.state import AppState, AppStateStore
 from iterate_harness.services.session_backend import DEFAULT_SESSION_BACKEND, SessionBackend
@@ -43,13 +47,13 @@ from iterate_harness.keybindings import load_keybindings
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
 AskUserPrompt = Callable[[str], Awaitable[str]]
-AskUserSelect = Callable[[str, list[dict]], Awaitable[str]]
+AskUserSelect = Callable[[str, list[dict[str, object]]], Awaitable[str]]
 SystemPrinter = Callable[[str], Awaitable[None]]
 StreamRenderer = Callable[[StreamEvent], Awaitable[None]]
 ClearHandler = Callable[[], Awaitable[None]]
 
 
-def _resolve_vision_config(settings) -> dict[str, str]:
+def _resolve_vision_config(settings: Settings) -> dict[str, str]:
     """Resolve the vision model configuration from settings or environment.
 
     Priority: settings.vision fields > environment variables > empty.
@@ -87,7 +91,7 @@ class RuntimeBundle:
     app_state: AppStateStore
     hook_executor: HookExecutor
     engine: QueryEngine
-    commands: object
+    commands: CommandRegistry
     external_api_client: bool
     enforce_max_turns: bool = True
     session_id: str = ""
@@ -98,7 +102,7 @@ class RuntimeBundle:
     memory_backend: MemoryCommandBackend | None = None
     include_project_memory: bool = True
 
-    def current_settings(self):
+    def current_settings(self) -> Settings:
         """Return the effective settings for this session.
 
         We persist most settings to disk (``~/.iterate-harness/settings.json``), but
@@ -109,7 +113,7 @@ class RuntimeBundle:
         """
         return load_settings().merge_cli_overrides(**self.settings_overrides)
 
-    def current_plugins(self):
+    def current_plugins(self) -> list[LoadedPlugin]:
         """Return currently visible plugins for the working tree."""
         return load_plugins(
             self.current_settings(),
@@ -148,12 +152,12 @@ class RuntimeBundle:
         return "\n".join(lines)
 
 
-def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
+def _resolve_api_client_from_settings(settings: Settings) -> SupportsStreamingMessages:
     """Build the appropriate API client for the resolved settings."""
     # Ensure profile fields (base_url, model, api_format) are projected to settings
     settings = settings.materialize_active_profile()
 
-    def _safe_resolve_auth():
+    def _safe_resolve_auth() -> ResolvedAuth:
         try:
             return settings.resolve_auth()
         except (ValueError, Exception):
@@ -194,7 +198,7 @@ async def build_runtime(
     permission_prompt: PermissionPrompt | None = None,
     ask_user_prompt: AskUserPrompt | None = None,
     ask_user_select: AskUserSelect | None = None,
-    restore_messages: list[dict] | None = None,
+    restore_messages: list[dict[str, object]] | None = None,
     restore_tool_metadata: dict[str, object] | None = None,
     enforce_max_turns: bool = True,
     session_backend: SessionBackend | None = None,
@@ -281,7 +285,7 @@ async def build_runtime(
 
     session_id = uuid4().hex[:12]
 
-    restored_metadata = {
+    restored_metadata: dict[str, object] = {
         "permission_mode": settings.permission.mode.value,
         "read_file_state": [],
         "invoked_skills": [],
@@ -443,11 +447,11 @@ def _format_pending_tool_results(messages: list[ConversationMessage]) -> str | N
 
     max_results = 3
     for tr in tool_results[:max_results]:
-        tu = tool_uses_by_id.get(tr.tool_use_id)
-        if tu is not None:
-            raw_input = json.dumps(tu.input, ensure_ascii=True, sort_keys=True)
+        matched_tu = tool_uses_by_id.get(tr.tool_use_id)
+        if matched_tu is not None:
+            raw_input = json.dumps(matched_tu.input, ensure_ascii=True, sort_keys=True)
             lines.append(
-                f"- {tu.name} {_truncate(raw_input, 200)} -> {_truncate(tr.content.strip(), 400)}"
+                f"- {matched_tu.name} {_truncate(raw_input, 200)} -> {_truncate(tr.content.strip(), 400)}"
             )
         else:
             lines.append(

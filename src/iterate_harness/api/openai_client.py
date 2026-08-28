@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 from openai import AsyncOpenAI
@@ -125,7 +125,7 @@ def _convert_messages_to_openai(
     return openai_messages
 
 
-def _convert_user_content_to_openai(blocks: list[ContentBlock]) -> str | list[dict[str, Any]]:
+def _convert_user_content_to_openai(blocks: Iterable[ContentBlock]) -> str | list[dict[str, Any]]:
     """Convert user text/image blocks into OpenAI chat content."""
     has_image = any(isinstance(block, ImageBlock) for block in blocks)
     if not has_image:

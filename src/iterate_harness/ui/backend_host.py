@@ -35,7 +35,7 @@ from iterate_harness.output_styles import load_output_styles
 from iterate_harness.tasks import get_task_manager
 from iterate_harness.ui.coordinator_drain import drain_coordinator_async_agents
 from iterate_harness.ui.protocol import BackendEvent, FrontendRequest, TranscriptItem
-from iterate_harness.ui.runtime import build_runtime, close_runtime, handle_line, start_runtime
+from iterate_harness.ui.runtime import RuntimeBundle, build_runtime, close_runtime, handle_line, start_runtime
 from iterate_harness.services.session_backend import SessionBackend
 
 log = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class BackendHostConfig:
     active_profile: str | None = None
     api_client: SupportsStreamingMessages | None = None
     cwd: str | None = None
-    restore_messages: list[dict] | None = None
+    restore_messages: list[dict[str, object]] | None = None
     restore_tool_metadata: dict[str, object] | None = None
     enforce_max_turns: bool = True
     permission_mode: str | None = None
@@ -72,7 +72,7 @@ class ReactBackendHost:
 
     def __init__(self, config: BackendHostConfig) -> None:
         self._config = config
-        self._bundle = None
+        self._bundle: RuntimeBundle | None = None
         self._write_lock = asyncio.Lock()
         self._request_queue: asyncio.Queue[FrontendRequest] = asyncio.Queue()
         self._permission_requests: dict[str, asyncio.Future[bool]] = {}
@@ -82,7 +82,7 @@ class ReactBackendHost:
         self._running = True
         self._active_request_task: asyncio.Task[bool] | None = None
         # Track last tool input per name for rich event emission
-        self._last_tool_inputs: dict[str, dict] = {}
+        self._last_tool_inputs: dict[str, dict[str, object]] = {}
 
     async def run(self) -> int:
         self._bundle = await build_runtime(
@@ -108,6 +108,7 @@ class ReactBackendHost:
             memory_backend=self._config.memory_backend,
             include_project_memory=self._config.include_project_memory,
         )
+        assert self._bundle is not None
         await start_runtime(self._bundle)
         await self._emit(
             BackendEvent.ready(
@@ -200,9 +201,9 @@ class ReactBackendHost:
                     future.set_result(bool(request.allowed))
                 continue
             if request.type == "question_response" and request.request_id in self._question_requests:
-                future = self._question_requests[request.request_id]
-                if not future.done():
-                    future.set_result(request.answer or "")
+                question_future = self._question_requests[request.request_id]
+                if not question_future.done():
+                    question_future.set_result(request.answer or "")
                 continue
             if request.type == "interrupt":
                 await self._interrupt_active_request()
@@ -473,7 +474,7 @@ class ReactBackendHost:
             markdown = "\n".join(checklist_lines)
             await self._emit(BackendEvent(type="todo_update", todo_markdown=markdown))
 
-    def _emit_swarm_status(self, teammates: list[dict], notifications: list[dict] | None = None) -> None:
+    def _emit_swarm_status(self, teammates: list[dict[str, object]], notifications: list[dict[str, object]] | None = None) -> None:
         """Emit a swarm_status event synchronously (schedule as coroutine)."""
         import asyncio
         loop = asyncio.get_event_loop()
@@ -632,13 +633,13 @@ class ReactBackendHost:
             return
 
         if command == "turns":
-            current = self._bundle.engine.max_turns
+            current_turns = self._bundle.engine.max_turns
             values = {32, 64, 128, 200, 256, 512}
-            if isinstance(current, int):
-                values.add(current)
-            options = [{"value": "unlimited", "label": "Unlimited", "description": "Do not hard-stop this session", "active": current is None}]
+            if isinstance(current_turns, int):
+                values.add(current_turns)
+            options = [{"value": "unlimited", "label": "Unlimited", "description": "Do not hard-stop this session", "active": current_turns is None}]
             options.extend(
-                {"value": str(value), "label": f"{value} turns", "active": value == current}
+                {"value": str(value), "label": f"{value} turns", "active": value == current_turns}
                 for value in sorted(values)
             )
             await self._emit(
@@ -831,7 +832,7 @@ class ReactBackendHost:
         finally:
             self._question_requests.pop(request_id, None)
 
-    async def _ask_select(self, title: str, options: list[dict]) -> str:
+    async def _ask_select(self, title: str, options: list[dict[str, object]]) -> str:
         """Directional-key select prompt (iterate pause menu).
 
         Reuses the question_response answer channel: the frontend renders
@@ -897,7 +898,7 @@ async def run_backend_host(
     active_profile: str | None = None,
     cwd: str | None = None,
     api_client: SupportsStreamingMessages | None = None,
-    restore_messages: list[dict] | None = None,
+    restore_messages: list[dict[str, object]] | None = None,
     restore_tool_metadata: dict[str, object] | None = None,
     enforce_max_turns: bool = True,
     permission_mode: str | None = None,

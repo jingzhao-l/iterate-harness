@@ -636,6 +636,7 @@ class Settings(BaseModel):
             default_model=profile.default_model,
             permission_mode=self.permission.mode.value,
         )
+        next_model: str | None
         if flat_model and flat_model != resolved_profile_model:
             next_model = flat_model
         else:
