@@ -98,6 +98,24 @@ manifest 漂移（升依赖、换技术栈）会在评审前给出非阻塞警�
 先设置 API Key：`export ANTHROPIC_API_KEY=your_key`（也支持
 OpenAI 兼容供应商，见 `ih --help`）。
 
+### OrcaRouter（内置网关，含免费模型）
+
+[OrcaRouter](https://www.orcarouter.ai/ref/ref_5eca75a9c809c95ab152) 是内置的
+OpenAI 兼容网关供应商。请通过上方链接注册（注册即支持本项目），然后创建
+API Key（`sk-orca-` 前缀），再二选一：
+
+```bash
+ih provider use orcarouter   # 交互式配置
+# 或通过环境变量
+export ORCA_KEY=sk-orca-...
+export ITERATE_BASE_URL=https://api.orcarouter.ai/v1
+export ITERATE_MODEL=orcarouter/auto
+```
+
+免费模型（`orcarouter/free`、`deepseek/deepseek-v4-flash-free`）$0 计费但
+仍需 API Key。适合 CI / 轻量评审——长上下文提示可能超出免费档的 prompt
+上限（HTTP 429 且无 `Retry-After`）。
+
 ## ✨ Iterate 特性
 
 | 能力 | 说明 |

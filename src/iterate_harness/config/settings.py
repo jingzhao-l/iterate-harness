@@ -251,6 +251,14 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             default_model="deepseek-ai/DeepSeek-V4-Flash",
             base_url="https://api.siliconflow.cn/v1",
         ),
+        "orcarouter": ProviderProfile(
+            label="OrcaRouter",
+            provider="orcarouter",
+            api_format="openai",
+            auth_source="orcarouter_api_key",
+            default_model="orcarouter/auto",
+            base_url="https://api.orcarouter.ai/v1",
+        ),
         "nvidia": ProviderProfile(
             label="NVIDIA NIM",
             provider="nvidia",
@@ -370,6 +378,7 @@ def auth_source_provider_name(auth_source: str) -> str:
         "zhipu_api_key": "zhipu",
         "siliconflow_api_key": "siliconflow",
         "nvidia_api_key": "nvidia",
+        "orcarouter_api_key": "orcarouter",
         "local": "local",
     }
     return mapping.get(auth_source, auth_source)
@@ -410,6 +419,8 @@ def default_auth_source_for_provider(provider: str, api_format: str | None = Non
         return "siliconflow_api_key"
     if provider == "nvidia":
         return "nvidia_api_key"
+    if provider == "orcarouter":
+        return "orcarouter_api_key"
     if provider in {"local", "ollama"}:
         return "local"
     if provider == "openai" or api_format == "openai":
@@ -718,6 +729,7 @@ class Settings(BaseModel):
             "zhipu_api_key": "ZHIPUAI_API_KEY",
             "siliconflow_api_key": "SILICONFLOW_API_KEY",
             "nvidia_api_key": "NVIDIA_API_KEY",
+            "orcarouter_api_key": "ORCA_KEY",
         }.get(auth_source)
         if env_var:
             env_value = os.environ.get(env_var, "")

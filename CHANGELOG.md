@@ -2,6 +2,17 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [Unreleased]
+
+### Added
+
+- **OrcaRouter gateway provider** (`api/registry.py`, `config/settings.py`,
+  `cli.py`, `ui/backend_host.py`): built-in OpenAI-compatible gateway with
+  `sk-orca-` key-prefix / base-url auto-detection, an `orcarouter` provider
+  profile (default model `orcarouter/auto`, `ORCA_KEY` env var), a CLI setup
+  menu entry and model-family guidance. Docs: OrcaRouter section in
+  `README.md` / `README.zh-CN.md`, including the free-model tier notes.
+
 ## [1.15.0] - 2026-08-26
 
 Feature release closing the seven functional gaps found in the design doc

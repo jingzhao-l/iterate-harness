@@ -65,6 +65,19 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         is_local=False,
     ),
+    # OrcaRouter: OpenAI-compatible gateway, keys start with "sk-orca-"
+    ProviderSpec(
+        name="orcarouter",
+        keywords=("orcarouter",),
+        env_key="ORCA_KEY",
+        display_name="OrcaRouter",
+        backend_type="openai_compat",
+        default_base_url="https://api.orcarouter.ai/v1",
+        detect_by_key_prefix="sk-orca-",
+        detect_by_base_keyword="orcarouter",
+        is_gateway=True,
+        is_local=False,
+    ),
     # AiHubMix: OpenAI-compatible gateway
     ProviderSpec(
         name="aihubmix",

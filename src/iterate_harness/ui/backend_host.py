@@ -733,7 +733,7 @@ class ReactBackendHost:
                 for value, label, description in CLAUDE_MODEL_ALIAS_OPTIONS
             ]
         families: list[tuple[str, str]] = []
-        if provider_name in {"openai", "openai-compatible", "openrouter"}:
+        if provider_name in {"openai", "openai-compatible", "openrouter", "orcarouter"}:
             families.extend(
                 [
                     ("gpt-5.4", "OpenAI flagship"),

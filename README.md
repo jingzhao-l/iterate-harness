@@ -114,6 +114,25 @@ change) triggers a non-blocking warning before reviews.
 Set your API key first: `export ANTHROPIC_API_KEY=your_key` (OpenAI-compatible
 providers are also supported — see `ih --help`).
 
+### OrcaRouter (built-in gateway, free models included)
+
+[OrcaRouter](https://www.orcarouter.ai/ref/ref_5eca75a9c809c95ab152) ships as a
+built-in OpenAI-compatible gateway provider. Register through the link above
+(supporting the project when you do), then create an API key (`sk-orca-...`)
+and choose one of:
+
+```bash
+ih provider use orcarouter   # interactive setup
+# or via environment variables
+export ORCA_KEY=sk-orca-...
+export ITERATE_BASE_URL=https://api.orcarouter.ai/v1
+export ITERATE_MODEL=orcarouter/auto
+```
+
+Free models (`orcarouter/free`, `deepseek/deepseek-v4-flash-free`) cost $0 but
+still require an API key. They suit CI / lightweight reviews — long-context
+prompts can exceed the free-tier prompt cap (HTTP 429 without `Retry-After`).
+
 ## ✨ Iterate Features
 
 | Capability | What it does |
