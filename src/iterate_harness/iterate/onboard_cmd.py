@@ -51,6 +51,8 @@ def check_auth_configured() -> str | None:
     return (
         "No model credential configured.\n"
         "  Run `ih auth login` first (or `ih setup`), then re-run onboarding.\n"
+        "  OrcaRouter free models: no key yet? Run `ih setup orcarouter` and\n"
+        "  press Enter at the key prompt to open the signup page in your browser.\n"
         "  Alternatively use `ih iterate onboard --no-ai` for a detection-only\n"
         "  knowledge base that does not call the model."
     )

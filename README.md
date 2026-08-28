@@ -56,6 +56,36 @@ convergence policy at its core.
 
 ---
 
+## 🐳 OrcaRouter — built-in gateway with free models
+
+[OrcaRouter](https://www.orcarouter.ai/ref/ref_5eca75a9c809c95ab152) is a
+built-in OpenAI-compatible gateway provider with **free models** — e.g.
+`deepseek/deepseek-v4-flash-free` or the `orcarouter/free` router — billed at
+**$0**, no token cost. All you need is an API key.
+
+**No key yet?** Just press Enter at the key prompt and the signup page opens in
+your browser (register through the link above, supporting the project):
+
+```bash
+ih setup orcarouter     # paste an existing key, or press Enter to open the signup page
+```
+
+Already have a key? Activate the built-in profile — **only one environment
+variable is required** (`ORCA_KEY`); the base URL
+(`https://api.orcarouter.ai/v1`) and default model (`orcarouter/auto`) are
+baked in:
+
+```bash
+ih provider use orcarouter
+export ORCA_KEY=sk-orca-...
+```
+
+> Free-tier note: free models still require an API key; long-context prompts
+> can exceed the free-tier prompt cap (HTTP 429 without `Retry-After`), so they
+> suit CI / lightweight reviews best.
+
+---
+
 ## 🚀 Quick Start
 
 ```bash
@@ -113,25 +143,6 @@ change) triggers a non-blocking warning before reviews.
 
 Set your API key first: `export ANTHROPIC_API_KEY=your_key` (OpenAI-compatible
 providers are also supported — see `ih --help`).
-
-### OrcaRouter (built-in gateway, free models included)
-
-[OrcaRouter](https://www.orcarouter.ai/ref/ref_5eca75a9c809c95ab152) ships as a
-built-in OpenAI-compatible gateway provider. Register through the link above
-(supporting the project when you do), then create an API key (`sk-orca-...`)
-and choose one of:
-
-```bash
-ih provider use orcarouter   # interactive setup
-# or via environment variables
-export ORCA_KEY=sk-orca-...
-export ITERATE_BASE_URL=https://api.orcarouter.ai/v1
-export ITERATE_MODEL=orcarouter/auto
-```
-
-Free models (`orcarouter/free`, `deepseek/deepseek-v4-flash-free`) cost $0 but
-still require an API key. They suit CI / lightweight reviews — long-context
-prompts can exceed the free-tier prompt cap (HTTP 429 without `Retry-After`).
 
 ## ✨ Iterate Features
 

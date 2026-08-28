@@ -671,7 +671,10 @@ class TestOrcaRouterProvider:
     """Tests for OrcaRouter provider profile and auth integration."""
 
     def test_orcarouter_in_default_provider_profiles(self):
-        from iterate_harness.config.settings import default_provider_profiles
+        from iterate_harness.config.settings import (
+            ORCAROUTER_SIGNUP_URL,
+            default_provider_profiles,
+        )
 
         profiles = default_provider_profiles()
         assert "orcarouter" in profiles
@@ -681,6 +684,7 @@ class TestOrcaRouterProvider:
         assert profile.auth_source == "orcarouter_api_key"
         assert profile.default_model == "orcarouter/auto"
         assert profile.base_url == "https://api.orcarouter.ai/v1"
+        assert profile.signup_url == ORCAROUTER_SIGNUP_URL
 
     def test_auth_source_provider_name_orcarouter(self):
         from iterate_harness.config.settings import auth_source_provider_name

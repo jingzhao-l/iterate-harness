@@ -10,8 +10,16 @@ All notable changes to iterate-harness should be recorded in this file.
   `cli.py`, `ui/backend_host.py`): built-in OpenAI-compatible gateway with
   `sk-orca-` key-prefix / base-url auto-detection, an `orcarouter` provider
   profile (default model `orcarouter/auto`, `ORCA_KEY` env var), a CLI setup
-  menu entry and model-family guidance. Docs: OrcaRouter section in
-  `README.md` / `README.zh-CN.md`, including the free-model tier notes.
+  menu entry and model-family guidance.
+- **Signup shortcut in the API-key flow** (`auth/flows.py`): when a provider
+  profile carries a `signup_url`, pressing Enter at the key prompt opens the
+  signup page in the default browser and re-prompts — OrcaRouter's profile is
+  wired to the project referral link, so first-time users can register for a
+  free key without leaving the terminal. Onboarding guidance points to
+  `ih setup orcarouter`.
+- **Docs**: OrcaRouter section moved above Quick Start in `README.md` /
+  `README.zh-CN.md`, highlighting the free-model tier and clarifying that only
+  `ORCA_KEY` is required (base URL / model are baked into the profile).
 
 ## [1.15.0] - 2026-08-26
 

@@ -1640,6 +1640,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "zhipu": "Zhipu AI (GLM)",
     "siliconflow": "SiliconFlow",
     "nvidia": "NVIDIA NIM",
+    "orcarouter": "OrcaRouter",
     "ollama": "Ollama (local)",
 }
 
@@ -1654,6 +1655,7 @@ _AUTH_SOURCE_LABELS: dict[str, str] = {
     "zhipu_api_key": "Zhipu AI API key",
     "siliconflow_api_key": "SiliconFlow API key",
     "nvidia_api_key": "NVIDIA API key",
+    "orcarouter_api_key": "OrcaRouter API key",
     "local": "Local endpoint (no API key)",
 }
 
@@ -2041,6 +2043,7 @@ def _ensure_profile_auth(manager, profile_name: str) -> None:
     flow = ApiKeyFlow(
         provider=profile.provider,
         prompt_text=f"Enter API key for {profile.label}",
+        signup_url=profile.signup_url,
     )
     try:
         key = flow.run()
@@ -2095,7 +2098,12 @@ def _login_provider(provider: str) -> None:
         raise typer.Exit(1)
 
     label = _PROVIDER_LABELS[provider]
-    flow = ApiKeyFlow(provider=provider, prompt_text=f"Enter your {label} API key")
+    signup_url = None
+    if provider == "orcarouter":
+        from iterate_harness.config.settings import ORCAROUTER_SIGNUP_URL
+
+        signup_url = ORCAROUTER_SIGNUP_URL
+    flow = ApiKeyFlow(provider=provider, prompt_text=f"Enter your {label} API key", signup_url=signup_url)
     try:
         key = flow.run()
     except ValueError as exc:

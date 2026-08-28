@@ -10,6 +10,8 @@ OAuth device-code and browser flows are intentionally not supported.
 from __future__ import annotations
 
 import logging
+import threading
+import webbrowser
 from abc import ABC, abstractmethod
 
 log = logging.getLogger(__name__)
@@ -29,16 +31,46 @@ class AuthFlow(ABC):
 
 
 class ApiKeyFlow(AuthFlow):
-    """Prompt the user for an API key and persist it via :mod:`iterate_harness.auth.storage`."""
+    """Prompt the user for an API key and persist it via :mod:`iterate_harness.auth.storage`.
 
-    def __init__(self, provider: str, prompt_text: str | None = None) -> None:
+    When ``signup_url`` is set, an empty answer opens the signup page in the
+    default browser and re-prompts, so users without a key can register first
+    and paste the key afterwards.
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        prompt_text: str | None = None,
+        signup_url: str | None = None,
+    ) -> None:
         self.provider = provider
-        self.prompt_text = prompt_text or f"Enter your {provider} API key"
+        self.signup_url = signup_url
+        if prompt_text is None:
+            prompt_text = f"Enter your {provider} API key"
+        if signup_url and "empty to open the signup page" not in prompt_text:
+            prompt_text += " (empty to open the signup page)"
+        self.prompt_text = prompt_text
 
     def run(self) -> str:
         import getpass
 
-        key = getpass.getpass(f"{self.prompt_text}: ").strip()
-        if not key:
+        prompt = self.prompt_text
+        while True:
+            key = getpass.getpass(f"{prompt}: ").strip()
+            if key:
+                return key
+            if self.signup_url:
+                print(
+                    f"No key entered — opening the {self.provider} signup page "
+                    "in your browser. Register, copy the API key, then paste "
+                    "it here.",
+                    flush=True,
+                )
+                threading.Thread(
+                    target=webbrowser.open,
+                    args=(self.signup_url,),
+                    daemon=True,
+                ).start()
+                continue
             raise ValueError("API key cannot be empty.")
-        return key

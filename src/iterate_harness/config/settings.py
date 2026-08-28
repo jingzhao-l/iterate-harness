@@ -48,6 +48,11 @@ class PathRuleConfig(BaseModel):
     allow: bool = True
 
 
+# OrcaRouter referral link — registrations through this link are attributed
+# to the project (the OSS revenue-share program).
+ORCAROUTER_SIGNUP_URL = "https://www.orcarouter.ai/ref/ref_5eca75a9c809c95ab152"
+
+
 class PermissionSettings(BaseModel):
     """Permission knobs (mode, tool lists, path rules, command lists)."""
 
@@ -121,6 +126,7 @@ class ProviderProfile(BaseModel):
     base_url: str | None = None
     last_model: str | None = None
     credential_slot: str | None = None
+    signup_url: str | None = None
     allowed_models: list[str] = Field(default_factory=list)
     context_window_tokens: int | None = None
     auto_compact_threshold_tokens: int | None = None
@@ -258,6 +264,7 @@ def default_provider_profiles() -> dict[str, ProviderProfile]:
             auth_source="orcarouter_api_key",
             default_model="orcarouter/auto",
             base_url="https://api.orcarouter.ai/v1",
+            signup_url=ORCAROUTER_SIGNUP_URL,
         ),
         "nvidia": ProviderProfile(
             label="NVIDIA NIM",
