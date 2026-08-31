@@ -20,7 +20,7 @@ class EnterWorktreeToolInput(BaseModel):
     base_ref: str = Field(default="HEAD", description="Base ref when creating a new branch")
 
 
-class EnterWorktreeTool(BaseTool):
+class EnterWorktreeTool(BaseTool[EnterWorktreeToolInput]):
     """Create a git worktree."""
 
     name = "enter_worktree"

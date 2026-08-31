@@ -20,7 +20,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     if name in {"PermissionChecker", "PermissionDecision", "build_permission_checker"}:
         from iterate_harness.permissions.checker import (
             PermissionChecker,

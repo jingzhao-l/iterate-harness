@@ -832,7 +832,7 @@ class ReactBackendHost:
         finally:
             self._question_requests.pop(request_id, None)
 
-    async def _ask_select(self, title: str, options: list[dict[str, object]]) -> str:
+    async def _ask_select(self, title: str, options: list[dict[str, str]]) -> str:
         """Directional-key select prompt (iterate pause menu).
 
         Reuses the question_response answer channel: the frontend renders

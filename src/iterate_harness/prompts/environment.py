@@ -40,7 +40,7 @@ def detect_os() -> tuple[str, str]:
     system = platform.system()
     if system == "Linux":
         try:
-            import distro  # type: ignore[import-untyped]
+            import distro
             return "Linux", distro.version(pretty=True) or platform.release()
         except ImportError:
             return "Linux", platform.release()

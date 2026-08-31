@@ -14,7 +14,7 @@ class TaskStopToolInput(BaseModel):
     task_id: str = Field(description="Task identifier")
 
 
-class TaskStopTool(BaseTool):
+class TaskStopTool(BaseTool[TaskStopToolInput]):
     """Stop a background task."""
 
     name = "task_stop"

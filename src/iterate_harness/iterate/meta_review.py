@@ -22,11 +22,17 @@ from .evidence import EvidenceAudit
 from .review import ThresholdGateResult, sort_findings
 from .review_scope import CoverageResult
 from .types import (
+    ConvergenceInfo,
     FinalReviewReport,
     FinalReviewSummary,
+    FinalVerdict,
     MetaReviewIssue,
     MetaReviewResult,
+    ReportSummary,
+    ReviewFinding,
     ReviewReport,
+    ReviewRound,
+    Severity,
 )
 
 #: Number of distinct consistency checks performed by :func:`meta_review_report`.
@@ -39,12 +45,12 @@ COVERAGE_LIST_TRUNCATE = 10
 
 def _issue(
     code: str,
-    severity: str,
+    severity: Severity,
     summary: str,
     detail: str,
 ) -> MetaReviewIssue:
     return MetaReviewIssue(
-        code=code, severity=severity, summary=summary, detail=detail  # type: ignore[arg-type]
+        code=code, severity=severity, summary=summary, detail=detail
     )
 
 
@@ -107,7 +113,7 @@ def meta_review_report(report: ReviewReport | None) -> MetaReviewResult:
 
 
 def _check_count_match(
-    findings: list, total: int
+    findings: list[ReviewFinding], total: int
 ) -> list[MetaReviewIssue]:
     if total != len(findings):
         return [
@@ -123,7 +129,7 @@ def _check_count_match(
 
 
 def _check_severity_sum(
-    findings: list, summary, total: int
+    findings: list[ReviewFinding], summary: ReportSummary, total: int
 ) -> list[MetaReviewIssue]:
     sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
     for f in findings:
@@ -150,7 +156,10 @@ def _check_severity_sum(
 
 
 def _check_dimension_sum(
-    findings: list, summary, total: int, dimensions: list[str]
+    findings: list[ReviewFinding],
+    summary: ReportSummary,
+    total: int,
+    dimensions: list[str],
 ) -> list[MetaReviewIssue]:
     issues: list[MetaReviewIssue] = []
     dim_sum = sum(summary.by_dimension.values())
@@ -178,7 +187,7 @@ def _check_dimension_sum(
     return issues
 
 
-def _check_sort_order(findings: list) -> list[MetaReviewIssue]:
+def _check_sort_order(findings: list[ReviewFinding]) -> list[MetaReviewIssue]:
     if sort_findings(findings) != findings:
         return [
             _issue(
@@ -224,7 +233,7 @@ def _check_convergence(report: ReviewReport, total: int) -> list[MetaReviewIssue
     return issues
 
 
-def _check_round_shape(rounds: list) -> list[MetaReviewIssue]:
+def _check_round_shape(rounds: list[ReviewRound]) -> list[MetaReviewIssue]:
     issues: list[MetaReviewIssue] = []
     seen_rounds: set[int] = set()
     for index, r in enumerate(rounds):
@@ -332,43 +341,49 @@ def build_final_review_report(
     if evidence is not None:
         meta.checks_run += 1
         if not evidence.passed:
-            for violation in evidence.results:
-                if violation.error is None:
+            for evidence_violation in evidence.results:
+                if evidence_violation.error is None:
                     continue
                 detail = (
                     (
-                        f"{violation.line} is beyond this file's {violation.line_total} lines"
-                        if violation.line_total is not None
-                        else f"{violation.file} is a binary/unreadable file not line-addressable"
+                        f"{evidence_violation.line} is beyond this file's "
+                        f"{evidence_violation.line_total} lines"
+                        if evidence_violation.line_total is not None
+                        else f"{evidence_violation.file} is a binary/unreadable file "
+                        "not line-addressable"
                     )
-                    if violation.error == "line_out_of_range"
-                    else f"{violation.file} does not exist at all (verifiable read required)"
+                    if evidence_violation.error == "line_out_of_range"
+                    else f"{evidence_violation.file} does not exist at all "
+                    "(verifiable read required)"
                 )
                 round_hint = ""
-                if report is not None and violation.file is not None:
+                if report is not None and evidence_violation.file is not None:
                     # Try to attribute the poisoned finding to the round that
                     # first surfaced it (best-effort; report rounds carry it).
                     for r in report.rounds or []:
                         matched = any(
-                            fnd.file == violation.file and fnd.line == violation.line
+                            fnd.file == evidence_violation.file
+                            and fnd.line == evidence_violation.line
                             for fnd in r.findings
                         )
                         if matched:
                             round_hint = f" (round {r.round})"
                             break
-                summary = (
+                summary_text = (
                     f"Finding references non-existent code: "
-                    f"{violation.file}" + (f":{violation.line}" if violation.line else "") + round_hint
+                    f"{evidence_violation.file}"
+                    + (f":{evidence_violation.line}" if evidence_violation.line else "")
+                    + round_hint
                 )
                 meta.issues.append(
-                    _issue("EVIDENCE_VIOLATION", "critical", summary,
+                    _issue("EVIDENCE_VIOLATION", "critical", summary_text,
                            detail + ". Review results must anchor to real, read code.",)
                 )
             meta.passed = False
             meta.verdict = "revise"
-    summary = report.summary if report is not None else None
-    convergence = report.convergence if report is not None else None
-    verdict: str = "approved" if meta.passed else "needs_revision"
+    summary: ReportSummary | None = report.summary if report is not None else None
+    convergence: ConvergenceInfo | None = report.convergence if report is not None else None
+    verdict: FinalVerdict = "approved" if meta.passed else "needs_revision"
     final_summary = FinalReviewSummary(
         total_findings=summary.total_findings if summary else 0,
         critical=summary.critical if summary else 0,
@@ -378,10 +393,10 @@ def build_final_review_report(
         converged=bool(convergence.converged) if convergence else False,
         total_rounds=convergence.total_rounds if convergence else 0,
         report_issues=len(meta.issues),
-        verdict=verdict,  # type: ignore[arg-type]
+        verdict=verdict,
     )
     return FinalReviewReport(
-        verdict=verdict,  # type: ignore[arg-type]
+        verdict=verdict,
         source=report,  # type: ignore[arg-type]
         meta_review=meta,
         summary=final_summary,

@@ -12,7 +12,11 @@ from uuid import uuid4
 
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.config.paths import get_sessions_dir
-from iterate_harness.engine.messages import ConversationMessage, sanitize_conversation_messages
+from iterate_harness.engine.messages import (
+    ConversationMessage,
+    ToolResultBlock,
+    sanitize_conversation_messages,
+)
 from iterate_harness.utils.fs import atomic_write_text
 
 log = logging.getLogger(__name__)
@@ -229,8 +233,8 @@ def export_session_markdown(
             parts.append(text)
         for block in message.tool_uses:
             parts.append(f"\n```tool\n{block.name} {json.dumps(block.input, ensure_ascii=True)}\n```")
-        for block in message.content:
-            if getattr(block, "type", "") == "tool_result":
-                parts.append(f"\n```tool-result\n{block.content}\n```")
+        for content_block in message.content:
+            if isinstance(content_block, ToolResultBlock):
+                parts.append(f"\n```tool-result\n{content_block.content}\n```")
     atomic_write_text(path, "\n".join(parts).strip() + "\n")
     return path

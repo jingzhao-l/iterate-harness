@@ -17,7 +17,7 @@ class TaskUpdateToolInput(BaseModel):
     status_note: str | None = Field(default=None, description="Short human-readable task note")
 
 
-class TaskUpdateTool(BaseTool):
+class TaskUpdateTool(BaseTool[TaskUpdateToolInput]):
     """Update task metadata for progress tracking."""
 
     name = "task_update"

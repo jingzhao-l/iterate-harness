@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,8 @@ log = logging.getLogger(__name__)
 SKILL_FILENAME = "SKILL.md"
 PROJECT_KNOWLEDGE_FILENAME = "ITERATE.md"
 MAX_CONTEXT_CHARS = 30_000
+
+TriageDecision = Literal["fix", "skip", "ignore"]
 
 
 def _json_output(payload: Any, *, error: bool = False) -> ToolResult:
@@ -74,7 +76,7 @@ class IterateConfigInput(BaseModel):
     operation: Literal["read", "validate"] = "read"
 
 
-class IterateConfigTool(BaseTool):
+class IterateConfigTool(BaseTool[BaseModel]):
     name = "iterate_config"
     description = (
         "Read the effective iterate config (project iterate.config.yaml merged "
@@ -133,7 +135,7 @@ class IterateValidateInput(BaseModel):
     timeout_ms: int = Field(default=validate_mod.DEFAULT_TIMEOUT_MS, ge=100, le=3_600_000)
 
 
-class IterateValidateTool(BaseTool):
+class IterateValidateTool(BaseTool[BaseModel]):
     name = "iterate_validate"
     description = (
         "Run a validation command PRECONFIGURED in iterate.config.yaml "
@@ -249,7 +251,7 @@ class IterateReviewInput(BaseModel):
     )
 
 
-class IterateReviewTool(BaseTool):
+class IterateReviewTool(BaseTool[BaseModel]):
     name = "iterate_review"
     description = (
         "Deterministic review engine. plan: build the review plan "
@@ -285,7 +287,7 @@ class IterateReviewTool(BaseTool):
             scope_files = review_scope.collect_scope_files(root, scope="full")
         plan = review.build_review_plan(
             config=effective.config,
-            mode=args.mode,  # type: ignore[arg-type]
+            mode=args.mode,
             max_review_rounds=min(args.max_review_rounds, effective.config.max_rounds),
             known_intentional=_load_known_intentional(context),
             changed_files=args.changed_files,
@@ -347,7 +349,7 @@ class IterateReviewTool(BaseTool):
         return _json_output(payload)
 
     @staticmethod
-    def _audit_budgets(usage_totals: dict[str, int], context: ToolExecutionContext):
+    def _audit_budgets(usage_totals: dict[str, int], context: ToolExecutionContext) -> review.BudgetAudit | None:
         """Audit reported per-dimension usage against configured budgets.
 
         Returns ``None`` when no budgets are configured or no usage was
@@ -374,7 +376,7 @@ class IterateReviewTool(BaseTool):
         if effective.config.reviewer.evidence_validation:
             evidence_audit = evidence.verify_findings(
                 context.cwd,
-                findings=parsed.findings,
+                findings=cast("list[object]", parsed.findings),
                 read_set=evidence.read_set_from_metadata(context.metadata),
             )
         # Prompt-informative coverage: when the aggregate report carries the
@@ -445,7 +447,7 @@ class IterateDecisionLogInput(BaseModel):
     data: dict[str, Any] | None = Field(default=None, description="Entry payload (append)")
 
 
-class IterateDecisionLogTool(BaseTool):
+class IterateDecisionLogTool(BaseTool[BaseModel]):
     name = "iterate_decision_log"
     description = (
         "Append-only decision log (.iterate/decision-log.jsonl). append: "
@@ -533,7 +535,7 @@ class IterateContextInput(BaseModel):
     operation: Literal["read"] = "read"
 
 
-class IterateContextTool(BaseTool):
+class IterateContextTool(BaseTool[BaseModel]):
     name = "iterate_context"
     description = (
         "Read project iterate context: SKILL.md (walked up from cwd), "
@@ -593,7 +595,7 @@ def _clip(text: str) -> str:
 #: report cannot lock the session in an endless prompt sequence.
 MAX_TRIAGE_FINDINGS = 50
 
-TRIAGE_ANSWER_MAP: dict[str, str] = {
+TRIAGE_ANSWER_MAP: dict[str, TriageDecision] = {
     "y": "fix",
     "yes": "fix",
     "fix": "fix",
@@ -628,7 +630,7 @@ class IterateTriageInput(BaseModel):
     note: str = Field(default="", description="Reason recorded for 'ignore' entries.")
 
 
-def _parse_triage_answer(raw: str) -> str | None:
+def _parse_triage_answer(raw: str) -> TriageDecision | None:
     """Map a raw user answer to fix/skip/ignore; None when unrecognized."""
     token = raw.strip().lower()
     if not token:
@@ -650,7 +652,7 @@ def _triage_question(index: int, total: int, finding: TriageFindingItem) -> str:
     )
 
 
-class IterateTriageTool(BaseTool):
+class IterateTriageTool(BaseTool[BaseModel]):
     name = "iterate_triage"
     description = (
         "Interactive findings triage after a review: walk each finding with "
@@ -771,10 +773,11 @@ class IterateTriageTool(BaseTool):
                 context.cwd, data.known_intentional
             )
             config_note = sync_result.get("config") or sync_result.get("reason", "?")
-            if sync_result.get("added"):
+            added_entries = sync_result.get("added")
+            if isinstance(added_entries, list) and added_entries:
                 log.info(
                     "config-bridge: %d new known_intentional entries synced to %s",
-                    len(sync_result["added"]),
+                    len(added_entries),
                     config_note,
                 )
         return added

@@ -504,7 +504,7 @@ async def write_to_mailbox(
                 "shutdown",
                 "idle_notification",
             ):
-                msg_type = t  # type: ignore[assignment]
+                msg_type = t
     except (json.JSONDecodeError, TypeError) as exc:
         log.debug("Message text is not JSON; treating as plain text: %s", exc)
 

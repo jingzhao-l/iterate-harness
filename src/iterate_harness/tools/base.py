@@ -6,12 +6,17 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from typing import Generic
+from typing import TypeVar
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from iterate_harness.hooks.executor import HookExecutor
+
+#: Generic parameter for the concrete input argument model a tool accepts.
+ToolArgumentsT = TypeVar("ToolArgumentsT", bound=BaseModel)
 
 
 @dataclass
@@ -32,18 +37,18 @@ class ToolResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class BaseTool(ABC):
+class BaseTool(ABC, Generic[ToolArgumentsT]):
     """Base class for all IterateHarness tools."""
 
     name: str
     description: str
-    input_model: type[BaseModel]
+    input_model: type[ToolArgumentsT]
 
     @abstractmethod
-    async def execute(self, arguments: BaseModel, context: ToolExecutionContext) -> ToolResult:
+    async def execute(self, arguments: ToolArgumentsT, context: ToolExecutionContext) -> ToolResult:
         """Execute the tool."""
 
-    def is_read_only(self, arguments: BaseModel) -> bool:
+    def is_read_only(self, arguments: ToolArgumentsT) -> bool:
         """Return whether the invocation is read-only."""
         del arguments
         return False
@@ -61,17 +66,17 @@ class ToolRegistry:
     """Map tool names to implementations."""
 
     def __init__(self) -> None:
-        self._tools: dict[str, BaseTool] = {}
+        self._tools: dict[str, BaseTool[Any]] = {}
 
-    def register(self, tool: BaseTool) -> None:
+    def register(self, tool: BaseTool[Any]) -> None:
         """Register a tool instance."""
         self._tools[tool.name] = tool
 
-    def get(self, name: str) -> BaseTool | None:
+    def get(self, name: str) -> BaseTool[Any] | None:
         """Return a registered tool by name."""
         return self._tools.get(name)
 
-    def list_tools(self) -> list[BaseTool]:
+    def list_tools(self) -> list[BaseTool[Any]]:
         """Return all registered tools."""
         return list(self._tools.values())
 

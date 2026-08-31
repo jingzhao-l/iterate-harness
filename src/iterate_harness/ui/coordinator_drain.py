@@ -20,6 +20,11 @@ from iterate_harness.coordinator.coordinator_mode import (
 from iterate_harness.engine.query import MaxTurnsExceeded
 from iterate_harness.prompts.context import build_runtime_system_prompt
 from iterate_harness.tasks.manager import get_task_manager
+from iterate_harness.ui.runtime import (
+    RuntimeBundle,
+    StreamRenderer,
+    SystemPrinter,
+)
 
 
 _TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "killed"})
@@ -116,12 +121,12 @@ def format_completed_task_notifications(completed: list[dict[str, object]]) -> s
 
 
 async def submit_follow_up(
-    bundle,
+    bundle: RuntimeBundle,
     message: str,
     *,
     prompt_seed: str,
-    print_system,
-    render_event,
+    print_system: SystemPrinter,
+    render_event: StreamRenderer,
 ) -> None:
     from iterate_harness.ui.runtime import _format_pending_tool_results
 
@@ -157,11 +162,11 @@ async def submit_follow_up(
 
 
 async def drain_coordinator_async_agents(
-    bundle,
+    bundle: RuntimeBundle,
     *,
     prompt_seed: str,
-    print_system,
-    render_event,
+    print_system: SystemPrinter,
+    render_event: StreamRenderer,
     announce_waiting: bool = True,
 ) -> None:
     """Block until pending async-agent tasks finish, then submit notifications.

@@ -510,7 +510,7 @@ def set_member_mode(
     for k, m in team_file.members.items():
         if m.name == member_name:
             team_file.members[k] = TeamMember(
-                **{**m.to_dict(), "mode": mode}  # type: ignore[arg-type]
+                **{**m.to_dict(), "mode": mode}
             )
             break
 
@@ -560,7 +560,7 @@ def set_multiple_member_modes(
         new_mode = update_map.get(m.name)
         if new_mode is not None and m.mode != new_mode:
             team_file.members[k] = TeamMember(
-                **{**m.to_dict(), "mode": new_mode}  # type: ignore[arg-type]
+                **{**m.to_dict(), "mode": new_mode}
             )
             any_changed = True
 
@@ -600,7 +600,7 @@ async def set_member_active(
     for k, m in list(team_file.members.items()):
         if m.name == member_name:
             team_file.members[k] = TeamMember(
-                **{**m.to_dict(), "is_active": is_active}  # type: ignore[arg-type]
+                **{**m.to_dict(), "is_active": is_active}
             )
             break
 

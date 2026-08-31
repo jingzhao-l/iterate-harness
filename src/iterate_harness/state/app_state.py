@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TypedDict
 
 
 @dataclass
@@ -28,3 +29,27 @@ class AppState:
     bridge_sessions: int = 0
     output_style: str = "default"
     keybindings: dict[str, str] = field(default_factory=dict)
+
+
+class AppStateUpdates(TypedDict, total=False):
+    """Subset of :class:`AppState` fields accepted by ``AppStateStore.set``."""
+
+    model: str
+    permission_mode: str
+    theme: str
+    cwd: str
+    provider: str
+    auth_status: str
+    base_url: str
+    vim_enabled: bool
+    voice_enabled: bool
+    voice_available: bool
+    voice_reason: str
+    fast_mode: bool
+    effort: str
+    passes: int
+    mcp_connected: int
+    mcp_failed: int
+    bridge_sessions: int
+    output_style: str
+    keybindings: dict[str, str]

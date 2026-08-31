@@ -390,7 +390,7 @@ async def _run_query_loop(
                 ctx.agent_id,
                 queued.from_agent,
             )
-            messages.append(ConversationMessage(role="user", content=queued.text))
+            messages.append(ConversationMessage.from_user_text(queued.text))
 
     ctx.status = "idle"
 

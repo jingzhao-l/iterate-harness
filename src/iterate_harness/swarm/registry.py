@@ -145,7 +145,7 @@ class BackendRegistry:
             )
         return executor
 
-    def get_preferred_backend(self, config: dict | None = None) -> BackendType:
+    def get_preferred_backend(self, config: dict[str, Any] | None = None) -> BackendType:
         """Return the user-preferred backend from settings / config.
 
         Falls back to auto-detection when no explicit preference is set.
@@ -201,7 +201,7 @@ class BackendRegistry:
 
     def available_backends(self) -> list[BackendType]:
         """Return sorted list of registered backend types."""
-        return sorted(self._backends.keys())  # type: ignore[return-value]
+        return sorted(self._backends.keys())
 
     def health_check(self) -> dict[str, Any]:
         """Check the health of all registered backends.

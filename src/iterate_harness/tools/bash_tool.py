@@ -24,7 +24,7 @@ class BashToolInput(BaseModel):
     timeout_seconds: int = Field(default=600, ge=1, le=600)
 
 
-class BashTool(BaseTool):
+class BashTool(BaseTool[BashToolInput]):
     """Execute a shell command with stdout/stderr capture."""
 
     name = "bash"

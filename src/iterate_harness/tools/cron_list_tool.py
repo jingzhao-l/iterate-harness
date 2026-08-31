@@ -13,7 +13,7 @@ class CronListToolInput(BaseModel):
     """Arguments for cron listing."""
 
 
-class CronListTool(BaseTool):
+class CronListTool(BaseTool[CronListToolInput]):
     """List local cron jobs."""
 
     name = "cron_list"

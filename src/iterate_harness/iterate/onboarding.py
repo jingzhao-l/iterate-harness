@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
 from .config_loader import CONFIG_FILENAME
 

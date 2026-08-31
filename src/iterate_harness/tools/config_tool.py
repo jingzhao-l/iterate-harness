@@ -16,7 +16,7 @@ class ConfigToolInput(BaseModel):
     value: str | None = Field(default=None)
 
 
-class ConfigTool(BaseTool):
+class ConfigTool(BaseTool[ConfigToolInput]):
     """Read or update IterateHarness settings."""
 
     name = "config"

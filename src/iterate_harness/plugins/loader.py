@@ -691,7 +691,7 @@ def _load_plugin_mcp(path: Path) -> dict[str, McpServerConfig]:
     return parsed.mcpServers
 
 
-def _load_plugin_tools(path: Path, manifest: PluginManifest) -> list[BaseTool]:
+def _load_plugin_tools(path: Path, manifest: PluginManifest) -> list[BaseTool[Any]]:
     """Discover and instantiate BaseTool subclasses from a plugin's tools/ directory."""
     from iterate_harness.tools.base import BaseTool
 
@@ -699,7 +699,7 @@ def _load_plugin_tools(path: Path, manifest: PluginManifest) -> list[BaseTool]:
     if not tools_dir.is_dir():
         return []
 
-    tools: list[BaseTool] = []
+    tools: list[BaseTool[Any]] = []
     for py_file in sorted(tools_dir.glob("*.py")):
         if py_file.name.startswith("_"):
             continue

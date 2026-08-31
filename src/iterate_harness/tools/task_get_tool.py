@@ -14,7 +14,7 @@ class TaskGetToolInput(BaseModel):
     task_id: str = Field(description="Task identifier")
 
 
-class TaskGetTool(BaseTool):
+class TaskGetTool(BaseTool[TaskGetToolInput]):
     """Return detailed task state."""
 
     name = "task_get"

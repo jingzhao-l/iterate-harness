@@ -35,7 +35,7 @@ from .types import KnownIntentional
 _LOG = logging.getLogger(__name__)
 
 #: Interactive channel signatures (mirror engine.query AskUserSelect/Prompt).
-AskSelect = Callable[[str, list[dict]], Awaitable[str]]
+AskSelect = Callable[[str, list[dict[str, str]]], Awaitable[str]]
 AskPrompt = Callable[[str], Awaitable[str]]
 
 # Menu sentinel values (never collide with user text or dimension keys).
@@ -120,7 +120,9 @@ def _preview(text: str) -> str:
     return flat[: LABEL_PREVIEW_LIMIT - 1] + "…"
 
 
-async def _select(ask_select: AskSelect, title: str, options: list[dict]) -> str | None:
+async def _select(
+    ask_select: AskSelect, title: str, options: list[dict[str, str]]
+) -> str | None:
     """Await the select modal; None on cancel/exception."""
     try:
         answer = await ask_select(title, options)
@@ -300,10 +302,12 @@ async def _edit_dimension_focus(
             dimension = await _select_dimension(ask_select, "维度 / Dimension:")
             if dimension is None:
                 continue
-            focus = await _prompt(ask_prompt, f"追加 focus 内容 / Focus text for [{dimension}]:")
-            if focus:
+            focus_text = await _prompt(
+                ask_prompt, f"追加 focus 内容 / Focus text for [{dimension}]:"
+            )
+            if focus_text:
                 data.dimension_focus.append(
-                    DimensionFocusOverride(dimension=dimension, focus=focus)
+                    DimensionFocusOverride(dimension=dimension, focus=focus_text)
                 )
         elif choice is not None and choice.startswith(VALUE_PREFIX_REMOVE):
             index = int(choice[len(VALUE_PREFIX_REMOVE) :])
@@ -406,7 +410,7 @@ async def _collect_extra_command(data: PersonalizationData, ask_prompt: AskPromp
 
 
 async def _main_menu(data: PersonalizationData, ask_select: AskSelect) -> str | None:
-    options: list[dict] = []
+    options: list[dict[str, str]] = []
     for value, label, description in _CATEGORIES:
         field = _CATEGORY_FIELDS[value]
         entries = getattr(data, field)

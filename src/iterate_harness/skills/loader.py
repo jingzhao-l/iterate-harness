@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from iterate_harness.config.paths import get_config_dir
+from iterate_harness.config.settings import Settings
 from iterate_harness.config.settings import load_settings
 from iterate_harness.skills._frontmatter import (
     optional_frontmatter_str,
@@ -16,7 +17,7 @@ from iterate_harness.skills._frontmatter import (
 )
 from iterate_harness.skills.bundled import get_bundled_skills
 from iterate_harness.skills.registry import SkillRegistry
-from iterate_harness.skills.types import SkillDefinition
+from iterate_harness.skills.types import SkillDefinition, SkillMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ def load_skill_registry(
     *,
     extra_skill_dirs: Iterable[str | Path] | None = None,
     extra_plugin_roots: Iterable[str | Path] | None = None,
-    settings=None,
+    settings: Settings | None = None,
 ) -> SkillRegistry:
     """Load bundled and user-defined skills."""
     registry = SkillRegistry()
@@ -117,7 +118,7 @@ def _parse_skill_markdown(default_name: str, content: str) -> tuple[str, str]:
     return parse_skill_frontmatter(default_name, content, fallback_template="Skill: {name}")
 
 
-def _parse_skill_metadata(default_name: str, content: str) -> dict:
+def _parse_skill_metadata(default_name: str, content: str) -> SkillMetadata:
     parsed = parse_skill_metadata(default_name, content, fallback_template="Skill: {name}")
     frontmatter = parsed.get("frontmatter")
     if not isinstance(frontmatter, dict):

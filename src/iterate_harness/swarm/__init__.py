@@ -59,7 +59,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     """Lazily load POSIX-only swarm helpers when they are actually used."""
     target = _LAZY_EXPORTS.get(name)
     if target is None:

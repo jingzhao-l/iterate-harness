@@ -15,7 +15,7 @@ class TeamCreateToolInput(BaseModel):
     description: str = Field(default="", description="Team description")
 
 
-class TeamCreateTool(BaseTool):
+class TeamCreateTool(BaseTool[TeamCreateToolInput]):
     """Create an in-memory team."""
 
     name = "team_create"

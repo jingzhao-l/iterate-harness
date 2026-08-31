@@ -18,7 +18,7 @@ class FileEditToolInput(BaseModel):
     replace_all: bool = Field(default=False)
 
 
-class FileEditTool(BaseTool):
+class FileEditTool(BaseTool[FileEditToolInput]):
     """Replace text in an existing file."""
 
     name = "edit_file"

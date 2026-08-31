@@ -14,7 +14,7 @@ class CronDeleteToolInput(BaseModel):
     name: str = Field(description="Cron job name")
 
 
-class CronDeleteTool(BaseTool):
+class CronDeleteTool(BaseTool[CronDeleteToolInput]):
     """Delete a local cron job."""
 
     name = "cron_delete"

@@ -15,7 +15,7 @@ class CronToggleToolInput(BaseModel):
     enabled: bool = Field(description="True to enable, False to disable")
 
 
-class CronToggleTool(BaseTool):
+class CronToggleTool(BaseTool[CronToggleToolInput]):
     """Enable or disable a local cron job."""
 
     name = "cron_toggle"

@@ -240,9 +240,9 @@ def _apply_run_updates(
 
     # Stubborn: still open with enough accumulated runs.
     for fingerprint in current:
-        record = records[fingerprint]
-        if record["status"] == STATUS_OPEN and record["runs"] >= STUBBORN_MIN_RUNS:
-            delta.stubborn_findings.append(dict(record))
+        stored = records[fingerprint]
+        if stored["status"] == STATUS_OPEN and stored["runs"] >= STUBBORN_MIN_RUNS:
+            delta.stubborn_findings.append(dict(stored))
     return delta
 
 

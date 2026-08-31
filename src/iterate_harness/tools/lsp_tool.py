@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from iterate_harness.services.lsp import (
+    SymbolLocation,
     find_references,
     go_to_definition,
     hover,
@@ -48,7 +49,7 @@ class LspToolInput(BaseModel):
         return self
 
 
-class LspTool(BaseTool):
+class LspTool(BaseTool[LspToolInput]):
     """Read-only code intelligence for Python source files."""
 
     name = "lsp"
@@ -89,14 +90,14 @@ class LspTool(BaseTool):
             return ToolResult(output=_format_symbol_locations(results, root))
 
         if arguments.operation == "find_references":
-            results = find_references(
+            references = find_references(
                 root=root,
                 file_path=file_path,
                 symbol=arguments.symbol,
                 line=arguments.line,
                 character=arguments.character,
             )
-            return ToolResult(output=_format_references(results, root))
+            return ToolResult(output=_format_references(references, root))
 
         result = hover(
             root=root,
@@ -132,7 +133,7 @@ def _display_path(path: Path, root: Path) -> str:
         return str(path)
 
 
-def _format_symbol_locations(results, root: Path) -> str:
+def _format_symbol_locations(results: list[SymbolLocation], root: Path) -> str:
     if not results:
         return "(no results)"
     lines = []

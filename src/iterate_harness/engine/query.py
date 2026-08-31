@@ -9,7 +9,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal, cast
 from uuid import uuid4
 
 from iterate_harness.api.client import (
@@ -23,10 +23,12 @@ from iterate_harness.api.provider import is_model_multimodal
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.config.paths import get_data_dir
 from iterate_harness.engine.messages import (
+    ContentBlock,
     ConversationMessage,
     ImageBlock,
     TextBlock,
     ToolResultBlock,
+    ToolUseBlock,
 )
 from iterate_harness.engine.stream_events import (
     AssistantTextDelta,
@@ -59,7 +61,7 @@ AskUserPrompt = Callable[[str], Awaitable[str]]
 #: options is a list of ``{value, label, description?}`` dicts. Backends
 #: without a directional-key UI leave this unset and the engine falls back
 #: to the free-text question prompt.
-AskUserSelect = Callable[[str, list[dict]], Awaitable[str]]
+AskUserSelect = Callable[[str, list[dict[str, str]]], Awaitable[str]]
 
 MAX_TRACKED_READ_FILES = 6
 MAX_TRACKED_SKILLS = 8
@@ -197,7 +199,7 @@ def _task_focus_state(tool_metadata: dict[str, object] | None) -> dict[str, obje
         value.setdefault("verified_state", [])
         value.setdefault("next_step", "")
         return value
-    replacement = {
+    replacement: dict[str, object] = {
         "goal": "",
         "recent_goals": [],
         "active_artifacts": [],
@@ -421,8 +423,8 @@ def _record_tool_carryover(
     if resolved_file_path is not None:
         _remember_active_artifact(context.tool_metadata, resolved_file_path)
     if tool_name == "read_file" and resolved_file_path is not None:
-        offset = int(tool_input.get("offset") or 0)
-        limit = int(tool_input.get("limit") or 200)
+        offset = int(str(tool_input.get("offset") or 0))
+        limit = int(str(tool_input.get("limit") or 200))
         _remember_read_file(
             context.tool_metadata,
             path=resolved_file_path,
@@ -586,7 +588,11 @@ async def _preprocess_images_in_messages(
     if is_model_multimodal(context.model):
         return
 
-    vision_config = context.tool_metadata.get("vision_model_config")
+    tool_metadata = context.tool_metadata
+    if tool_metadata is None:
+        # No metadata — skip preprocessing.
+        return
+    vision_config = tool_metadata.get("vision_model_config")
     if not vision_config:
         # No vision model configured — skip preprocessing.
         return
@@ -672,7 +678,7 @@ async def run_query(
 
     async def _stream_compaction(
         *,
-        trigger: str,
+        trigger: Literal["auto", "manual", "reactive"],
         force: bool = False,
     ) -> AsyncIterator[tuple[StreamEvent, UsageSnapshot | None]]:
         nonlocal last_compaction_result
@@ -762,7 +768,7 @@ async def run_query(
         usage = UsageSnapshot()
 
         try:
-            async for event in context.api_client.stream_message(
+            async for api_event in context.api_client.stream_message(
                 ApiMessageRequest(
                     model=context.model,
                     messages=messages,
@@ -772,21 +778,21 @@ async def run_query(
                     reasoning_effort=context.reasoning_effort,
                 )
             ):
-                if isinstance(event, ApiTextDeltaEvent):
-                    yield AssistantTextDelta(text=event.text), None
+                if isinstance(api_event, ApiTextDeltaEvent):
+                    yield AssistantTextDelta(text=api_event.text), None
                     continue
-                if isinstance(event, ApiRetryEvent):
+                if isinstance(api_event, ApiRetryEvent):
                     yield StatusEvent(
                         message=(
-                            f"Request failed; retrying in {event.delay_seconds:.1f}s "
-                            f"(attempt {event.attempt + 1} of {event.max_attempts}): {event.message}"
+                            f"Request failed; retrying in {api_event.delay_seconds:.1f}s "
+                            f"(attempt {api_event.attempt + 1} of {api_event.max_attempts}): {api_event.message}"
                         )
                     ), None
                     continue
 
-                if isinstance(event, ApiMessageCompleteEvent):
-                    final_message = event.message
-                    usage = event.usage
+                if isinstance(api_event, ApiMessageCompleteEvent):
+                    final_message = api_event.message
+                    usage = api_event.usage
         except Exception as exc:
             error_msg = str(exc)
             if _is_completion_token_limit_error(exc):
@@ -855,6 +861,7 @@ async def run_query(
 
         tool_calls = final_message.tool_uses
 
+        tool_results: list[ToolResultBlock]
         if len(tool_calls) == 1:
             # Single tool: sequential (stream events immediately)
             tc = tool_calls[0]
@@ -871,7 +878,7 @@ async def run_query(
             for tc in tool_calls:
                 yield ToolExecutionStarted(tool_name=tc.name, tool_input=tc.input), None
 
-            async def _run(tc):
+            async def _run(tc: ToolUseBlock) -> ToolResultBlock:
                 return await _execute_tool_call(context, tc.name, tc.id, tc.input)
 
             # Use return_exceptions=True so a single failing tool does not abandon
@@ -882,29 +889,31 @@ async def run_query(
                 *[_run(tc) for tc in tool_calls], return_exceptions=True
             )
             tool_results = []
-            for tc, result in zip(tool_calls, raw_results):
-                if isinstance(result, BaseException):
+            for tc, loop_result in zip(tool_calls, raw_results):
+                if isinstance(loop_result, BaseException):
                     log.exception(
                         "tool execution raised: name=%s id=%s",
                         tc.name,
                         tc.id,
-                        exc_info=result,
+                        exc_info=loop_result,
                     )
-                    result = ToolResultBlock(
+                    loop_result = ToolResultBlock(
                         tool_use_id=tc.id,
-                        content=f"Tool {tc.name} failed: {type(result).__name__}: {result}",
+                        content=f"Tool {tc.name} failed: {type(loop_result).__name__}: {loop_result}",
                         is_error=True,
                     )
-                tool_results.append(result)
+                tool_results.append(loop_result)
 
-            for tc, result in zip(tool_calls, tool_results):
+            for tc, block_result in zip(tool_calls, tool_results):
                 yield ToolExecutionCompleted(
                     tool_name=tc.name,
-                    output=result.content,
-                    is_error=result.is_error,
+                    output=block_result.content,
+                    is_error=block_result.is_error,
                 ), None
 
-        messages.append(ConversationMessage(role="user", content=tool_results))
+        messages.append(
+            ConversationMessage(role="user", content=cast(list[ContentBlock], tool_results))
+        )
 
         # --- iterate loop-policy control (deterministic convergence) ----
         if context.iterate_policy is not None:

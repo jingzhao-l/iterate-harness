@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from croniter import croniter
+from croniter import croniter  # type: ignore[import-untyped]  # croniter ships no stubs in this env
 
 from iterate_harness.config.paths import get_cron_registry_path
 from iterate_harness.utils.file_lock import exclusive_file_lock
@@ -45,7 +45,7 @@ def save_cron_jobs(jobs: list[dict[str, Any]]) -> None:
 
 def validate_cron_expression(expression: str) -> bool:
     """Return True if the expression is a valid cron schedule."""
-    return croniter.is_valid(expression)
+    return bool(croniter.is_valid(expression))
 
 
 def validate_timezone(name: str | None) -> bool:
@@ -73,12 +73,12 @@ def next_run_time(
     """
     base = base or datetime.now(UTC)
     if not tz_name:
-        return croniter(expression, base).get_next(datetime)
+        return cast(datetime, croniter(expression, base).get_next(datetime))
     if not validate_timezone(tz_name):
         raise ValueError(f"unknown timezone: {tz_name!r} (expected an IANA name like Asia/Shanghai)")
     zone = ZoneInfo(tz_name.strip())
     local_next = croniter(expression, base.astimezone(zone)).get_next(datetime)
-    return local_next.astimezone(UTC)
+    return cast(datetime, local_next.astimezone(UTC))
 
 
 def _recompute_next_run(job: dict[str, Any], base: datetime | None = None) -> None:

@@ -1,5 +1,6 @@
 """Built-in tool registration."""
 
+from iterate_harness.mcp.client import McpClientManager
 from iterate_harness.tools.agent_tool import AgentTool
 from iterate_harness.tools.ask_user_question_tool import AskUserQuestionTool
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
@@ -52,7 +53,7 @@ from iterate_harness.tools.web_fetch_tool import WebFetchTool
 from iterate_harness.tools.web_search_tool import WebSearchTool
 
 
-def create_default_tool_registry(mcp_manager=None) -> ToolRegistry:
+def create_default_tool_registry(mcp_manager: McpClientManager | None = None) -> ToolRegistry:
     """Return the default built-in tool registry."""
     registry = ToolRegistry()
     for tool in (

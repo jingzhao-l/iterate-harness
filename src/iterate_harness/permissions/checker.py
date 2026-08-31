@@ -117,13 +117,13 @@ class PermissionChecker:
         # a mutating write payload matching any configured regex is rejected
         # outright.  Checked before tool allowlists so it cannot be bypassed.
         if content and self._forbidden_content_patterns:
-            for pattern in self._forbidden_content_patterns:
-                if pattern.search(content):
+            for forbidden_pattern in self._forbidden_content_patterns:
+                if forbidden_pattern.search(content):
                     return PermissionDecision(
                         allowed=False,
                         reason=(
                             "Content matches forbidden fix pattern "
-                            f"'{pattern.pattern}' (iterate.forbidden_fix_patterns)"
+                            f"'{forbidden_pattern.pattern}' (iterate.forbidden_fix_patterns)"
                         ),
                     )
 

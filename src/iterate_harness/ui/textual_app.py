@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from typing import TypeVar
 
 from rich.panel import Panel
 from textual import on
@@ -30,7 +31,10 @@ from iterate_harness.engine.stream_events import (
 )
 from iterate_harness.tasks import get_task_manager
 from iterate_harness.ui.coordinator_drain import drain_coordinator_async_agents
-from iterate_harness.ui.runtime import build_runtime, close_runtime, handle_line, start_runtime
+from iterate_harness.ui.runtime import RuntimeBundle, build_runtime, close_runtime, handle_line, start_runtime
+
+
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -228,7 +232,7 @@ class IterateHarnessTerminalApp(App[None]):
             api_key=api_key,
             api_client=api_client,
         )
-        self._bundle = None
+        self._bundle: RuntimeBundle | None = None
         self._assistant_buffer = ""
         self._busy = False
         self.transcript_lines: list[str] = []
@@ -257,7 +261,7 @@ class IterateHarnessTerminalApp(App[None]):
     async def on_mount(self) -> None:
         self._bundle = await build_runtime(
             prompt=self._config.prompt,
-            cwd=str(self.app.cwd) if getattr(self.app, 'cwd', None) else None,
+            cwd=None,
             model=self._config.model,
             base_url=self._config.base_url,
             system_prompt=self._config.system_prompt,
@@ -282,7 +286,7 @@ class IterateHarnessTerminalApp(App[None]):
     async def _ask_question(self, question: str) -> str:
         return str(await self._open_modal(QuestionScreen(question)) or "")
 
-    async def _open_modal(self, screen: ModalScreen) -> object:
+    async def _open_modal(self, screen: ModalScreen[_T]) -> object:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[object] = loop.create_future()
 

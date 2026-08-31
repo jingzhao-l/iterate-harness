@@ -2,6 +2,30 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [1.16.3] - 2026-08-31
+
+### Fixed
+
+- **mypy strict 全量归零**：修复 40+ 模块的严格类型错误（泛型类型参数、Liskov
+  兼容的方法签名、TypedDict/`Unpack`、精确集合注解、清理失效 `type: ignore`），
+  并在 CI quality job 新增 `mypy src` 严格门禁，杜绝类型错误回归。
+- **能力/技能加载正确性**（`skills/loader.py`、`skills/__init__.py`、
+  `plugins/__init__.py`）：补齐懒加载模块的显式类型导入，修复命令注册表的
+  “not callable” 级联问题，恢复可调用性与 IDE 提示。
+- **权限路径环防护**（`permissions/checker.py`）：修复变量遮蔽导致的
+  类型不匹配。
+- **WebUI 路径环逃逸**（`web/security.py:resolve_within`）：改用
+  `os.path.realpath(strict=True)` 探测符号链接环（`ELOOP`），修复
+  `strict=False` 静默截断导致环可绕过目录白名单的问题；新建文件仍正常回退。
+- **WebUI 选择菜单契约**（`web/run_manager.py`）：`RunManager.options` 内部
+  改存普通 dict，仅在 API 状态边界转换为 `SelectOption`，修复测试契约不一致。
+
+### Changed
+
+- **依赖审计**：`pyproject.toml` 增加 `mypy_path = "src"` +
+  `explicit_package_bases`，使 mypy 从 `src/` 解析包，避免命中 site-packages 的
+  陈旧安装导致泛型类被判定为非泛型。
+
 ## [1.16.2] - 2026-08-28
 
 ### Added

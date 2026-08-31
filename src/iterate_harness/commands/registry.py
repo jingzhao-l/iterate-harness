@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Literal, get_args, Iterable
 
-import pyperclip
+import pyperclip  # type: ignore[import-untyped]  # pyperclip ships no stubs in this env
 
 from iterate_harness.auth.manager import AuthManager
 from iterate_harness.config.paths import (
@@ -67,7 +67,7 @@ class CommandResult:
     message: str | None = None
     should_exit: bool = False
     clear_screen: bool = False
-    replay_messages: list | None = None  # ConversationMessage list to replay in TUI
+    replay_messages: list[ConversationMessage] | None = None  # ConversationMessage list to replay in TUI
     continue_pending: bool = False
     continue_turns: int | None = None
     refresh_runtime: bool = False
@@ -261,7 +261,7 @@ def _settings_json_for_display(settings: Settings) -> str:
     return json.dumps(_redact_config_value(settings.model_dump()), indent=2, default=str)
 
 
-def _coerce_setting_value(settings: Settings, key: str, raw: str):
+def _coerce_setting_value(settings: Settings, key: str, raw: str) -> bool | int | str:
     field = Settings.model_fields.get(key)
     if field is None:
         raise KeyError(key)
@@ -342,15 +342,10 @@ async def _skill_command_handler(args: str, context: CommandContext, *, skill_na
 
 
 def _make_skill_slash_command(skill_name: str, description: str) -> SlashCommand:
-    return SlashCommand(
-        skill_name,
-        description,
-        lambda args, context, skill_name=skill_name: _skill_command_handler(
-            args,
-            context,
-            skill_name=skill_name,
-        ),
-    )
+    def handler(args: str, context: CommandContext) -> Awaitable[CommandResult]:
+        return _skill_command_handler(args, context, skill_name=skill_name)
+
+    return SlashCommand(skill_name, description, handler)
 
 
 def lookup_skill_slash_command(raw_input: str, context: CommandContext) -> tuple[SlashCommand, str] | None:
@@ -1312,7 +1307,7 @@ def create_default_command_registry(
         elif args.strip():
             model_name = args.strip()
         else:
-            model_name = None
+            model_name = ""
         if model_name:
             if profile.allowed_models and model_name.lower() != "default" and model_name not in profile.allowed_models:
                 allowed = ", ".join(profile.allowed_models)
@@ -1435,7 +1430,7 @@ def create_default_command_registry(
             refresh_runtime=True,
         )
 
-    def _parse_int_flag(values: list[str]) -> int | None:
+    def _parse_int_flag(values: list[str] | None) -> int | None:
         """Parse a single integer flag value (invalid values become None)."""
         if not values:
             return None
@@ -1816,10 +1811,10 @@ def create_default_command_registry(
             task = await manager.stop_task(tokens[1])
             return CommandResult(message=f"Stopped task {task.id}")
         if tokens[0] == "show" and len(tokens) == 2:
-            task = manager.get_task(tokens[1])
-            if task is None:
+            task_record = manager.get_task(tokens[1])
+            if task_record is None:
                 return CommandResult(message=f"No task found with ID: {tokens[1]}")
-            return CommandResult(message=str(task))
+            return CommandResult(message=str(task_record))
         if tokens[0] == "update" and len(tokens) == 3:
             task_id = tokens[1]
             rest = tokens[2]

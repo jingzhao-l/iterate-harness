@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from pydantic import BaseModel, Field, create_model
 
@@ -11,7 +12,7 @@ from iterate_harness.mcp.types import McpToolInfo
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
 
-class McpToolAdapter(BaseTool):
+class McpToolAdapter(BaseTool[BaseModel]):
     """Expose one MCP tool as a normal IterateHarness tool."""
 
     def __init__(self, manager: McpClientManager, tool_info: McpToolInfo) -> None:
@@ -47,14 +48,15 @@ _JSON_TYPE_MAP: dict[str, type] = {
 
 
 def _input_model_from_schema(tool_name: str, schema: dict[str, object]) -> type[BaseModel]:
-    properties = schema.get("properties", {})
-    if not isinstance(properties, dict):
-        return create_model(f"{tool_name.title()}Input")
+    raw_properties = schema.get("properties", {})
+    properties = raw_properties if isinstance(raw_properties, dict) else {}
 
-    fields = {}
-    required = set(schema.get("required", [])) if isinstance(schema.get("required", []), list) else set()
+    fields: dict[str, Any] = {}
+    raw_required = schema.get("required", [])
+    required = set(raw_required) if isinstance(raw_required, list) else set()
     for key in properties:
-        prop = properties[key] if isinstance(properties[key], dict) else {}
+        prop_value = properties[key]
+        prop = prop_value if isinstance(prop_value, dict) else {}
         py_type = _JSON_TYPE_MAP.get(str(prop.get("type", "")), object)
         if key in required:
             fields[key] = (py_type, Field(default=...))

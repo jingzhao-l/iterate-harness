@@ -147,7 +147,7 @@ def _write_metadata(
         )
 
 
-def _read_metadata(base_dir: Path, worktree_path: Path) -> dict:
+def _read_metadata(base_dir: Path, worktree_path: Path) -> dict[str, object]:
     """Read the sidecar JSON metadata for *worktree_path*, empty dict on error."""
     namespace = worktree_path.parent.name
     flat_slug = worktree_path.name
@@ -442,7 +442,7 @@ class WorktreeManager:
                     branch=branch,
                     original_path=original_path,
                     created_at=created_at,
-                    agent_id=agent_id if agent_id else None,
+                    agent_id=str(agent_id) if agent_id else None,
                 )
             )
 

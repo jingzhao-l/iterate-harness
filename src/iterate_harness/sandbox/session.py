@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 _active_session: DockerSandboxSession | None = None
 
 
-def get_docker_sandbox():
+def get_docker_sandbox() -> DockerSandboxSession | None:
     """Return the active Docker sandbox session, or ``None``."""
     return _active_session
 

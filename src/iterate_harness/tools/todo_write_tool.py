@@ -17,7 +17,7 @@ class TodoWriteToolInput(BaseModel):
     path: str = Field(default="TODO.md")
 
 
-class TodoWriteTool(BaseTool):
+class TodoWriteTool(BaseTool[TodoWriteToolInput]):
     """Add or update an item in a TODO markdown file."""
 
     name = "todo_write"

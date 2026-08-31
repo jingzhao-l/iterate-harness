@@ -22,7 +22,7 @@ import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
 from .types import KnownIntentional
 

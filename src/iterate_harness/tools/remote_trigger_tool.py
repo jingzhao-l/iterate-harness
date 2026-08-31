@@ -20,7 +20,7 @@ class RemoteTriggerToolInput(BaseModel):
     timeout_seconds: int = Field(default=120, ge=1, le=600)
 
 
-class RemoteTriggerTool(BaseTool):
+class RemoteTriggerTool(BaseTool[RemoteTriggerToolInput]):
     """Run a registered cron job immediately."""
 
     name = "remote_trigger"

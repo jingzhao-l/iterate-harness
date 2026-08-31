@@ -217,15 +217,21 @@ class BackgroundTaskManager:
         payload = _encode_task_worker_payload(data)
         async with self._input_locks[task_id]:
             process = await self._ensure_writable_process(task)
-            process.stdin.write(payload)
+            stdin = process.stdin
+            if stdin is None:
+                raise ValueError(f"Task {task_id} does not accept input") from None
+            stdin.write(payload)
             try:
-                await process.stdin.drain()
+                await stdin.drain()
             except (BrokenPipeError, ConnectionResetError):
                 if task.type not in {"local_agent", "remote_agent", "in_process_teammate"}:
                     raise ValueError(f"Task {task_id} does not accept input") from None
                 process = await self._restart_agent_task(task)
-                process.stdin.write(payload)
-                await process.stdin.drain()
+                stdin = process.stdin
+                if stdin is None:
+                    raise ValueError(f"Task {task_id} does not accept input") from None
+                stdin.write(payload)
+                await stdin.drain()
 
     def read_task_output(self, task_id: str, *, max_bytes: int = 12000) -> str:
         """Return the tail of a task's output file."""

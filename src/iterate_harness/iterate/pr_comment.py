@@ -156,15 +156,15 @@ def post_pr_comment(
         return PostResult("skipped", "body missing the iterate-report marker")
 
     try:
-        proc = runner(["pr", "view", "--json", "number", "--jq", ".number"], cwd, None)
+        pr_view = runner(["pr", "view", "--json", "number", "--jq", ".number"], cwd, None)
     except FileNotFoundError:
         return PostResult("skipped", "gh CLI not installed")
     except subprocess.TimeoutExpired:
         return PostResult("skipped", "gh pr view timed out")
-    if proc.returncode != 0:
+    if pr_view.returncode != 0:
         return PostResult("skipped", "no pull request context (or gh auth missing)")
 
-    number = _parse_number(_output(proc))
+    number = _parse_number(_output(pr_view))
     if number is None:
         return PostResult("skipped", "could not parse PR number from gh output")
 
@@ -232,7 +232,7 @@ def _find_marker_comment(
     cwd: str,
     repo: str,
     number: int,
-) -> int | Literal["error"]:
+) -> int | Literal["error"] | None:
     """Return the id of OUR latest comment on the PR, None or "error".
 
     Pages through the comment list (``per_page=100``) until a short page is

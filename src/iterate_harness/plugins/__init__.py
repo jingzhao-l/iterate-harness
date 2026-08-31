@@ -5,6 +5,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
+    from iterate_harness.plugins.installer import (
+        install_plugin_from_path as install_plugin_from_path,
+    )
+    from iterate_harness.plugins.installer import uninstall_plugin as uninstall_plugin
+    from iterate_harness.plugins.loader import (
+        discover_plugin_paths as discover_plugin_paths,
+    )
+    from iterate_harness.plugins.loader import get_project_plugins_dir as get_project_plugins_dir
+    from iterate_harness.plugins.loader import get_user_plugins_dir as get_user_plugins_dir
+    from iterate_harness.plugins.loader import load_plugins as load_plugins
     from iterate_harness.plugins.schemas import PluginManifest
     from iterate_harness.plugins.types import LoadedPlugin
 
@@ -20,7 +30,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     if name in {"discover_plugin_paths", "get_project_plugins_dir", "get_user_plugins_dir", "load_plugins"}:
         from iterate_harness.plugins.loader import (
             discover_plugin_paths,

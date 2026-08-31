@@ -35,7 +35,7 @@ import logging
 import socket
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from iterate_harness.config.paths import get_config_dir
 from iterate_harness.utils.file_lock import exclusive_file_lock
@@ -177,20 +177,22 @@ def _encrypt_value(plaintext: str) -> str:
     return _FERNET_MARKER + token.decode("ascii")
 
 
-def _encrypt_if_needed(value: Any) -> Any:
+def _encrypt_if_needed(value: str) -> str:
     """Encrypt *value* unless it is already a Fernet-encrypted string."""
-    if isinstance(value, str) and not value.startswith(_FERNET_MARKER):
-        return _encrypt_value(value)
-    return value
+    if value.startswith(_FERNET_MARKER):
+        return value
+    return _encrypt_value(value)
 
 
-def _decrypt_value(stored: Any) -> Any:
+def _decrypt_value(stored: object) -> str | None:
     """Decrypt a stored value, transparently handling legacy plaintext.
 
     Returns the plaintext string, the original value when it was written by
     an older version (no marker), or ``None`` when decryption fails.
     """
-    if not isinstance(stored, str) or not stored.startswith(_FERNET_MARKER):
+    if not isinstance(stored, str):
+        return None
+    if not stored.startswith(_FERNET_MARKER):
         return stored
     cipher = _fernet()
     if cipher is None:
@@ -222,7 +224,7 @@ def _load_creds_file() -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, OSError) as exc:
         log.warning("Failed to read credentials file: %s", exc)
         return {}
@@ -351,7 +353,7 @@ def load_credential(provider: str, key: str, *, use_keyring: bool | None = None)
 
             value = keyring.get_password(_KEYRING_SERVICE, _keyring_key(provider, key))
             if value is not None:
-                return value
+                return str(value)
         except Exception as exc:
             log.warning("Keyring load failed, falling back to file: %s", exc)
 

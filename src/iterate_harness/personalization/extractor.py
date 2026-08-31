@@ -8,7 +8,7 @@ import re
 log = logging.getLogger(__name__)
 
 # Patterns that indicate environment-specific facts worth capturing
-_FACT_PATTERNS: list[tuple[str, str, re.Pattern]] = [
+_FACT_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("ssh_host", "SSH connection", re.compile(
         r"ssh\s+(?:-[io]\s+\S+\s+)*(\S+@[\d.]+|\S+@\S+)", re.IGNORECASE
     )),
@@ -43,10 +43,10 @@ _FACT_PATTERNS: list[tuple[str, str, re.Pattern]] = [
 ]
 
 
-def extract_facts_from_text(text: str) -> list[dict]:
+def extract_facts_from_text(text: str) -> list[dict[str, object]]:
     """Extract environment-specific facts from conversation text using patterns."""
-    facts = []
-    seen_keys = set()
+    facts: list[dict[str, object]] = []
+    seen_keys: set[str] = set()
 
     for fact_type, label, pattern in _FACT_PATTERNS:
         for match in pattern.finditer(text):
@@ -75,7 +75,7 @@ def extract_facts_from_text(text: str) -> list[dict]:
     return facts
 
 
-def extract_local_rules(session_messages: list[dict]) -> list[dict]:
+def extract_local_rules(session_messages: list[dict[str, object]]) -> list[dict[str, object]]:
     """Extract environment facts from a list of session messages.
 
     Args:
@@ -84,7 +84,7 @@ def extract_local_rules(session_messages: list[dict]) -> list[dict]:
     Returns:
         List of fact dicts with key, type, label, value, confidence.
     """
-    all_text = []
+    all_text: list[str] = []
     for msg in session_messages:
         content = msg.get("content", "")
         if isinstance(content, str):
@@ -98,14 +98,14 @@ def extract_local_rules(session_messages: list[dict]) -> list[dict]:
     return extract_facts_from_text(combined)
 
 
-def facts_to_rules_markdown(facts: list[dict]) -> str:
+def facts_to_rules_markdown(facts: list[dict[str, object]]) -> str:
     """Convert extracted facts to a markdown rules document."""
     if not facts:
         return ""
 
-    grouped: dict[str, list[dict]] = {}
-    for f in facts:
-        grouped.setdefault(f["type"], []).append(f)
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for fact in facts:
+        grouped.setdefault(str(fact["type"]), []).append(fact)
 
     lines = [
         "# Local Environment Rules",

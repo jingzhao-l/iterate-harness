@@ -15,7 +15,7 @@ class ReadMcpResourceToolInput(BaseModel):
     uri: str = Field(description="Resource URI")
 
 
-class ReadMcpResourceTool(BaseTool):
+class ReadMcpResourceTool(BaseTool[ReadMcpResourceToolInput]):
     """Read one resource from an MCP server."""
 
     name = "read_mcp_resource"

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
+import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 from pydantic import BaseModel, Field
 
 from iterate_harness.config.paths import get_config_dir

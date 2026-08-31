@@ -13,7 +13,7 @@ from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 from types import ModuleType
-from typing import Optional
+from typing import Optional, Sequence
 from urllib.parse import urlparse
 
 import typer
@@ -266,7 +266,7 @@ def _entry_sort_key(entry: dict[str, object]) -> tuple[int, str]:
 def _recommend_preview_candidates(
     prompt: str | None,
     *,
-    skills: list[object],
+    skills: Sequence[object],
     tool_schemas: list[dict[str, object]],
     command_entries: list[dict[str, object]],
 ) -> dict[str, list[dict[str, object]]]:

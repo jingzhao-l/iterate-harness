@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 from pathlib import Path
-from typing import Any, Annotated, Literal
+from typing import Any, Annotated, Literal, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -73,7 +73,7 @@ class ConversationMessage(BaseModel):
         """Normalize legacy/null payloads before block validation."""
         if value is None:
             return []
-        return value
+        return cast(list[Any], value)
 
     @classmethod
     def from_user_text(cls, text: str) -> "ConversationMessage":
@@ -151,7 +151,7 @@ def sanitize_conversation_messages(messages: list[ConversationMessage]) -> list[
                 pending_tool_use_index = None
 
         if message.role == "user" and tool_results and not matched_pending_tool_results:
-            content = [
+            content: list[ContentBlock] = [
                 block for block in message.content if not isinstance(block, ToolResultBlock)
             ]
             if not content:

@@ -796,7 +796,7 @@ def _build_passthrough_compaction_result(
     compact_kind: CompactionKind,
     metadata: dict[str, Any] | None = None,
 ) -> CompactionResult:
-    compact_metadata = {
+    compact_metadata: dict[str, object] = {
         "trigger": trigger,
         "compact_kind": compact_kind,
         "pre_compact_message_count": len(messages),
@@ -948,7 +948,7 @@ def try_session_memory_compaction(
         and len(provisional) >= len(messages)
     ):
         return None
-    compact_metadata = {
+    compact_metadata: dict[str, object] = {
         "trigger": trigger,
         "compact_kind": "session_memory",
         "pre_compact_message_count": len(messages),
@@ -1419,7 +1419,7 @@ async def compact_conversation(
     else:
         hook_attachments = []
 
-    compact_metadata = {
+    compact_metadata: dict[str, object] = {
         "trigger": trigger,
         "compact_kind": "full",
         "pre_compact_message_count": len(messages),

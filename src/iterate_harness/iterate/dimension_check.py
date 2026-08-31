@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
 from .config_loader import load_effective_config
 from .types import IterateConfig
@@ -234,13 +234,16 @@ def _check_personalization(
         return
 
     dangling: list[str] = []
-    for index, dim in enumerate(personalization.get("fix_priority_order") or []):
+    priority_raw = personalization.get("fix_priority_order")
+    for index, dim in enumerate(priority_raw if isinstance(priority_raw, list) else []):
         if isinstance(dim, str) and dim not in enabled:
             dangling.append(f"fix_priority_order[{index}]='{dim}'")
-    for index, item in enumerate(personalization.get("dimension_focus") or []):
+    focus_raw = personalization.get("dimension_focus")
+    for index, item in enumerate(focus_raw if isinstance(focus_raw, list) else []):
         if isinstance(item, dict) and item.get("dimension") not in enabled:
             dangling.append(f"dimension_focus[{index}]='{item.get('dimension')}'")
-    for index, item in enumerate(personalization.get("known_intentional") or []):
+    known_raw = personalization.get("known_intentional")
+    for index, item in enumerate(known_raw if isinstance(known_raw, list) else []):
         if isinstance(item, dict) and item.get("dimension") not in enabled:
             dangling.append(f"known_intentional[{index}]='{item.get('dimension')}'")
 

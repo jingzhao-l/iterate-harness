@@ -13,7 +13,7 @@ class ExitPlanModeToolInput(BaseModel):
     """No-op input model."""
 
 
-class ExitPlanModeTool(BaseTool):
+class ExitPlanModeTool(BaseTool[ExitPlanModeToolInput]):
     """Switch settings permission mode back to default."""
 
     name = "exit_plan_mode"

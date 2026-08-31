@@ -85,6 +85,9 @@ jobs:
       - name: Ruff
         run: uv run ruff check src tests scripts
 
+      - name: Mypy (strict)
+        run: uv run mypy src
+
   frontend-typecheck:
     name: Frontend typecheck
     runs-on: ubuntu-latest

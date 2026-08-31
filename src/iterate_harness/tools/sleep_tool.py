@@ -15,7 +15,7 @@ class SleepToolInput(BaseModel):
     seconds: float = Field(default=1.0, ge=0.0, le=30.0)
 
 
-class SleepTool(BaseTool):
+class SleepTool(BaseTool[SleepToolInput]):
     """Pause execution briefly."""
 
     name = "sleep"

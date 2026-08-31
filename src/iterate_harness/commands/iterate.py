@@ -52,15 +52,37 @@ _LOG = logging.getLogger(__name__)
 if TYPE_CHECKING:
     # Imported lazily to avoid a registry ⇄ iterate-handler import cycle.
     from iterate_harness.commands.registry import CommandContext, CommandResult
+    from iterate_harness.engine.messages import ConversationMessage
 
 DEFAULT_LOG_TAIL = 20
 
 
-def _result(**kwargs: object):
+def _result(
+    *,
+    message: str | None = None,
+    should_exit: bool = False,
+    clear_screen: bool = False,
+    replay_messages: list[ConversationMessage] | None = None,
+    continue_pending: bool = False,
+    continue_turns: int | None = None,
+    refresh_runtime: bool = False,
+    submit_prompt: str | None = None,
+    submit_model: str | None = None,
+) -> CommandResult:
     """Build a CommandResult with a lazy import (registry loads us first)."""
     from iterate_harness.commands.registry import CommandResult
 
-    return CommandResult(**kwargs)  # type: ignore[arg-type]
+    return CommandResult(
+        message=message,
+        should_exit=should_exit,
+        clear_screen=clear_screen,
+        replay_messages=replay_messages,
+        continue_pending=continue_pending,
+        continue_turns=continue_turns,
+        refresh_runtime=refresh_runtime,
+        submit_prompt=submit_prompt,
+        submit_model=submit_model,
+    )
 
 
 async def _handle_personalize(cwd: str, ctx: CommandContext) -> CommandResult:
@@ -443,8 +465,8 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             "--- end ---",
         ]
         if "--write" in rest or "--force" in rest:
-            written = init_wizard.write_config(cwd, config)
-            lines.append(f"\nWrote {written}")
+            written_path = init_wizard.write_config(cwd, config)
+            lines.append(f"\nWrote {written_path}")
         else:
             lines.append(
                 "\nPreview only — run `/iterate init --write` to accept, or `ih iterate init` for the interactive wizard."

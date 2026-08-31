@@ -190,31 +190,36 @@ def personalization_constraints(cwd: str | None) -> str:
         return ""
 
     lines: list[str] = []
-    protected = [str(p) for p in personalization.get("protected_paths") or []]
+    protected_raw = personalization.get("protected_paths")
+    protected = [str(p) for p in (protected_raw if isinstance(protected_raw, list) else [])]
     if protected:
         lines.append(
             "Protected paths (NEVER modify, enforced by permissions too): "
             + ", ".join(f"`{p}`" for p in protected)
         )
+    risks_raw = personalization.get("risk_areas")
     risks = [
         (str(item.get("path", "")), str(item.get("reason", "")))
-        for item in personalization.get("risk_areas") or []
+        for item in (risks_raw if isinstance(risks_raw, list) else [])
         if isinstance(item, dict)
     ]
     if risks:
         rendered = ", ".join(f"`{path}` ({reason or 'no reason given'})" for path, reason in risks)
         lines.append(f"Risk areas (changes require explicit user approval): {rendered}")
-    forbidden = [str(f) for f in personalization.get("forbidden_fixes") or []]
+    forbidden_raw = personalization.get("forbidden_fixes")
+    forbidden = [str(f) for f in (forbidden_raw if isinstance(forbidden_raw, list) else [])]
     if forbidden:
         lines.append(
             "Forbidden fix approaches (never use): " + ", ".join(f"`{f}`" for f in forbidden)
         )
-    priority = [str(d) for d in personalization.get("fix_priority_order") or []]
+    priority_raw = personalization.get("fix_priority_order")
+    priority = [str(d) for d in (priority_raw if isinstance(priority_raw, list) else [])]
     if priority:
         lines.append("Fix priority order (high to low): " + " > ".join(priority))
+    focus_raw = personalization.get("dimension_focus")
     focus = [
         (str(item.get("dimension", "")), str(item.get("focus", "")))
-        for item in personalization.get("dimension_focus") or []
+        for item in (focus_raw if isinstance(focus_raw, list) else [])
         if isinstance(item, dict)
     ]
     for dimension, focus_text in focus:
@@ -358,7 +363,7 @@ def normal_kickoff(
 def resume_kickoff(
     goal: str,
     max_rounds: int,
-    last_summary: dict,
+    last_summary: dict[str, object],
     template: str = DEFAULT_TEMPLATE,
 ) -> str:
     """First-turn prompt that resumes the last iterate run (breakpoint resume).
@@ -367,11 +372,14 @@ def resume_kickoff(
     :func:`iterate_harness.iterate.last_state.summarize_last_run`.
     """
     verdict = str(last_summary.get("verdict") or "unknown")
-    last_rounds = int(last_summary.get("rounds") or 0)
-    total = int(last_summary.get("totalFindings") or 0)
+    rounds_raw = last_summary.get("rounds")
+    last_rounds = int(rounds_raw) if isinstance(rounds_raw, (int, str)) else 0
+    total_raw = last_summary.get("totalFindings")
+    total = int(total_raw) if isinstance(total_raw, (int, str)) else 0
     interrupted = last_summary.get("interrupted", False)
     preview_lines: list[str] = []
-    for finding in last_summary.get("preview") or []:
+    preview_raw = last_summary.get("preview")
+    for finding in (preview_raw if isinstance(preview_raw, list) else []):
         if not isinstance(finding, dict):
             continue
         preview_lines.append(
@@ -399,13 +407,15 @@ def resume_kickoff(
             + "\n".join(lines)
             + "\n"
         )
+    per_dim_raw = last_summary.get("perDimension")
+    per_dim = per_dim_raw if isinstance(per_dim_raw, dict) else {}
     if interrupted:
         return (
             f"Resume the interrupted iterate run on this project. Goal: {goal}. "
             f"The previous run was interrupted after round {last_rounds} (last "
             f"convergence checkpoint: {total} finding(s)). The checkpoint "
             f"per-dimension breakdown is: "
-            f"{dict(last_summary.get('perDimension') or {})}. "
+            f"{dict(per_dim)}. "
             "Re-read the decision log (.iterate/decision-log.jsonl) via "
             "iterate_log first, re-verify which of the previously reported "
             "findings still reproduce on the current state, then continue "

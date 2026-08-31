@@ -23,7 +23,7 @@ class CronCreateToolInput(BaseModel):
     enabled: bool = Field(default=True, description="Whether the job is active")
 
 
-class CronCreateTool(BaseTool):
+class CronCreateTool(BaseTool[CronCreateToolInput]):
     """Create or replace a local cron job."""
 
     name = "cron_create"

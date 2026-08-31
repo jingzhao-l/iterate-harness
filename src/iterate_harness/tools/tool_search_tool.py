@@ -13,7 +13,7 @@ class ToolSearchToolInput(BaseModel):
     query: str = Field(description="Substring to search in tool names and descriptions")
 
 
-class ToolSearchTool(BaseTool):
+class ToolSearchTool(BaseTool[ToolSearchToolInput]):
     """Search tool registry contents."""
 
     name = "tool_search"

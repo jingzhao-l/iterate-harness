@@ -1108,11 +1108,11 @@ async def handle_permission_request(
         )
 
     file_path: str | None = (
-        request.input.get("file_path")  # type: ignore[assignment]
+        request.input.get("file_path")
         or request.input.get("path")
         or None
     )
-    command: str | None = request.input.get("command")  # type: ignore[assignment]
+    command: str | None = request.input.get("command")
 
     decision = checker.evaluate(
         request.tool_name,

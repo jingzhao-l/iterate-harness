@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -11,10 +12,12 @@ from iterate_harness.coordinator.coordinator_mode import get_team_registry
 from iterate_harness.hooks import HookEvent
 from iterate_harness.swarm.registry import get_backend_registry
 from iterate_harness.swarm.types import TeammateSpawnConfig
-from iterate_harness.tasks import get_task_manager
+from iterate_harness.tasks import TaskRecord, get_task_manager
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
 logger = logging.getLogger(__name__)
+
+AgentTaskType = Literal["local_agent", "remote_agent", "in_process_teammate"]
 
 
 class AgentToolInput(BaseModel):
@@ -35,7 +38,7 @@ class AgentToolInput(BaseModel):
     )
 
 
-class AgentTool(BaseTool):
+class AgentTool(BaseTool[AgentToolInput]):
     """Spawn a local agent subprocess."""
 
     name = "agent"
@@ -75,7 +78,7 @@ class AgentTool(BaseTool):
             command=arguments.command,
             system_prompt=agent_def.system_prompt if agent_def else None,
             permissions=agent_def.permissions if agent_def else [],
-            task_type=arguments.mode,
+            task_type=cast(AgentTaskType, arguments.mode),
         )
 
         try:
@@ -88,25 +91,26 @@ class AgentTool(BaseTool):
             return ToolResult(output=result.error or "Failed to spawn agent", is_error=True)
 
         if arguments.team:
-            registry = get_team_registry()
+            team_registry = get_team_registry()
             try:
-                registry.add_agent(arguments.team, result.task_id)
+                team_registry.add_agent(arguments.team, result.task_id)
             except ValueError:
-                registry.create_team(arguments.team)
-                registry.add_agent(arguments.team, result.task_id)
+                team_registry.create_team(arguments.team)
+                team_registry.add_agent(arguments.team, result.task_id)
 
         if context.hook_executor is not None:
             manager = get_task_manager()
+            hook_executor = context.hook_executor
             unregister = None
 
-            async def _emit_subagent_stop(task_record) -> None:
+            async def _emit_subagent_stop(task_record: TaskRecord) -> None:
                 nonlocal unregister
                 if task_record.id != result.task_id:
                     return
                 if unregister is not None:
                     unregister()
                     unregister = None
-                await context.hook_executor.execute(
+                await hook_executor.execute(
                     HookEvent.SUBAGENT_STOP,
                     {
                         "event": HookEvent.SUBAGENT_STOP.value,

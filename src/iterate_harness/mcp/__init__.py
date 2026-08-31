@@ -32,7 +32,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     if name == "McpClientManager":
         from iterate_harness.mcp.client import McpClientManager
 

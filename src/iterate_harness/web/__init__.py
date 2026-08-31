@@ -18,7 +18,7 @@ from __future__ import annotations
 __all__ = ["create_app", "serve"]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     """Lazily re-export the FastAPI factory + server from ``web.api``.
 
     Importing the package never requires fastapi to be present (e.g. for the

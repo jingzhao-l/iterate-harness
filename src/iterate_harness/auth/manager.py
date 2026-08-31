@@ -7,6 +7,7 @@ from typing import Any
 
 from iterate_harness.config.settings import (
     ProviderProfile,
+    Settings,
     auth_source_provider_name,
     auth_source_uses_api_key,
     builtin_provider_profile_names,
@@ -72,7 +73,7 @@ class AuthManager:
     track of the currently active provider via settings.
     """
 
-    def __init__(self, settings: Any | None = None) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
         # Lazy-load settings when not provided so that the manager can be
         # instantiated without importing the full config subsystem.
         self._settings = settings
@@ -82,7 +83,7 @@ class AuthManager:
     # ------------------------------------------------------------------
 
     @property
-    def settings(self) -> Any:
+    def settings(self) -> Settings:
         if self._settings is None:
             from iterate_harness.config import load_settings
 
@@ -127,7 +128,7 @@ class AuthManager:
                     configured = True
                     origin = "env"
                     state = "configured"
-                elif load_credential(storage_provider, "api_key") or getattr(self.settings, "api_key", ""):
+                elif load_credential(storage_provider, "api_key") or self.settings.api_key:
                     configured = True
                     origin = "file"
                     state = "configured"
@@ -193,7 +194,7 @@ class AuthManager:
             if env_var and os.environ.get(env_var):
                 configured = True
                 source = "env"
-            elif provider == "anthropic" and getattr(self.settings, "api_key", ""):
+            elif provider == "anthropic" and bool(self.settings.api_key):
                 configured = True
                 source = "file"
             elif load_credential(provider, "api_key"):
@@ -223,7 +224,7 @@ class AuthManager:
             elif auth_source_uses_api_key(profile.auth_source):
                 storage_provider = credential_storage_provider_name(name, profile)
                 configured = bool(load_credential(storage_provider, "api_key")) or configured
-                if not configured and name == active and getattr(self.settings, "api_key", ""):
+                if not configured and name == active and bool(self.settings.api_key):
                     configured = True
                 auth_state = "configured" if configured else "missing"
             statuses[name] = {

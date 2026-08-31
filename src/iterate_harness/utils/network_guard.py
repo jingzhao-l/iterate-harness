@@ -114,7 +114,7 @@ async def _resolve_host_addresses(host: str, port: int) -> set[_IPAddress]:
             candidate = sockaddr[0]
         else:
             continue
-        parsed = _parse_ip_literal(candidate)
+        parsed = _parse_ip_literal(str(candidate))
         if parsed is not None:
             addresses.add(parsed)
     return addresses

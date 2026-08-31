@@ -47,7 +47,7 @@ from iterate_harness.keybindings import load_keybindings
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
 AskUserPrompt = Callable[[str], Awaitable[str]]
-AskUserSelect = Callable[[str, list[dict[str, object]]], Awaitable[str]]
+AskUserSelect = Callable[[str, list[dict[str, str]]], Awaitable[str]]
 SystemPrinter = Callable[[str], Awaitable[None]]
 StreamRenderer = Callable[[StreamEvent], Awaitable[None]]
 ClearHandler = Callable[[], Awaitable[None]]

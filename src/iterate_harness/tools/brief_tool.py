@@ -14,7 +14,7 @@ class BriefToolInput(BaseModel):
     max_chars: int = Field(default=200, ge=20, le=2000)
 
 
-class BriefTool(BaseTool):
+class BriefTool(BaseTool[BriefToolInput]):
     """Return a shortened version of text."""
 
     name = "brief"

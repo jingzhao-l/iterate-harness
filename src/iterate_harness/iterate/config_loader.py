@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import yaml
+import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
 from .types import (
     SEVERITY_METRICS,
@@ -447,10 +447,15 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     worktree_isolation, _worktree_errors = parse_worktree_isolation(data.get("worktree_isolation"))
     thresholds, _threshold_errors = parse_thresholds(data.get("thresholds"))
 
+    language_raw = data.get("language", defaults.language)
+    language = language_raw if language_raw in ("zh", "en") else defaults.language
+    max_rounds_raw = data.get("max_rounds", defaults.max_rounds)
+    max_rounds = max_rounds_raw if isinstance(max_rounds_raw, int) else defaults.max_rounds
+
     return IterateConfig(
-        goal=data.get("goal", defaults.goal),
-        max_rounds=data.get("max_rounds", defaults.max_rounds),
-        language=data.get("language", defaults.language),
+        goal=str(data.get("goal", defaults.goal)),
+        max_rounds=max_rounds,
+        language=language,
         dimensions=list(dimensions) if isinstance(dimensions, list) else list(defaults.dimensions),
         review=review,
         atomic=atomic,

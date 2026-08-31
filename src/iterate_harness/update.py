@@ -110,10 +110,7 @@ class _CurlResponse:
 
     def __init__(self, text: str) -> None:
         self._text = text
-
-    @property
-    def status_code(self) -> int:
-        return 200
+        self.status_code = 200
 
     def json(self) -> object:
         return json.loads(self._text)

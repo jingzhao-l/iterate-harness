@@ -18,7 +18,7 @@ class McpAuthToolInput(BaseModel):
     key: str | None = Field(default=None, description="Header or env key override")
 
 
-class McpAuthTool(BaseTool):
+class McpAuthTool(BaseTool[McpAuthToolInput]):
     """Persist MCP auth settings for one server."""
 
     name = "mcp_auth"
@@ -36,6 +36,7 @@ class McpAuthTool(BaseTool):
         if config is None:
             return ToolResult(output=f"Unknown MCP server: {arguments.server_name}", is_error=True)
 
+        updated: McpStdioServerConfig | McpHttpServerConfig | McpWebSocketServerConfig
         if isinstance(config, McpStdioServerConfig):
             if arguments.mode not in {"env", "bearer"}:
                 return ToolResult(output="stdio MCP auth supports env or bearer modes", is_error=True)

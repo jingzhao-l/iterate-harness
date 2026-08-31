@@ -14,7 +14,7 @@ class TaskListToolInput(BaseModel):
     status: str | None = Field(default=None, description="Optional status filter")
 
 
-class TaskListTool(BaseTool):
+class TaskListTool(BaseTool[TaskListToolInput]):
     """List background tasks."""
 
     name = "task_list"

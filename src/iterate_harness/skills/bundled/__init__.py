@@ -10,7 +10,7 @@ from iterate_harness.skills._frontmatter import (
     parse_skill_frontmatter,
     parse_skill_metadata,
 )
-from iterate_harness.skills.types import SkillDefinition
+from iterate_harness.skills.types import SkillDefinition, SkillMetadata
 
 _CONTENT_DIR = Path(__file__).parent / "content"
 
@@ -57,7 +57,7 @@ def _parse_frontmatter(default_name: str, content: str) -> tuple[str, str]:
     )
 
 
-def _parse_metadata(default_name: str, content: str) -> dict:
+def _parse_metadata(default_name: str, content: str) -> SkillMetadata:
     parsed = parse_skill_metadata(default_name, content, fallback_template="Bundled skill: {name}")
     frontmatter = parsed.get("frontmatter")
     if not isinstance(frontmatter, dict):

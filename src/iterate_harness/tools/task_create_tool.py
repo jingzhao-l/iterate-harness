@@ -20,7 +20,7 @@ class TaskCreateToolInput(BaseModel):
     model: str | None = Field(default=None)
 
 
-class TaskCreateTool(BaseTool):
+class TaskCreateTool(BaseTool[TaskCreateToolInput]):
     """Create a background task."""
 
     name = "task_create"

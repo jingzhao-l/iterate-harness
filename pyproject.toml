@@ -96,3 +96,8 @@ select = ["E4", "E7", "E9", "F"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+# src-layout: resolve `iterate_harness` from `src/` to prevent mypy from
+# picking a stale/partial package installed in site-packages (which made
+# generic classes like `BaseTool[T]` look non-generic).
+mypy_path = "src"
+explicit_package_bases = true

@@ -14,7 +14,7 @@ class SkillToolInput(BaseModel):
     name: str = Field(description="Skill name")
 
 
-class SkillTool(BaseTool):
+class SkillTool(BaseTool[SkillToolInput]):
     """Return the content of a loaded skill."""
 
     name = "skill"

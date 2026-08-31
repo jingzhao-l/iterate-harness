@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from iterate_harness.coordinator.agent_definitions import AgentDefinition
 from iterate_harness.mcp.types import McpServerConfig
@@ -46,7 +46,7 @@ class LoadedPlugin:
     skills: list[SkillDefinition] = field(default_factory=list)
     commands: list[PluginCommandDefinition] = field(default_factory=list)
     agents: list[AgentDefinition] = field(default_factory=list)
-    tools: list[BaseTool] = field(default_factory=list)
+    tools: list[BaseTool[Any]] = field(default_factory=list)
     hooks: dict[str, list[object]] = field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = field(default_factory=dict)
 

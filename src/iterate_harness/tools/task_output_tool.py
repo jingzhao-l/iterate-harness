@@ -15,7 +15,7 @@ class TaskOutputToolInput(BaseModel):
     max_bytes: int = Field(default=12000, ge=1, le=100000)
 
 
-class TaskOutputTool(BaseTool):
+class TaskOutputTool(BaseTool[TaskOutputToolInput]):
     """Read the output of a background task."""
 
     name = "task_output"

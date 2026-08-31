@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -17,8 +19,8 @@ class PluginManifest(BaseModel):
     hooks_file: str = "hooks.json"
     mcp_file: str = "mcp.json"
     # Extended fields: optional author, commands, agents, etc.
-    author: dict | None = None
-    commands: str | list | dict | None = None
-    agents: str | list | None = None
-    skills: str | list | None = None
-    hooks: str | dict | list | None = None
+    author: dict[str, Any] | None = None
+    commands: str | list[Any] | dict[str, Any] | None = None
+    agents: str | list[Any] | None = None
+    skills: str | list[Any] | None = None
+    hooks: str | dict[str, Any] | list[Any] | None = None

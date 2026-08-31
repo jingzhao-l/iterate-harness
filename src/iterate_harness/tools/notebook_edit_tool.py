@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -22,7 +22,7 @@ class NotebookEditToolInput(BaseModel):
     create_if_missing: bool = Field(default=True)
 
 
-class NotebookEditTool(BaseTool):
+class NotebookEditTool(BaseTool[NotebookEditToolInput]):
     """Edit notebook cells without requiring nbformat."""
 
     name = "notebook_edit"
@@ -76,9 +76,9 @@ def _resolve_path(base: Path, candidate: str) -> Path:
     return path.resolve()
 
 
-def _load_notebook(path: Path, *, create_if_missing: bool) -> dict | None:
+def _load_notebook(path: Path, *, create_if_missing: bool) -> dict[str, Any] | None:
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
     if not create_if_missing:
         return None
     return {
@@ -89,7 +89,7 @@ def _load_notebook(path: Path, *, create_if_missing: bool) -> dict | None:
     }
 
 
-def _empty_cell(cell_type: str) -> dict:
+def _empty_cell(cell_type: str) -> dict[str, Any]:
     if cell_type == "markdown":
         return {"cell_type": "markdown", "metadata": {}, "source": ""}
     return {

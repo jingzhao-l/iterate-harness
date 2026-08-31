@@ -22,7 +22,7 @@ class GlobToolInput(BaseModel):
     limit: int = Field(default=200, ge=1, le=5000)
 
 
-class GlobTool(BaseTool):
+class GlobTool(BaseTool[GlobToolInput]):
     """List files matching a glob pattern."""
 
     name = "glob"

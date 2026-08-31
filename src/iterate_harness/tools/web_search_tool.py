@@ -24,7 +24,7 @@ class WebSearchToolInput(BaseModel):
     )
 
 
-class WebSearchTool(BaseTool):
+class WebSearchTool(BaseTool[WebSearchToolInput]):
     """Run a web search and return compact top results."""
 
     name = "web_search"

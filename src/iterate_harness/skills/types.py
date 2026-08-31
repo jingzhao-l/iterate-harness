@@ -3,6 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypedDict
+
+
+class SkillMetadata(TypedDict):
+    """Unvalidated metadata extracted from a SKILL.md frontmatter block."""
+
+    name: str
+    description: str
+    user_invocable: bool
+    disable_model_invocation: bool
+    model: str | None
+    argument_hint: str | None
 
 
 @dataclass(frozen=True)

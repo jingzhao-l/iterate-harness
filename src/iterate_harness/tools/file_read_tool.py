@@ -17,7 +17,7 @@ class FileReadToolInput(BaseModel):
     limit: int = Field(default=200, ge=1, le=2000, description="Number of lines to return")
 
 
-class FileReadTool(BaseTool):
+class FileReadTool(BaseTool[FileReadToolInput]):
     """Read a UTF-8 text file with line numbers."""
 
     name = "read_file"

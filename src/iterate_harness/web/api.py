@@ -19,10 +19,11 @@ from __future__ import annotations
 import logging
 import secrets
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import routes as route_modules
@@ -112,7 +113,9 @@ def create_app(project_root: str | Path | None = None, *, token: str | None = No
 
     # Protect every /api/v1 route behind the access token (when one is set).
     @app.middleware("http")
-    async def require_access_token(request: "Request", call_next):
+    async def require_access_token(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         if request.url.path.startswith(API_PREFIX):
             denied = _guard_api(app.state.webui_token, request)
             if denied is not None:

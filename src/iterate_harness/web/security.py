@@ -19,6 +19,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -110,10 +111,20 @@ def resolve_within(base: str | Path, candidate: str, *parts: str) -> Path:
 
     joined = base_path.joinpath(candidate_path, *parts)
     try:
-        resolved = joined.resolve(strict=False)
+        # ``strict=True`` surfaces symlink loops (``ELOOP``) that the default
+        # ``strict=False`` resolve silently truncates after MAXRESOLV hops.
+        resolved = Path(os.path.realpath(joined, strict=True))
+    except FileNotFoundError:
+        # The target may legitimately not exist yet (callers permit creating
+        # new files under ``base``). Fall back to a non-strict resolve and
+        # still enforce the containment check below.
+        try:
+            resolved = joined.resolve(strict=False)
+        except (OSError, RuntimeError) as exc:
+            # e.g. a loop buried in an existing ancestor of a new file.
+            raise ValueError(f"cannot resolve path {candidate!r}: {exc}") from exc
     except (OSError, RuntimeError) as exc:
-        # RuntimeError: symlink loop detected during resolve() — treat the
-        # candidate as unresolvable (never escape into a ValueError->500).
+        # Symlink loop detected during resolution — reject outright.
         raise ValueError(f"cannot resolve path {candidate!r}: {exc}") from exc
 
     # The resolved path must stay under the base directory.

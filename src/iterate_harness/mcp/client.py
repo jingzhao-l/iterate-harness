@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from contextlib import AsyncExitStack
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 from mcp import ClientSession, StdioServerParameters
@@ -17,6 +17,7 @@ from iterate_harness.mcp.types import (
     McpConnectionStatus,
     McpHttpServerConfig,
     McpResourceInfo,
+    McpServerConfig,
     McpStdioServerConfig,
     McpToolInfo,
 )
@@ -50,6 +51,7 @@ class McpClientManager:
             elif isinstance(config, McpHttpServerConfig):
                 await self._connect_http(name, config)
             else:
+                config = cast(McpServerConfig, config)
                 self._statuses[name] = McpConnectionStatus(
                     name=name,
                     state="failed",

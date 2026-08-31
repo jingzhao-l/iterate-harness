@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.engine.messages import ConversationMessage
@@ -30,13 +30,13 @@ class SessionBackend(Protocol):
     ) -> Path:
         """Persist a session snapshot and return its path."""
 
-    def load_latest(self, cwd: str | Path) -> dict | None:
+    def load_latest(self, cwd: str | Path) -> dict[str, Any] | None:
         """Load the latest session snapshot."""
 
-    def list_snapshots(self, cwd: str | Path, limit: int = 20) -> list[dict]:
+    def list_snapshots(self, cwd: str | Path, limit: int = 20) -> list[dict[str, Any]]:
         """List recent snapshots."""
 
-    def load_by_id(self, cwd: str | Path, session_id: str) -> dict | None:
+    def load_by_id(self, cwd: str | Path, session_id: str) -> dict[str, Any] | None:
         """Load a snapshot by ID."""
 
     def export_markdown(
@@ -76,13 +76,13 @@ class IterateHarnessSessionBackend:
             tool_metadata=tool_metadata,
         )
 
-    def load_latest(self, cwd: str | Path) -> dict | None:
+    def load_latest(self, cwd: str | Path) -> dict[str, Any] | None:
         return session_storage.load_session_snapshot(cwd)
 
-    def list_snapshots(self, cwd: str | Path, limit: int = 20) -> list[dict]:
+    def list_snapshots(self, cwd: str | Path, limit: int = 20) -> list[dict[str, Any]]:
         return session_storage.list_session_snapshots(cwd, limit=limit)
 
-    def load_by_id(self, cwd: str | Path, session_id: str) -> dict | None:
+    def load_by_id(self, cwd: str | Path, session_id: str) -> dict[str, Any] | None:
         return session_storage.load_session_by_id(cwd, session_id)
 
     def export_markdown(

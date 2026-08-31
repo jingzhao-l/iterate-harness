@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -23,7 +24,7 @@ class GrepToolInput(BaseModel):
     timeout_seconds: int = Field(default=20, ge=1, le=120)
 
 
-class GrepTool(BaseTool):
+class GrepTool(BaseTool[GrepToolInput]):
     """Search text files for a regex pattern."""
 
     name = "grep"
@@ -93,7 +94,7 @@ def _display_base(path: Path, cwd: Path) -> Path:
 
 def _python_grep_files(
     *,
-    paths,
+    paths: Iterable[Path],
     pattern: str,
     case_sensitive: bool,
     limit: int,

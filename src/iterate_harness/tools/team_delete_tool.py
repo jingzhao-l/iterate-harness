@@ -14,7 +14,7 @@ class TeamDeleteToolInput(BaseModel):
     name: str = Field(description="Team name")
 
 
-class TeamDeleteTool(BaseTool):
+class TeamDeleteTool(BaseTool[TeamDeleteToolInput]):
     """Delete an in-memory team."""
 
     name = "team_delete"

@@ -29,14 +29,29 @@ def save_local_rules(content: str) -> Path:
     return _RULES_FILE
 
 
-def load_facts() -> dict:
+def load_facts() -> dict[str, object]:
     """Load extracted facts as a dict."""
     if _FACTS_FILE.exists():
-        return json.loads(_FACTS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(_FACTS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
     return {"facts": [], "last_updated": None}
 
 
-def save_facts(facts: dict) -> None:
+def _fact_confidence(fact: dict[str, object]) -> float:
+    """Extract a numeric confidence value from a fact, defaulting to 0."""
+    value = fact.get("confidence")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def save_facts(facts: dict[str, object]) -> None:
     """Persist extracted facts."""
     _ensure_dir()
     facts["last_updated"] = datetime.now(timezone.utc).isoformat()
@@ -46,19 +61,26 @@ def save_facts(facts: dict) -> None:
     )
 
 
-def merge_facts(existing: dict, new_facts: list[dict]) -> dict:
+def merge_facts(existing: dict[str, object], new_facts: list[dict[str, object]]) -> dict[str, object]:
     """Merge new facts into existing, deduplicating by key."""
-    by_key = {}
-    for f in existing.get("facts", []):
-        by_key[f["key"]] = f
-    for f in new_facts:
-        key = f.get("key", "")
-        if key:
-            if key in by_key:
-                # Update with newer value, keep higher confidence
-                old = by_key[key]
-                if f.get("confidence", 0) >= old.get("confidence", 0):
-                    by_key[key] = f
-            else:
-                by_key[key] = f
+    by_key: dict[str, dict[str, object]] = {}
+    existing_facts = existing.get("facts", [])
+    if isinstance(existing_facts, list):
+        for existing_fact in existing_facts:
+            if isinstance(existing_fact, dict):
+                key = existing_fact.get("key")
+                if isinstance(key, str):
+                    by_key[key] = existing_fact
+    for fact in new_facts:
+        key = fact.get("key")
+        if not isinstance(key, str) or not key:
+            continue
+        previous = by_key.get(key)
+        if previous is None:
+            by_key[key] = fact
+        else:
+            new_confidence = _fact_confidence(fact)
+            old_confidence = _fact_confidence(previous)
+            if new_confidence >= old_confidence:
+                by_key[key] = fact
     return {"facts": list(by_key.values())}

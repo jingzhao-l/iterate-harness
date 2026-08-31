@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from typing import Unpack
 
-from iterate_harness.state.app_state import AppState
+from iterate_harness.state.app_state import AppState, AppStateUpdates
 
 
 Listener = Callable[[AppState], None]
@@ -22,7 +23,7 @@ class AppStateStore:
         """Return the current state snapshot."""
         return self._state
 
-    def set(self, **updates) -> AppState:
+    def set(self, **updates: Unpack[AppStateUpdates]) -> AppState:
         """Update the state and notify listeners."""
         self._state = replace(self._state, **updates)
         for listener in list(self._listeners):

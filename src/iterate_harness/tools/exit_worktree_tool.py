@@ -16,7 +16,7 @@ class ExitWorktreeToolInput(BaseModel):
     path: str = Field(description="Worktree path to remove")
 
 
-class ExitWorktreeTool(BaseTool):
+class ExitWorktreeTool(BaseTool[ExitWorktreeToolInput]):
     """Remove a git worktree."""
 
     name = "exit_worktree"

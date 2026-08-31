@@ -59,7 +59,7 @@ class ImageToTextToolInput(BaseModel):
     )
 
 
-class ImageToTextTool(BaseTool):
+class ImageToTextTool(BaseTool[ImageToTextToolInput]):
     """Use a multimodal model to describe an image and return text."""
 
     name = "image_to_text"

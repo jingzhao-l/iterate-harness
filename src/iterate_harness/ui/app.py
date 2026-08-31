@@ -49,7 +49,7 @@ async def run_repl(
     api_format: str | None = None,
     api_client: SupportsStreamingMessages | None = None,
     backend_only: bool = False,
-    restore_messages: list[dict] | None = None,
+    restore_messages: list[dict[str, object]] | None = None,
     restore_tool_metadata: dict[str, object] | None = None,
     permission_mode: str | None = None,
 ) -> None:
@@ -219,7 +219,7 @@ async def run_print_mode(
     await start_runtime(bundle)
 
     collected_text = ""
-    events_list: list[dict] = []
+    events_list: list[dict[str, object]] = []
 
     try:
         async def _print_system(message: str) -> None:
@@ -227,7 +227,7 @@ async def run_print_mode(
             if output_format == "text":
                 print(message, file=sys.stderr)
             elif output_format == "stream-json":
-                obj = {"type": "system", "message": message}
+                obj: dict[str, object] = {"type": "system", "message": message}
                 print(json.dumps(obj), flush=True)
                 events_list.append(obj)
 
@@ -239,7 +239,7 @@ async def run_print_mode(
                     sys.stdout.write(event.text)
                     sys.stdout.flush()
                 elif output_format == "stream-json":
-                    obj = {"type": "assistant_delta", "text": event.text}
+                    obj: dict[str, object] = {"type": "assistant_delta", "text": event.text}
                     print(json.dumps(obj), flush=True)
                     events_list.append(obj)
             elif isinstance(event, AssistantTurnComplete):

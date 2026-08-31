@@ -30,7 +30,7 @@ class WebFetchToolInput(BaseModel):
     max_chars: int = Field(default=12000, ge=500, le=50000)
 
 
-class WebFetchTool(BaseTool):
+class WebFetchTool(BaseTool[WebFetchToolInput]):
     """Fetch one web page and return a compact text summary."""
 
     name = "web_fetch"
@@ -100,16 +100,16 @@ class _HTMLTextExtractor(HTMLParser):
         self.parts: list[str] = []
         self._skip_depth = 0
 
-    def handle_starttag(self, tag: str, attrs) -> None:  # type: ignore[override]
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del attrs
         if tag in {"script", "style"}:
             self._skip_depth += 1
 
-    def handle_endtag(self, tag: str) -> None:  # type: ignore[override]
+    def handle_endtag(self, tag: str) -> None:
         if tag in {"script", "style"} and self._skip_depth:
             self._skip_depth -= 1
 
-    def handle_data(self, data: str) -> None:  # type: ignore[override]
+    def handle_data(self, data: str) -> None:
         if self._skip_depth:
             return
         stripped = data.strip()

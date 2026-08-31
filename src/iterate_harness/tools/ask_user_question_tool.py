@@ -18,7 +18,7 @@ class AskUserQuestionToolInput(BaseModel):
     question: str = Field(description="The exact question to ask the user")
 
 
-class AskUserQuestionTool(BaseTool):
+class AskUserQuestionTool(BaseTool[AskUserQuestionToolInput]):
     """Ask the interactive user a question and return the answer."""
 
     name = "ask_user_question"

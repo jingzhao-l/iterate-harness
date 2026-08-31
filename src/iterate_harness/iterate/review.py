@@ -830,7 +830,7 @@ def _parse_finding(raw: object, errors: list[str], index: int) -> ReviewFinding 
     return ReviewFinding(
         dimension=str(raw["dimension"]),
         file=str(raw["file"]),
-        severity=severity,  # type: ignore[arg-type]
+        severity=severity,
         summary=str(raw["summary"]),
         failure_scenario=str(raw["failure_scenario"]),
         suggested_fix=str(raw["suggested_fix"]),
@@ -890,7 +890,7 @@ def report_from_dict(data: object) -> ReviewReport:
         raise ValueError("invalid report: " + "; ".join(errors))
 
     return build_review_report(
-        mode=mode,  # type: ignore[arg-type]
+        mode=mode,
         goal=str(data.get("goal", "")),
         dimensions=dimensions,
         max_review_rounds=int(data.get("maxReviewRounds", len(rounds) or 1)),

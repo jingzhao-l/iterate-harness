@@ -12,7 +12,7 @@ class ListMcpResourcesToolInput(BaseModel):
     """No-op input model for MCP resource listing."""
 
 
-class ListMcpResourcesTool(BaseTool):
+class ListMcpResourcesTool(BaseTool[ListMcpResourcesToolInput]):
     """List MCP resources discovered from connected servers."""
 
     name = "list_mcp_resources"

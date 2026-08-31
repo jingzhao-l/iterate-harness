@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.status import Status
 from rich.syntax import Syntax
 
 from iterate_harness.engine.stream_events import (
@@ -25,8 +28,8 @@ class OutputRenderer:
         self._assistant_line_open = False
         self._assistant_buffer = ""
         self._style_name = style_name
-        self._spinner_status = None
-        self._last_tool_input: dict | None = None
+        self._spinner_status: Status | None = None
+        self._last_tool_input: dict[str, Any] | None = None
 
     def set_style(self, style_name: str) -> None:
         self._style_name = style_name
@@ -181,7 +184,7 @@ class OutputRenderer:
             self._spinner_status.stop()
             self._spinner_status = None
 
-    def _render_tool_output(self, tool_name: str, tool_input: dict | None, output: str) -> None:
+    def _render_tool_output(self, tool_name: str, tool_input: dict[str, Any] | None, output: str) -> None:
         lower = tool_name.lower()
         # Bash: show in a panel
         if lower == "bash":
@@ -223,7 +226,7 @@ def _has_markdown(text: str) -> bool:
     return any(ind in text for ind in indicators)
 
 
-def _summarize_tool_input(tool_name: str, tool_input: dict | None) -> str:
+def _summarize_tool_input(tool_name: str, tool_input: dict[str, Any] | None) -> str:
     if not tool_input:
         return ""
     lower = tool_name.lower()

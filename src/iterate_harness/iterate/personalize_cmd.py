@@ -30,8 +30,9 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
-import yaml
+import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
 from . import onboarding
 from .config_loader import CONFIG_FILENAME
@@ -42,6 +43,9 @@ PERSONALIZATION_VERSION = "1.0"
 
 #: Callable used to read interactive user input (injectable for tests).
 InputFunc = Callable[[str], str]
+
+#: Generic item type for the shared typed-list wizard helpers.
+_T = TypeVar("_T")
 
 #: Module name pattern for extra_validation_commands keys — only
 #: alphanumeric, dash, underscore, dot; prevents shell metacharacter
@@ -493,16 +497,18 @@ def load_personalization_from_config(config: dict[str, object]) -> Personalizati
     if not isinstance(raw, dict):
         return PersonalizationData()
 
+    risk_raw = raw.get("risk_areas")
     risk_areas = [
         RiskArea(path=str(item["path"]), reason=str(item.get("reason", "")))
-        for item in (raw.get("risk_areas") or [])
+        for item in (risk_raw if isinstance(risk_raw, list) else [])
         if isinstance(item, dict) and "path" in item
     ]
+    focus_raw = raw.get("dimension_focus")
     dimension_focus = [
         DimensionFocusOverride(
             dimension=str(item["dimension"]), focus=str(item.get("focus", ""))
         )
-        for item in (raw.get("dimension_focus") or [])
+        for item in (focus_raw if isinstance(focus_raw, list) else [])
         if isinstance(item, dict) and "dimension" in item
     ]
     return PersonalizationData(
@@ -542,9 +548,14 @@ def merge_personalization_into_config(
     if not data.extra_validation_commands:
         return result
 
-    validation = dict(result.get("validation") or {})
-    commands = dict(validation.get("commands") or {})
-    whitelist = [str(w) for w in (validation.get("command_whitelist") or [])]
+    validation_raw = result.get("validation")
+    validation = validation_raw if isinstance(validation_raw, dict) else {}
+    commands_raw = validation.get("commands")
+    commands = commands_raw if isinstance(commands_raw, dict) else {}
+    whitelist_raw = validation.get("command_whitelist")
+    whitelist = [
+        str(w) for w in (whitelist_raw if isinstance(whitelist_raw, list) else [])
+    ]
     for module, cmds in data.extra_validation_commands.items():
         existing = [str(c) for c in (commands.get(module) or [])]
         for cmd in cmds:
@@ -707,11 +718,11 @@ def _typed_list_step(
     *,
     title: str,
     description: str,
-    items: list[object],
-    formatter: Callable[[object], str],
-    add_func: Callable[[InputFunc], object],
+    items: list[_T],
+    formatter: Callable[[_T], str],
+    add_func: Callable[[InputFunc], _T | None],
     input_func: InputFunc,
-) -> list[object]:
+) -> list[_T]:
     """Manage a typed-object list with add/remove/skip."""
     current = list(items)
     while True:
@@ -946,7 +957,7 @@ def _print_welcome() -> None:
     _print("每步可跳过。结构化规则写入 iterate.config.yaml，自由文本写入 ITERATE.md 用户区。")
 
 
-def _print_step_header(title: str, description: str, items: list[object]) -> None:
+def _print_step_header(title: str, description: str, items: list[str]) -> None:
     _print()
     _print(f"▶ {title}")
     _print(f"  {description.replace(chr(10), chr(10) + '  ')}")
@@ -964,7 +975,7 @@ def _print_dimensions() -> None:
 
 
 def _read_index(
-    items: list[object], input_func: InputFunc, prompt: str = "删除编号 / Remove number"
+    items: list[_T], input_func: InputFunc, prompt: str = "删除编号 / Remove number"
 ) -> int | None:
     """Read a 1-based index; None when invalid or out of range."""
     raw = input_func(f"  └ {prompt} (1-{len(items)}): ").strip()

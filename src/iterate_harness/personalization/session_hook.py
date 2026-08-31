@@ -51,15 +51,20 @@ def update_rules_from_session(messages: list[ConversationMessage]) -> int:
     merged = merge_facts(existing, new_facts)
     save_facts(merged)
 
+    merged_facts_value = merged.get("facts")
+    merged_facts = merged_facts_value if isinstance(merged_facts_value, list) else []
+    existing_facts_value = existing.get("facts")
+    existing_facts = existing_facts_value if isinstance(existing_facts_value, list) else []
+
     # Regenerate rules markdown
-    rules_md = facts_to_rules_markdown(merged["facts"])
+    rules_md = facts_to_rules_markdown(merged_facts)
     if rules_md:
         save_local_rules(rules_md)
 
-    new_count = len(merged["facts"]) - len(existing.get("facts", []))
+    new_count = len(merged_facts) - len(existing_facts)
     log.info(
         "Personalization: %d new facts extracted (%d total)",
         max(new_count, 0),
-        len(merged["facts"]),
+        len(merged_facts),
     )
     return max(new_count, 0)

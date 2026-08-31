@@ -13,7 +13,7 @@ class EnterPlanModeToolInput(BaseModel):
     """No-op input model."""
 
 
-class EnterPlanModeTool(BaseTool):
+class EnterPlanModeTool(BaseTool[EnterPlanModeToolInput]):
     """Switch settings permission mode to plan."""
 
     name = "enter_plan_mode"

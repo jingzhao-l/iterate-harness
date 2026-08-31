@@ -17,7 +17,7 @@ class FileWriteToolInput(BaseModel):
     create_directories: bool = Field(default=True)
 
 
-class FileWriteTool(BaseTool):
+class FileWriteTool(BaseTool[FileWriteToolInput]):
     """Write complete file contents."""
 
     name = "write_file"

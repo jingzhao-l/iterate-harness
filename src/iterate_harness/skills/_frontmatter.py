@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
 logger = logging.getLogger(__name__)
 

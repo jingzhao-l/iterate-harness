@@ -21,7 +21,7 @@ class SendMessageToolInput(BaseModel):
     message: str = Field(description="Message to write to the task stdin")
 
 
-class SendMessageTool(BaseTool):
+class SendMessageTool(BaseTool[SendMessageToolInput]):
     """Send a message to a running local agent task."""
 
     name = "send_message"

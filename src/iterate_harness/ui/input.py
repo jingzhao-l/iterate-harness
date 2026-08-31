@@ -9,7 +9,7 @@ class InputSession:
     """Async prompt wrapper."""
 
     def __init__(self) -> None:
-        self._session = PromptSession()
+        self._session: PromptSession[str] = PromptSession()
         self._prompt = "> "
 
     def set_modes(self, *, vim_enabled: bool, voice_enabled: bool) -> None:
