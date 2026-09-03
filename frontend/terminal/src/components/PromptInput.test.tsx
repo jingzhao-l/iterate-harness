@@ -258,3 +258,50 @@ test('accepts explicit /stop submission while busy', async () => {
 		stdout.destroy();
 	}
 });
+
+test('renders the task mode indicator with the current mode label', async () => {
+	const stdin = createTestStdin();
+	const stdout = createTestStdout();
+
+	const renderMode = async (taskMode: string): Promise<string> => {
+		const instance = render(
+			<ThemeProvider initialTheme="default">
+				<PromptInput
+					busy={false}
+					input=""
+					setInput={() => undefined}
+					onSubmit={() => undefined}
+					taskMode={taskMode}
+				/>
+			</ThemeProvider>,
+			{
+				stdin: stdin as unknown as NodeJS.ReadStream & {fd: 0},
+				stdout: stdout as unknown as NodeJS.WriteStream,
+				debug: true,
+				patchConsole: false,
+			},
+		);
+		await nextLoopTurn();
+		await nextLoopTurn();
+		const chunks: Buffer[] = [];
+		let chunk = stdout.read();
+		while (chunk) {
+			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+			chunk = stdout.read();
+		}
+		instance.unmount();
+		return Buffer.concat(chunks).toString('utf8');
+	};
+
+	try {
+		const codeFrame = await renderMode('code');
+		assert.ok(codeFrame.includes('[code]'), `expected [code] in frame, got: ${JSON.stringify(codeFrame)}`);
+		assert.ok(codeFrame.includes('\u2502'), 'expected vertical mode bar');
+
+		const iterateFrame = await renderMode('iterate');
+		assert.ok(iterateFrame.includes('[iterate]'), `expected [iterate] in frame, got: ${JSON.stringify(iterateFrame)}`);
+	} finally {
+		stdin.destroy();
+		stdout.destroy();
+	}
+});

@@ -23,6 +23,7 @@ class FrontendRequest(BaseModel):
         "select_command",
         "apply_select_command",
         "interrupt",
+        "set_task_mode",
         "shutdown",
     ]
     line: str | None = None
@@ -196,6 +197,7 @@ def _state_payload(state: AppState) -> dict[str, Any]:
         "auth_status": state.auth_status,
         "base_url": state.base_url,
         "permission_mode": _format_permission_mode(state.permission_mode),
+        "task_mode": state.task_mode,
         "theme": state.theme,
         "vim_enabled": state.vim_enabled,
         "voice_enabled": state.voice_enabled,

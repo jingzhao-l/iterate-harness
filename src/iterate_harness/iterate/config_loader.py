@@ -102,6 +102,10 @@ def _default_config_dict() -> dict[str, object]:
             "command_whitelist": list(cfg.validation.command_whitelist),
             "commands": dict(cfg.validation.commands),
         },
+        "invariants": {
+            "ensure": list(cfg.invariants.ensure) if cfg.invariants else [],
+            "commands": dict(cfg.invariants.commands) if cfg.invariants else {},
+        },
         "reviewer": {
             "output_schema_validation": cfg.reviewer.output_schema_validation,
             "evidence_validation": cfg.reviewer.evidence_validation,

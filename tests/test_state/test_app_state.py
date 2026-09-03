@@ -21,6 +21,7 @@ def test_required_fields_are_kept():
 def test_defaults():
     state = _make_state()
     assert state.cwd == "."
+    assert state.task_mode == "iterate"
     assert state.provider == "unknown"
     assert state.auth_status == "missing"
     assert state.base_url == ""
@@ -70,12 +71,21 @@ def test_custom_initial_values():
         fast_mode=True,
     )
     assert state.cwd == "/tmp/project"
+    assert state.task_mode == "iterate"
     assert state.provider == "openai"
     assert state.auth_status == "configured"
     assert state.base_url == "https://api.example.com/v1"
     assert state.voice_available is True
     assert state.voice_reason == "microphone found"
     assert state.fast_mode is True
+
+
+def test_task_mode_is_mutable():
+    state = _make_state()
+    state.task_mode = "code"
+    assert state.task_mode == "code"
+    state.task_mode = "iterate"
+    assert state.task_mode == "iterate"
 
 
 def test_keybindings_default_factory_is_isolated_per_instance():

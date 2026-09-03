@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from iterate_harness.coordinator.agent_definitions import get_agent_definition
 from iterate_harness.coordinator.coordinator_mode import get_team_registry
+from iterate_harness.defensive.kernel import DEFENSIVE_KERNEL_KEY
 from iterate_harness.hooks import HookEvent
 from iterate_harness.swarm.registry import get_backend_registry
 from iterate_harness.swarm.types import TeammateSpawnConfig
@@ -79,6 +80,14 @@ class AgentTool(BaseTool[AgentToolInput]):
             system_prompt=agent_def.system_prompt if agent_def else None,
             permissions=agent_def.permissions if agent_def else [],
             task_type=cast(AgentTaskType, arguments.mode),
+            # Worker inherits the leader's defensive kernel (design §20.5):
+            # a ``code``-mode leader spawns ``code`` workers so each subagent
+            # enforces the same per-action invariant guard + atomic rollback.
+            task_mode=(
+                "code"
+                if context.metadata.get(DEFENSIVE_KERNEL_KEY) is not None
+                else None
+            ),
         )
 
         try:

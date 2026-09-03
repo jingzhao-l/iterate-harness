@@ -14,6 +14,12 @@ class AppState:
     permission_mode: str
     theme: str
     cwd: str = "."
+    # Dual-mode architecture (design §20.2): ``task_mode`` decides *what the
+    # agent does* (``code`` = general programming agent + defensive kernel,
+    # ``iterate`` = 1.x review loop) and is orthogonal to ``permission_mode``
+    # (how permissive the permission layer is). Switched via Tab in the TUI;
+    # affects only the next round, never interrupts in-flight work.
+    task_mode: str = "iterate"
     provider: str = "unknown"
     auth_status: str = "missing"
     base_url: str = ""
@@ -38,6 +44,7 @@ class AppStateUpdates(TypedDict, total=False):
     permission_mode: str
     theme: str
     cwd: str
+    task_mode: str
     provider: str
     auth_status: str
     base_url: str

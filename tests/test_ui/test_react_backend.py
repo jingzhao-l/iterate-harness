@@ -511,6 +511,63 @@ async def test_build_runtime_leaves_interactive_sessions_unbounded_by_default(tm
 
 
 @pytest.mark.asyncio
+async def test_backend_host_set_task_mode_switches_engine_and_state(tmp_path, monkeypatch):
+    """set_task_mode updates app_state + engine and pushes a state snapshot (design §20.6)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+
+    host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
+    host._bundle = await build_runtime(api_client=StaticApiClient("unused"))
+    events = []
+
+    async def _emit(event):
+        events.append(event)
+
+    host._emit = _emit  # type: ignore[method-assign]
+    await start_runtime(host._bundle)
+    try:
+        assert host._bundle.app_state.get().task_mode == "iterate"
+        await host._handle_set_task_mode("code")
+        assert host._bundle.app_state.get().task_mode == "code"
+        assert host._bundle.engine.task_mode == "code"
+        assert host._bundle.engine.iterate_policy is None
+        # Mode switch feedback is via the state snapshot only — no transcript
+        # noise (the frontend mode indicator is the feedback channel, design §20.6.2).
+        assert not any(event.type == "transcript_item" for event in events)
+        assert any(event.type == "state_snapshot" for event in events)
+        # Switching back re-enables the iterate loop.
+        await host._handle_set_task_mode("iterate")
+        assert host._bundle.app_state.get().task_mode == "iterate"
+        assert host._bundle.engine.task_mode == "iterate"
+    finally:
+        await close_runtime(host._bundle)
+
+
+@pytest.mark.asyncio
+async def test_backend_host_set_task_mode_rejects_unknown_mode(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+
+    host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
+    host._bundle = await build_runtime(api_client=StaticApiClient("unused"))
+    events = []
+
+    async def _emit(event):
+        events.append(event)
+
+    host._emit = _emit  # type: ignore[method-assign]
+    await start_runtime(host._bundle)
+    try:
+        await host._handle_set_task_mode("bogus")
+        assert host._bundle.app_state.get().task_mode == "iterate"
+        assert any(event.type == "error" and "Invalid task_mode" in event.message for event in events)
+    finally:
+        await close_runtime(host._bundle)
+
+
+@pytest.mark.asyncio
 async def test_backend_host_emits_utf8_protocol_bytes(monkeypatch):
     host = ReactBackendHost(BackendHostConfig())
     fake_stdout = FakeBinaryStdout()

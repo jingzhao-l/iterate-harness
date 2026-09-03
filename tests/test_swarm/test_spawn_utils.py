@@ -105,3 +105,27 @@ def test_build_inherited_cli_flags_argv_contains_no_quotes():
     plugin_idx = flags.index("--plugin-dir")
     assert flags[plugin_idx + 1] == "/tmp/plugin dir"
     assert flags[flags.index("--teammate-mode") + 1] == "auto"
+
+
+# ---------------------------------------------------------------------------
+# build_inherited_cli_flags – task-mode inheritance (design §20.5)
+# ---------------------------------------------------------------------------
+
+
+def test_build_inherited_cli_flags_code_mode_forwarded():
+    flags = build_inherited_cli_flags(task_mode="code")
+
+    assert "--task-mode" in flags
+    assert flags[flags.index("--task-mode") + 1] == "code"
+
+
+def test_build_inherited_cli_flags_iterate_mode_forwarded():
+    flags = build_inherited_cli_flags(task_mode="iterate")
+
+    assert flags[flags.index("--task-mode") + 1] == "iterate"
+
+
+def test_build_inherited_cli_flags_no_task_mode_omits_flag():
+    flags = build_inherited_cli_flags()
+
+    assert "--task-mode" not in flags

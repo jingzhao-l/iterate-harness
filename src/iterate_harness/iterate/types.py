@@ -181,6 +181,21 @@ class ValidationConfig:
 
 
 @dataclass
+class InvariantConfig:
+    """Project-level invariants for code-mode defensive guarding (§20.3.2).
+
+    Mirrors the skill's ``config.invariants`` section (v3.0): ``ensure`` file
+    assertions that must hold plus per-module command lists that must exit 0.
+    When the project config declares no ``invariants`` section, code-mode
+    invariant checking falls back to ``validation.commands`` so pre-v3.0
+    projects still get post-edit validation.
+    """
+
+    ensure: list[str] = field(default_factory=list)
+    commands: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass
 class ReviewerConfig:
     output_schema_validation: bool = True
     #: Hard evidence gate: every finding's file/line is validated against real
@@ -216,6 +231,7 @@ class IterateConfig:
     atomic: AtomicConfig = field(default_factory=AtomicConfig)
     git: GitConfig = field(default_factory=GitConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
+    invariants: InvariantConfig | None = None
     reviewer: ReviewerConfig = field(default_factory=ReviewerConfig)
     dimension_resources: dict[str, DimensionResources] = field(default_factory=dict)
     # Whole-run token budget enforced by the engine-level loop policy: the

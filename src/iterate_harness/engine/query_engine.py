@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -9,6 +10,7 @@ from typing import cast
 from iterate_harness.api.client import SupportsStreamingMessages
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.coordinator.coordinator_mode import get_coordinator_user_context
+from iterate_harness.defensive.kernel import DefensiveKernel
 from iterate_harness.engine.cost_tracker import CostTracker
 from iterate_harness.engine.messages import ConversationMessage, TextBlock, ToolResultBlock
 from iterate_harness.engine.query import (
@@ -24,6 +26,43 @@ from iterate_harness.hooks import HookEvent, HookExecutor
 from iterate_harness.iterate.loop_policy import IterateLoopPolicy
 from iterate_harness.permissions.checker import PermissionChecker
 from iterate_harness.tools.base import ToolRegistry
+
+log = logging.getLogger(__name__)
+
+#: Task modes (design §20.2). ``task_mode`` decides *what the agent does* and
+#: is orthogonal to ``permission_mode`` (how permissive the permission layer).
+TASK_MODE_CODE = "code"
+TASK_MODE_ITERATE = "iterate"
+TASK_MODES = (TASK_MODE_CODE, TASK_MODE_ITERATE)
+
+#: Directive appended to the system prompt in ``code`` mode (design §20.3.2).
+#: Defensive programming becomes the agent's default behavior on every action
+#: instead of an explicit post-hoc review loop.
+_CODE_MODE_SYSTEM_PROMPT = """\
+# Task Mode: code — General Programming Agent with a Defensive Kernel
+
+You are in **code mode**: a general-purpose programming agent executing normal
+incremental coding tasks end to end. The iterate review loop is OFF; instead,
+defensive programming is your DEFAULT behavior on every single action:
+
+1. **Minimize assumptions** — before each tool call, state the assumptions
+   that must hold (file exists / git clean / dependency installed / API shape
+   unchanged). The moment an assumption is falsified, stop and re-plan; never
+   keep building on a broken premise.
+2. **Validate trust boundaries** — treat all external input as untrusted.
+   Before reading, verify the path stays inside the workspace; before
+   executing, verify the command matches the allowlist; before writing, verify
+   the target file type and that no protected path is touched.
+3. **Fail fast, fail loud** — on the first error, stop, report, and roll back
+   to the last good state. Never continue with a broken state, never paper
+   over an error.
+4. **Pre/post-conditions** — every edit declares what it requires (pre) and
+   what it guarantees (post). After each edit, validate syntax and key tests
+   before moving on.
+
+Work in small atomic steps: read → edit → validate → continue. When a change
+set converges (syntax passes, tests pass, invariants hold), summarize what you
+changed and why."""
 
 
 def _default_iterate_policy(cwd: Path) -> IterateLoopPolicy | None:
@@ -117,13 +156,12 @@ class QueryEngine:
         self._tool_metadata = tool_metadata or {}
         self._messages: list[ConversationMessage] = []
         self._cost_tracker = CostTracker()
-        # Iterate enforcement: auto-enable from kernel settings unless the
-        # caller supplies an explicit policy. Passing ``False`` disables.
-        self._iterate_policy: IterateLoopPolicy | None = (
-            cast("IterateLoopPolicy | None", iterate_policy)
-            if iterate_policy is not None
-            else _default_iterate_policy(self._cwd)
-        )
+        # Dual-mode architecture (design §20.2): task_mode decides whether the
+        # explicit iterate review loop runs (``iterate``) or defensive
+        # programming is enforced per-action with the loop OFF (``code``).
+        self._task_mode: str = TASK_MODE_ITERATE
+        self._explicit_iterate_policy: object | None = iterate_policy
+        self._iterate_policy: IterateLoopPolicy | None = self._resolve_iterate_policy()
         # Reasoning effort: explicit argument wins, else the project config
         # (`iterate.config.yaml` `reasoning_effort`), else provider default.
         self._reasoning_effort = (
@@ -164,6 +202,82 @@ class QueryEngine:
     def iterate_policy(self) -> IterateLoopPolicy | None:
         """Return the attached iterate loop policy (``None`` when disabled)."""
         return self._iterate_policy
+
+    @property
+    def task_mode(self) -> str:
+        """Return the active task mode (``code`` or ``iterate``)."""
+        return self._task_mode
+
+    @property
+    def effective_system_prompt(self) -> str:
+        """Return the base system prompt with the active task-mode directive appended."""
+        mode_block = self._mode_system_prompt_block()
+        if not mode_block:
+            return self._system_prompt
+        return f"{self._system_prompt}\n\n{mode_block}"
+
+    def _resolve_iterate_policy(self) -> IterateLoopPolicy | None:
+        """Resolve the active iterate loop policy for the current task mode.
+
+        ``code`` mode disables the explicit review loop entirely (defensive
+        programming is enforced per-action instead); ``iterate`` mode preserves
+        the 1.x behavior exactly — an explicit override wins, otherwise the
+        policy is auto-enabled from kernel + project settings.
+        """
+        if self._task_mode == TASK_MODE_CODE:
+            return None
+        if self._explicit_iterate_policy is not None:
+            return cast("IterateLoopPolicy | None", self._explicit_iterate_policy)
+        return _default_iterate_policy(self._cwd)
+
+    def _mode_system_prompt_block(self) -> str:
+        """Return the task-mode directive appended to the system prompt."""
+        if self._task_mode == TASK_MODE_CODE:
+            return _CODE_MODE_SYSTEM_PROMPT
+        return ""
+
+    def _new_defensive_kernel(self) -> DefensiveKernel | None:
+        """Construct the per-query defensive kernel for ``code`` mode.
+
+        The kernel enforces the code-mode guarantees mechanically: mutating
+        file tools are snapshotted before they run, post-checked against the
+        project invariants (``invariants`` section, falling back to
+        ``validation.commands``), and rolled back on failure or violation.
+        ``iterate`` mode returns ``None`` — the 1.x review loop owns rollback
+        there. A fresh kernel is built per query run (never reused across
+        submissions) so pending mutations cannot leak between user intents.
+        """
+        if self._task_mode != TASK_MODE_CODE:
+            return None
+        try:
+            from iterate_harness.iterate.config_loader import load_effective_config
+
+            return DefensiveKernel(self._cwd, load_effective_config(self._cwd))
+        except Exception:  # kernel wiring must never break the engine
+            log.warning(
+                "defensive kernel construction failed; running code mode without it",
+                exc_info=True,
+            )
+            return None
+
+    def set_task_mode(self, mode: str) -> None:
+        """Switch the agent's task mode for the next round.
+
+        Only affects subsequent ``submit_message`` / ``continue_pending``
+        calls — an in-flight turn is never interrupted. In ``code`` mode the
+        explicit iterate review loop is disabled and the defensive-programming
+        directive is injected into the system prompt; ``iterate`` mode restores
+        the 1.x loop and prompt.
+
+        Raises:
+            ValueError: when ``mode`` is not ``code`` or ``iterate``.
+        """
+        if mode not in TASK_MODES:
+            raise ValueError(
+                f"Unknown task_mode: {mode!r} (expected 'code' or 'iterate')"
+            )
+        self._task_mode = mode
+        self._iterate_policy = self._resolve_iterate_policy()
 
     @property
     def ask_user_select_channel(self) -> AskUserSelect | None:
@@ -266,7 +380,7 @@ class QueryEngine:
             permission_checker=self._permission_checker,
             cwd=self._cwd,
             model=self._model,
-            system_prompt=self._system_prompt,
+            system_prompt=self.effective_system_prompt,
             max_tokens=self._max_tokens,
             context_window_tokens=self._context_window_tokens,
             auto_compact_threshold_tokens=self._auto_compact_threshold_tokens,
@@ -278,6 +392,7 @@ class QueryEngine:
             tool_metadata=self._tool_metadata,
             iterate_policy=self._iterate_policy if self._iterate_policy else None,
             reasoning_effort=self._reasoning_effort,
+            defensive_kernel=self._new_defensive_kernel(),
         )
         query_messages = list(self._messages)
         coordinator_context = self._build_coordinator_context_message()
@@ -298,7 +413,7 @@ class QueryEngine:
             permission_checker=self._permission_checker,
             cwd=self._cwd,
             model=self._model,
-            system_prompt=self._system_prompt,
+            system_prompt=self.effective_system_prompt,
             max_tokens=self._max_tokens,
             context_window_tokens=self._context_window_tokens,
             auto_compact_threshold_tokens=self._auto_compact_threshold_tokens,
@@ -310,6 +425,7 @@ class QueryEngine:
             tool_metadata=self._tool_metadata,
             iterate_policy=self._iterate_policy if self._iterate_policy else None,
             reasoning_effort=self._reasoning_effort,
+            defensive_kernel=self._new_defensive_kernel(),
         )
         async for event, usage in run_query(context, self._messages):
             if usage is not None:

@@ -135,6 +135,9 @@ class ReactBackendHost:
                 if request.type == "list_sessions":
                     await self._handle_list_sessions()
                     continue
+                if request.type == "set_task_mode":
+                    await self._handle_set_task_mode(request.value or "")
+                    continue
                 if request.type == "select_command":
                     await self._handle_select_command(request.command or "")
                     continue
@@ -481,6 +484,27 @@ class ReactBackendHost:
         loop.create_task(
             self._emit(BackendEvent(type="swarm_status", swarm_teammates=teammates, swarm_notifications=notifications))
         )
+
+    async def _handle_set_task_mode(self, mode: str) -> None:
+        """Handle a TUI task-mode switch (design §20.6).
+
+        Only affects the next round — an in-flight turn is never interrupted.
+        The frontend stays a pure controlled state: the updated ``task_mode``
+        is pushed back via the state snapshot.
+        """
+        assert self._bundle is not None
+        from iterate_harness.engine.query_engine import TASK_MODES
+
+        if mode not in TASK_MODES:
+            await self._emit(BackendEvent(type="error", message=f"Invalid task_mode: {mode!r}"))
+            return
+        if self._bundle.app_state.get().task_mode == mode:
+            return
+        self._bundle.app_state.set(task_mode=mode)
+        self._bundle.engine.set_task_mode(mode)
+        # The updated ``task_mode`` is pushed via the state snapshot — the
+        # frontend mode indicator (bar + bottom text) is the feedback channel.
+        await self._emit(self._status_snapshot())
 
     async def _handle_list_sessions(self) -> None:
         import time as _time

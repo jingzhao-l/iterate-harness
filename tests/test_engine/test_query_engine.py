@@ -245,6 +245,84 @@ async def test_query_engine_plain_text_reply(tmp_path: Path, monkeypatch):
     assert len(engine.messages) == 2
 
 
+# --- Dual-mode architecture: task_mode (design §20) ---
+
+
+def _make_engine(tmp_path: Path, **kwargs) -> QueryEngine:
+    return QueryEngine(
+        api_client=StaticApiClient("ok"),
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt="base prompt",
+        **kwargs,
+    )
+
+
+def test_task_mode_defaults_to_iterate(tmp_path: Path):
+    engine = _make_engine(tmp_path)
+    assert engine.task_mode == "iterate"
+
+
+def test_set_task_mode_accepts_code_and_iterate(tmp_path: Path):
+    engine = _make_engine(tmp_path)
+    engine.set_task_mode("code")
+    assert engine.task_mode == "code"
+    engine.set_task_mode("iterate")
+    assert engine.task_mode == "iterate"
+
+
+def test_set_task_mode_rejects_unknown_mode(tmp_path: Path):
+    engine = _make_engine(tmp_path)
+    with pytest.raises(ValueError):
+        engine.set_task_mode("explore")
+
+
+def test_code_mode_disables_iterate_loop_policy(tmp_path: Path, monkeypatch):
+    """code mode must turn OFF the explicit iterate review loop (design §20.3.2)."""
+    monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
+    engine = _make_engine(tmp_path)
+    assert engine.task_mode == "iterate"
+    engine.set_task_mode("code")
+    assert engine.iterate_policy is None
+    engine.set_task_mode("iterate")
+    # Back in iterate mode the policy is re-resolved from kernel settings.
+    assert engine.iterate_policy is None or engine.iterate_policy.max_review_rounds > 0
+
+
+def test_code_mode_injects_defensive_programming_directive(tmp_path: Path, monkeypatch):
+    """effective_system_prompt must carry the code-mode directive; iterate mode must not."""
+    monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
+    engine = _make_engine(tmp_path)
+    # iterate (default): no code-mode directive appended.
+    assert "Defensive Kernel" not in engine.effective_system_prompt
+    assert engine.effective_system_prompt == "base prompt"
+    engine.set_task_mode("code")
+    effective = engine.effective_system_prompt
+    assert "Defensive Kernel" in effective
+    assert "fail fast" in effective.lower() or "Fail fast" in effective
+    assert effective.startswith("base prompt")
+
+
+@pytest.mark.asyncio
+async def test_code_mode_sends_directive_in_system_prompt_of_request(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
+    client = RecordingApiClient()
+    engine = QueryEngine(
+        api_client=client,
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt="base prompt",
+    )
+    engine.set_task_mode("code")
+    _ = [event async for event in engine.submit_message("hello")]
+    assert client.requests
+    assert "Defensive Kernel" in client.requests[0].system_prompt
+
+
 @pytest.mark.asyncio
 async def test_query_engine_clamps_oversized_max_tokens_before_request(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)

@@ -2722,6 +2722,13 @@ def main(
         help="Run the stdin-driven headless worker loop used for background agent tasks",
         hidden=True,
     ),
+    task_mode: str | None = typer.Option(
+        None,
+        "--task-mode",
+        help="Task mode ('code' or 'iterate') for the session; workers inherit "
+        "the leader's mode so subagents run the same defensive kernel",
+        hidden=True,
+    ),
 ) -> None:
     """Start an interactive session or run a single prompt."""
     _maybe_start_background_auto_update()
@@ -2885,6 +2892,7 @@ def main(
                 api_key=api_key,
                 api_format=api_format,
                 permission_mode=permission_mode,
+                task_mode=task_mode,
             )
         )
         return

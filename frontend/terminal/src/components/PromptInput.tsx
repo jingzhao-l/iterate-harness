@@ -200,6 +200,7 @@ export function PromptInput({
 	toolName,
 	suppressSubmit,
 	statusLabel,
+	taskMode = 'iterate',
 }: {
 	busy: boolean;
 	input: string;
@@ -208,9 +209,14 @@ export function PromptInput({
 	toolName?: string;
 	suppressSubmit?: boolean;
 	statusLabel?: string;
+	taskMode?: string;
 }): React.JSX.Element {
 	const {theme} = useTheme();
 	const promptPrefix = busy ? '… ' : '> ';
+	const mode = taskMode === 'code' ? 'code' : 'iterate';
+	// Mode indicator colors (design §20.6.2): code = primary, iterate =
+	// warning (amber). The minimal theme degrades both to white automatically.
+	const modeColor = mode === 'code' ? theme.colors.primary : theme.colors.warning;
 
 	return (
 		<Box flexDirection="column">
@@ -221,14 +227,26 @@ export function PromptInput({
 					</Box>
 				</Box>
 			) : null}
-			<MultilineTextInput
-				value={input}
-				onChange={setInput}
-				onSubmit={suppressSubmit ? noop : onSubmit}
-				focus
-				promptPrefix={promptPrefix}
-				promptColor={theme.colors.primary}
-			/>
+			{/* Left vertical mode bar (opencode-style indicator) + input */}
+			<Box flexDirection="row">
+				<Text color={modeColor} bold>
+					{'\u2502'}
+				</Text>
+				<MultilineTextInput
+					value={input}
+					onChange={setInput}
+					onSubmit={suppressSubmit ? noop : onSubmit}
+					focus
+					promptPrefix={promptPrefix}
+					promptColor={theme.colors.primary}
+				/>
+			</Box>
+			{/* Bottom mode text, color follows the mode */}
+			<Box>
+				<Text color={modeColor} bold>
+					{`[${mode}]`}
+				</Text>
+			</Box>
 		</Box>
 	);
 }

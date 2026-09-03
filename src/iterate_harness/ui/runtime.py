@@ -207,6 +207,7 @@ async def build_runtime(
     extra_plugin_roots: Iterable[str | Path] | None = None,
     memory_backend: MemoryCommandBackend | None = None,
     include_project_memory: bool = True,
+    task_mode: str | None = None,
 ) -> RuntimeBundle:
     """Build the shared runtime for an IterateHarness session."""
     settings_overrides: dict[str, Any] = {
@@ -340,6 +341,12 @@ async def build_runtime(
             [ConversationMessage.model_validate(m) for m in restore_messages]
         )
         engine.load_messages(restored)
+
+    # Task-mode inheritance (design §20.5): workers spawned by a ``code``-mode
+    # leader carry ``--task-mode code`` and must run their own defensive
+    # kernel; ``iterate`` workers keep the 1.x review loop. No-op when unset.
+    if task_mode:
+        engine.set_task_mode(task_mode)
 
     # Start Docker sandbox if configured
     if settings.sandbox.enabled and settings.sandbox.backend == "docker":

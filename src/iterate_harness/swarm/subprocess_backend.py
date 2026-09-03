@@ -57,6 +57,7 @@ class SubprocessBackend:
             system_prompt=config.system_prompt,
             system_prompt_mode=config.system_prompt_mode,
             plan_mode_required=config.plan_mode_required,
+            task_mode=config.task_mode,
         )
         # Only inject the inherited teammate env vars when we are also
         # building the command ourselves. If the caller supplied a custom

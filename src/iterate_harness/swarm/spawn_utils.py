@@ -102,6 +102,7 @@ def build_inherited_cli_flags(
     settings_path: str | None = None,
     teammate_mode: str | None = None,
     plugin_dirs: list[str] | None = None,
+    task_mode: str | None = None,
     extra_flags: list[str] | None = None,
 ) -> list[str]:
     """Build CLI flags to propagate from the current session to spawned teammates.
@@ -178,6 +179,14 @@ def build_inherited_cli_flags(
     # not re-detect the mode independently and possibly choose a different one.
     if teammate_mode:
         flags.extend(["--teammate-mode", teammate_mode])
+
+    # --- Task-mode propagation (design §20.5) -------------------------------
+    # Forwards the leader's task mode so subprocess teammates inherit the
+    # same behaviour: ``code`` workers run with their own defensive kernel
+    # (per-action invariant guard + atomic rollback), ``iterate`` workers
+    # run the 1.x review loop.
+    if task_mode:
+        flags.extend(["--task-mode", task_mode])
 
     if extra_flags:
         flags.extend(extra_flags)

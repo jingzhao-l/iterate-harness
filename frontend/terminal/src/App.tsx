@@ -398,10 +398,14 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			return;
 		}
 
-		// Empty-input Tab opens the permission mode picker. This makes leaving
-		// plan mode explicit without requiring users to remember /permissions.
+		// Empty-input Tab cycles the task mode (code ↔ iterate). This replaces
+		// the former "empty-input Tab opens the permissions picker" behavior
+		// (design §20.6.1); permissions switching moved to the /permissions
+		// command. Non-empty input Tab keeps its completion/tab behavior.
 		if (!showPicker && key.tab && input.trim() === '') {
-			session.sendRequest({type: 'select_command', command: 'permissions'});
+			const currentMode = String(session.status.task_mode ?? 'iterate');
+			const nextMode = currentMode === 'code' ? 'iterate' : 'code';
+			session.sendRequest({type: 'set_task_mode', value: nextMode});
 			return;
 		}
 
@@ -640,6 +644,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 					toolName={session.busy ? currentToolName : undefined}
 					statusLabel={session.busy ? (session.busyLabel ?? (currentToolName ? `Running ${currentToolName}...` : 'Running agent loop...')) : undefined}
 					suppressSubmit={showPicker}
+					taskMode={String(session.status.task_mode ?? 'iterate')}
 				/>
 			)}
 

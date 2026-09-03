@@ -97,6 +97,7 @@ async def run_task_worker(
     api_format: str | None = None,
     api_client: SupportsStreamingMessages | None = None,
     permission_mode: str | None = None,
+    task_mode: str | None = None,
 ) -> None:
     """Run a stdin-driven headless worker for background agent tasks.
 
@@ -144,6 +145,7 @@ async def run_task_worker(
         ask_user_prompt=_noop_ask,
         enforce_max_turns=max_turns is not None,
         permission_mode=permission_mode,
+        task_mode=task_mode,
     )
     await start_runtime(bundle)
     try:

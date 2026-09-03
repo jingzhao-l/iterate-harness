@@ -2,6 +2,42 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.0.0] - 2026-09-04
+
+### Added
+
+- **双模式架构（dual-mode，设计 §20.2）**：`task_mode`（`code` / `iterate`）与
+  `permission_mode` 正交。`iterate` 保留 1.x 审查/迭代循环；`code` 为通用编程
+  agent 模式，全套工具照常可用并叠加防御式编程保证。
+- **code 模式防御式内核（`defensive/kernel.py`，设计 §20.3.2）**：
+  - 原子事务缓冲（`defensive/transaction.py`）：每次变更类文件工具执行前快照，
+    失败自动回滚（fail-fast + 原子事务）。
+  - 不变量守护（`defensive/invariants.py`）：编辑成功后重跑项目不变量
+    （`invariants.ensure` 文件断言 + `invariants.commands` 命令列表；无
+    `invariants` 段时回退 `validation.commands`），违规回滚并作为工具错误上抛。
+  - 假设审计（`defensive/assumptions.py`）：agent 声明的假设写入决策日志，
+    falsified 视为 fail-fast 信号。
+- **`record_assumption` 工具**（`tools/iterate_tools.py`）：声明/验证假设并写入
+  `.iterate` 决策日志，形成完整审计轨迹。
+- **worker 防御内核继承（设计 §20.5）**：`--task-mode` 经 CLI → AppState →
+  `agent_tool` → subprocess backend 全链路穿透，code 模式 leader 派生子代理
+  以相同防御内核运行。
+- **TUI 模式切换（设计 §20.6）**：空输入 Tab 循环 `code` ↔ `iterate`，输入框
+  左侧竖向模式色条 + 底部模式文字随模式变色（code=primary / iterate=amber）。
+- **配置扩展**：`IterateConfig` 新增 `invariants` 段（`ensure` 文件断言 +
+  `commands` 逐模块命令表），项目可声明自定义不变量。
+
+### Fixed
+
+- `config_loader.py`：清理未使用导入。
+- `engine/query.py`：补充 `DefensiveKernel` 显式类型导入（修复 mypy strict）。
+
+### Verification
+
+- 全量 pytest：2045 passed, 6 skipped；ruff clean；mypy clean（仅 keyring stub
+  环境噪声）；npm 包装器 36 passed；前端 tsc clean；wheel 含 `defensive/` 与
+  `_frontend_web` 产物。
+
 ## [1.16.3] - 2026-08-31
 
 ### Fixed

@@ -22,6 +22,7 @@ from iterate_harness.tools.glob_tool import GlobTool
 from iterate_harness.tools.grep_tool import GrepTool
 from iterate_harness.tools.image_to_text_tool import ImageToTextTool
 from iterate_harness.tools.iterate_tools import (
+    IterateAssumptionTool,
     IterateConfigTool,
     IterateContextTool,
     IterateDecisionLogTool,
@@ -101,6 +102,7 @@ def create_default_tool_registry(mcp_manager: McpClientManager | None = None) ->
         IterateDecisionLogTool(),
         IterateContextTool(),
         IterateTriageTool(),
+        IterateAssumptionTool(),
     ):
         registry.register(tool)
     if mcp_manager is not None:

@@ -528,6 +528,81 @@ class IterateDecisionLogTool(BaseTool[BaseModel]):
         }
 
 
+# --- record_assumption (defensive kernel, design §20.3.2) -------------------
+
+
+class IterateAssumptionInput(BaseModel):
+    """Arguments for the assumption declaration tool."""
+
+    statement: str = Field(
+        min_length=1,
+        max_length=500,
+        description="The assumption that must hold before the next action "
+        "(e.g. 'src/api.py exists', 'git status is clean', 'mypy is installed').",
+    )
+    status: Literal["declared", "holds", "falsified"] = Field(
+        default="declared",
+        description="declared: record a new assumption. holds/falsified: "
+        "record the verification outcome of a previously declared assumption.",
+    )
+    detail: str = Field(
+        default="",
+        max_length=1000,
+        description="Optional supporting detail (e.g. the command/check that "
+        "confirmed or falsified the assumption).",
+    )
+
+
+class IterateAssumptionTool(BaseTool[BaseModel]):
+    name = "record_assumption"
+    description = (
+        "Declare or verify an assumption (defensive programming, code mode). "
+        "Call with status='declared' before an action to make the premise "
+        "explicit; call again with status='holds'/'falsified' after checking "
+        "it. Every call is appended to the .iterate decision log for a full "
+        "audit trail; a falsified assumption means fail-fast: stop and "
+        "re-plan, never keep building on a broken premise."
+    )
+    input_model = IterateAssumptionInput
+
+    async def execute(self, arguments: BaseModel, context: ToolExecutionContext) -> ToolResult:
+        if not isinstance(arguments, IterateAssumptionInput):
+            return _json_output({"error": "invalid arguments"}, error=True)
+        if not arguments.statement.strip():
+            return _json_output(
+                {"error": "statement must not be empty"}, error=True
+            )
+        try:
+            from iterate_harness.defensive.assumptions import (
+                record_assumption,
+                record_assumption_checked,
+            )
+
+            if arguments.status == "declared":
+                count, path = record_assumption(
+                    context.cwd, arguments.statement, status="declared", detail=arguments.detail
+                )
+            else:
+                count, path = record_assumption_checked(
+                    context.cwd,
+                    arguments.statement,
+                    holds=arguments.status == "holds",
+                    detail=arguments.detail,
+                )
+        except OSError as exc:
+            return _json_output({"error": f"could not write decision log: {exc}"}, error=True)
+        return _json_output(
+            {
+                "operation": "record_assumption",
+                "success": True,
+                "statement": arguments.statement,
+                "status": arguments.status,
+                "entryCount": count,
+                "logPath": str(path),
+            }
+        )
+
+
 # --- iterate_context --------------------------------------------------------
 
 

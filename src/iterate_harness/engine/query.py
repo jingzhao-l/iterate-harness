@@ -22,6 +22,7 @@ from iterate_harness.api.client import (
 from iterate_harness.api.provider import is_model_multimodal
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.config.paths import get_data_dir
+from iterate_harness.defensive.kernel import DEFENSIVE_KERNEL_KEY, DefensiveKernel
 from iterate_harness.engine.messages import (
     ContentBlock,
     ConversationMessage,
@@ -47,6 +48,7 @@ from iterate_harness.permissions.checker import PermissionChecker, PermissionDec
 from iterate_harness.services.tool_outputs import tool_output_inline_chars, tool_output_preview_chars
 from iterate_harness.tools.base import ToolExecutionContext
 from iterate_harness.tools.base import ToolRegistry
+from iterate_harness.tools.base import ToolResult
 
 AUTO_COMPACT_STATUS_MESSAGE = "Auto-compacting conversation memory to keep things fast and focused."
 REACTIVE_COMPACT_STATUS_MESSAGE = "Prompt too long; compacting conversation memory and retrying."
@@ -169,6 +171,10 @@ class QueryContext:
     # engine consults it after every turn's tool results to enforce
     # deterministic review convergence. ``None`` keeps upstream behavior.
     iterate_policy: IterateLoopPolicy | None = None
+    # Defensive kernel (design §20.3.2): when set (``code`` task mode), every
+    # mutating file tool call is snapshotted before it runs, post-checked
+    # against the project invariants, and rolled back on failure/violation.
+    defensive_kernel: "DefensiveKernel | None" = None
 
 
 def _append_capped_unique(bucket: list[Any], value: Any, *, limit: int) -> None:
@@ -1162,6 +1168,22 @@ async def _execute_tool_call(
         "ask_user_prompt": context.ask_user_prompt,
         **(context.tool_metadata or {}),
     }
+    # Defensive kernel (design §20.3.2): expose the per-query kernel to tools
+    # so they can record assumptions; it is per-query and never persisted.
+    if context.defensive_kernel is not None:
+        exec_metadata[DEFENSIVE_KERNEL_KEY] = context.defensive_kernel
+    # Pre-condition: snapshot the target before any mutating file tool runs so
+    # a failed edit or invariant violation can be rolled back atomically.
+    kernel = context.defensive_kernel
+    defensive_path: str | None = None
+    if (
+        kernel is not None
+        and not _is_read_only
+        and tool_name in FILE_MUTATING_TOOLS
+        and _file_path
+    ):
+        defensive_path = _file_path
+        kernel.snapshot(defensive_path)
     result = await tool.execute(
         parsed_input,
         ToolExecutionContext(
@@ -1170,12 +1192,24 @@ async def _execute_tool_call(
             hook_executor=context.hook_executor,
         ),
     )
+    # Post-condition: verify the edit survived the project invariants; a
+    # violation rolls the snapshot back and surfaces as a tool error the model
+    # must respond to (fail-fast + atomic transaction).
+    if kernel is not None and defensive_path is not None:
+        defensive_failure = await kernel.after_mutation(
+            tool_name,
+            defensive_path,
+            success=not result.is_error,
+            error_hint=result.output if result.is_error else "",
+        )
+        if defensive_failure:
+            result = ToolResult(output=defensive_failure, is_error=True)
     # Carry tool metadata writes back into the durable per-session state so
     # cross-turn consumers (e.g. the iterate loop policy reading
     # "iterate_state") observe them.
     if context.tool_metadata is not None:
         for key, value in exec_metadata.items():
-            if key in ("tool_registry", "ask_user_prompt"):
+            if key in ("tool_registry", "ask_user_prompt", DEFENSIVE_KERNEL_KEY):
                 continue
             context.tool_metadata[key] = value
     elapsed = time.monotonic() - t0

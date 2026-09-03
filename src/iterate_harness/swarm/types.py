@@ -312,6 +312,11 @@ class TeammateSpawnConfig:
     task_type: Literal["local_agent", "remote_agent", "in_process_teammate"] = "local_agent"
     """Background task type recorded for subprocess-backed teammates."""
 
+    task_mode: str | None = None
+    """Task mode the teammate should run in (``code`` / ``iterate``, design
+    §20.5). Forwarded as ``--task-mode`` so workers inherit the leader's
+    defensive kernel behaviour instead of defaulting to the iterate loop."""
+
 
 # ---------------------------------------------------------------------------
 # Spawn result & messaging
