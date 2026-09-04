@@ -271,6 +271,40 @@ async def test_after_mutation_without_configured_invariants_commits(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_kernel_resolves_invariants_from_disk_config(tmp_path: Path) -> None:
+    """Regression: load_effective_config must parse the ``invariants`` section.
+
+    Before the fix ``config_from_dict`` dropped the section, so a project with
+    a configured ``invariants`` block got its code-mode edits silently committed
+    without any invariant check (design §20.3.2 guarantee bypassed).
+    """
+    from iterate_harness.iterate.config_loader import load_effective_config
+
+    (tmp_path / "iterate.config.yaml").write_text(
+        "invariants:\n"
+        "  ensure:\n"
+        "    - pyproject.toml\n",
+        encoding="utf-8",
+    )
+    kernel = DefensiveKernel(tmp_path, load_effective_config(tmp_path))
+    assert kernel.invariants_configured is True
+    assert kernel.last_report is None
+
+    # An edit that removes the guaranteed file must be rolled back.
+    target = tmp_path / "pyproject.toml"
+    target.write_text("v1", encoding="utf-8")
+    kernel.snapshot(target)
+    target.unlink()
+
+    reason = await kernel.after_mutation("write_file", target, success=True)
+
+    assert reason is not None
+    assert "invariant violated" in reason
+    assert target.exists()  # restored by the rollback
+    assert target.read_text(encoding="utf-8") == "v1"
+
+
+@pytest.mark.asyncio
 async def test_disabled_kernel_is_noop(tmp_path: Path) -> None:
     kernel = DefensiveKernel(tmp_path, enabled=False)
 

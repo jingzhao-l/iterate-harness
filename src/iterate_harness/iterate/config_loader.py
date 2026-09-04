@@ -30,6 +30,7 @@ from .types import (
     DimensionResources,
     DimensionThresholds,
     GitConfig,
+    InvariantConfig,
     IterateConfig,
     ReviewerConfig,
     ReviewScopeConfig,
@@ -418,6 +419,22 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     else:
         validation = defaults.validation
 
+    invariants_raw = data.get("invariants")
+    invariants = None
+    if isinstance(invariants_raw, dict):
+        ensure_raw = invariants_raw.get("ensure")
+        commands_raw = invariants_raw.get("commands")
+        # A malformed section (wrong sub-field shapes) degrades to None so the
+        # kernel falls back to validation.commands instead of a bogus empty
+        # config with invariants_configured=True.
+        if (ensure_raw is None or isinstance(ensure_raw, list)) and (
+            commands_raw is None or isinstance(commands_raw, dict)
+        ):
+            invariants = InvariantConfig(
+                ensure=list(ensure_raw) if isinstance(ensure_raw, list) else [],
+                commands=dict(commands_raw) if isinstance(commands_raw, dict) else {},
+            )
+
     reviewer_raw = data.get("reviewer")
     if isinstance(reviewer_raw, dict):
         reviewer = ReviewerConfig(
@@ -465,6 +482,7 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
         atomic=atomic,
         git=git,
         validation=validation,
+        invariants=invariants,
         reviewer=reviewer,
         dimension_resources=dimension_resources,
         token_budget=token_budget,

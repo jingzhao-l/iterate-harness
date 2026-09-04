@@ -178,6 +178,37 @@ class TestLoadEffectiveConfig:
         assert effective.source == "defaults"
         assert effective.override is None
 
+    def test_invariants_section_parsed_from_config(self, tmp_path):
+        d = make_temp_dir(tmp_path)
+        write_config(
+            d,
+            "invariants:\n"
+            "  ensure:\n"
+            "    - pyproject.toml\n"
+            "    - src/main.py\n"
+            "  commands:\n"
+            "    syntax:\n"
+            "      - 'python -m py_compile src/main.py'\n",
+        )
+        effective = load_effective_config(d)
+        assert effective.config.invariants is not None
+        assert effective.config.invariants.ensure == ["pyproject.toml", "src/main.py"]
+        assert effective.config.invariants.commands == {
+            "syntax": ["python -m py_compile src/main.py"]
+        }
+
+    def test_invariants_section_absent_stays_none(self, tmp_path):
+        d = make_temp_dir(tmp_path)
+        d.mkdir()
+        effective = load_effective_config(d)
+        assert effective.config.invariants is None
+
+    def test_invariants_section_malformed_falls_back_to_none(self, tmp_path):
+        d = make_temp_dir(tmp_path)
+        write_config(d, "invariants:\n  commands: not-a-dict\n")
+        effective = load_effective_config(d)
+        assert effective.config.invariants is None
+
     def test_reasoning_effort_defaults_to_none(self, tmp_path):
         d = make_temp_dir(tmp_path)
         d.mkdir()
