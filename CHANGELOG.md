@@ -2,6 +2,28 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `iterate/config_loader.py`：修复 `invariants` 配置段未被解析的关键 bug。此前
+  `config_from_dict` 不解析 `invariants`，导致 `effective.config.invariants`
+  恒为 `None`，code 模式下防御式内核永远收不到项目不变量。现在：
+  - `invariants` 段（`ensure` + `commands`）正确解析进 `IterateConfig`；
+  - 段内字段形状错误（如 `commands: not-a-dict`）整体降级为 `None`，让内核
+    回退到 `validation.commands`，避免出现 `invariants_configured=True` 的
+    误导状态。
+
+### Verification
+
+- 全量 pytest：**2049 passed, 6 skipped**；ruff clean。新增回归测试：
+  `test_invariants_section_parsed_from_config` /
+  `test_invariants_section_absent_stays_none` /
+  `test_invariants_section_malformed_falls_back_to_none`
+  （`tests/test_iterate/test_config_loader.py`）以及端到端的
+  `test_kernel_resolves_invariants_from_disk_config`
+  （`tests/test_defensive/test_defensive_kernel.py`）。
+
 ## [2.0.0] - 2026-09-04
 
 ### Added

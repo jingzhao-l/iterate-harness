@@ -13,8 +13,9 @@
 
 <p align="center">
   <a href="#-快速开始"><img src="https://img.shields.io/badge/快速开始-5_分钟-blue?logo=github&logoColor=white" alt="Quick Start"></a>
-  <a href="#-iterate-特性"><img src="https://img.shields.io/badge/Iterate-6_工具-ff69b4" alt="Iterate Tools"></a>
+  <a href="#-iterate-特性"><img src="https://img.shields.io/badge/Iterate-7_工具-ff69b4" alt="Iterate Tools"></a>
   <a href="#-iterate-特性"><img src="https://img.shields.io/badge/模式-dry--run_|_normal-61DAFB" alt="Modes"></a>
+  <a href="#-双模式架构"><img src="https://img.shields.io/badge/任务模式-code_%7C_iterate-7c3aed" alt="Task Modes"></a>
   <img src="https://img.shields.io/badge/python-%E2%89%A53.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.npmjs.org%2Fiterate-harness%2Flatest&query=version&label=version&color=brightgreen" alt="Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow" alt="License"></a>
@@ -39,6 +40,9 @@
 它是一款**独立的专属 agent harness**，围绕 iterate review/fix 闭环打造：
 内核 agent loop、React TUI、工具/技能/插件体系与权限层全部为 iterate 原生，
 核心是移植自 iterate skill TypeScript 实现的语义层，以及引擎级的收敛控制策略。
+**v2.0 引入双模式架构**：`task_mode` 在 `iterate`（1.x 审查/修复闭环）与
+`code`（通用编程 agent 模式，叠加防御式内核保证）之间切换——见
+[#双模式架构](#-双模式架构)。
 
 > ⭐ 如果这个项目对你有帮助，欢迎点亮 GitHub Star，这是对开源维护最大的支持！
 
@@ -124,6 +128,49 @@ manifest 漂移（升依赖、换技术栈）会在评审前给出非阻塞警�
 先设置 API Key：`export ANTHROPIC_API_KEY=your_key`（也支持
 OpenAI 兼容供应商，见 `ih --help`）。
 
+## 🧭 双模式架构
+
+自 v2.0 起，`task_mode` 决定 **agent 做什么**（与决定 **能碰什么** 的
+`permission_mode` 正交）：
+
+| 模式 | 行为 |
+| --- | --- |
+| **`iterate`**（默认） | 经典 1.x 闭环——确定性多维度评审、逐维度分诊、每轮验证的原子修复、append-only 决策日志 |
+| **`code`** | 通用编程 agent 模式：全套工具照常可用，叠加**防御式内核**，让每一次编辑天然安全 |
+
+CLI 用 `--task-mode` 切换，TUI 内对空输入按 **Tab** 在 `code` ↔ `iterate`
+之间循环（输入框左侧竖向模式色条与底部模式文字随模式变色——code=primary、
+iterate=amber）。code 模式 leader 派生的子代理继承同一防御式内核，子代理写
+代码时享有同等保证（CLI → AppState → `agent_tool` → subprocess backend，
+设计 §20.5）。
+
+### 防御式内核（`code` 模式）
+
+三项机械保证（设计 §20.3.2）——由代码强制，而非靠提示词：
+
+1. **原子事务**——每个变更类文件工具执行前快照；失败自动回滚（fail-fast +
+   原子事务）。
+2. **不变量守护**——每次编辑成功后重跑项目不变量，违规回滚并作为工具错误
+   上抛，模型必须回应。不变量来自 `iterate.config.yaml` 的 `invariants` 段
+   （`ensure` 文件断言 + `commands` 逐模块命令表），无 `invariants` 段时回退
+   `validation.commands`。命令仅在精确匹配时执行，且拒绝含 shell 串联
+   元字符的命令。
+3. **假设审计**——agent 经 `record_assumption` 声明的假设写入决策日志，
+   假设被证伪即为 fail-fast 信号。
+
+```yaml
+# iterate.config.yaml —— 为 code 模式声明项目不变量
+invariants:
+  ensure:
+    - pyproject.toml
+    - src/main.py
+  commands:
+    syntax:
+      - python -m py_compile src/main.py
+    tests:
+      - pytest -x
+```
+
 ## ✨ Iterate 特性
 
 | 能力 | 说明 |
@@ -156,13 +203,17 @@ OpenAI 兼容供应商，见 `ih --help`）。
 | **维度 doctor** | `ih iterate doctor` 一条命令检查整个维度体系：内置 canonical 定义 vs harness 内部常量 vs 你的 `iterate.config.yaml`（未知维度键、惰性的资源/门禁条目、超出启用集的个性化引用）；发现漂移退出码 1，可直接做 CI 门禁 |
 | **决策日志** | append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘 |
 | **项目知识** | `ITERATE.md` 项目知识 + 按项目隔离的 9 类结构化个性化数据 |
+| **双模式架构** | `task_mode`（`code` / `iterate`）与 `permission_mode` 正交：`iterate` 保留 1.x 审查/修复闭环，`code` 为通用编程 agent 模式、叠加防御式内核——CLI 用 `--task-mode`，TUI 按 Tab |
+| **防御式内核（code 模式）** | 原子事务（快照 → 失败自动回滚）、不变量守护（`invariants.ensure` + `invariants.commands`，无段时回退 `validation.commands`；命令精确匹配、拒绝 shell 元字符）与假设审计（`record_assumption` → 决策日志）——全部由代码机械强制 |
+| **worker 防御内核继承** | `--task-mode` 经 CLI → AppState → `agent_tool` → subprocess backend 全链路穿透（设计 §20.5）：code 模式子代理以同一防御式内核运行 |
 
-## 🔧 六个 iterate 工具
+## 🔧 七个 iterate 工具
 
 - `iterate_config` — 生效配置（默认值 + `iterate.config.yaml` 覆盖）
 - `iterate_validate` — 运行预配置验证命令（仅精确匹配）
 - `iterate_review` — 确定性引擎：plan / aggregate / meta-review
 - `iterate_decision_log` — append-only 决策日志
+- `record_assumption` — 声明 / 验证一条假设，写入决策日志（code 模式审计轨迹）
 - `iterate_context` — SKILL.md / ITERATE.md / 个性化上下文
 - `iterate_triage` — 交互式 y/n/a findings 分诊，`a` 持久化 known_intentional
 
@@ -183,9 +234,14 @@ src/iterate_harness/
 │   ├── personalization.py # 9 类按项目存储
 │   ├── worktree_flow.py# git 隔离：enter/commit/exit + 回滚
 │   └── prompts.py      # canonical dry-run/normal 循环模板
+├── defensive/          # code 模式防御式内核（设计 §20.3.2）
+│   ├── kernel.py       # 每查询协调器：快照 → 后检 → commit/rollback
+│   ├── transaction.py  # 原子文件事务缓冲
+│   ├── invariants.py   # ensure 断言 + 精确匹配命令守护
+│   └── assumptions.py  # 假设审计轨迹 → 决策日志
 ├── engine/             # 内核 agent loop（上游 + iterate 控制块）
 ├── permissions/        # 权限检查 + iterate 自动装配（protected_paths…）
-├── tools/iterate_tools.py  # 六个 iterate_* 工具
+├── tools/iterate_tools.py  # 七个 iterate_* 工具
 └── ui/                 # React TUI 后端宿主 + review_progress 协议
 ```
 

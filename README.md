@@ -13,8 +13,9 @@
 
 <p align="center">
   <a href="#-quick-start"><img src="https://img.shields.io/badge/Quick_Start-5_min-blue?logo=github&logoColor=white" alt="Quick Start"></a>
-  <a href="#-iterate-features"><img src="https://img.shields.io/badge/Iterate-6_tools-ff69b4" alt="Iterate Tools"></a>
+  <a href="#-iterate-features"><img src="https://img.shields.io/badge/Iterate-7_tools-ff69b4" alt="Iterate Tools"></a>
   <a href="#-iterate-features"><img src="https://img.shields.io/badge/Modes-dry--run_|_normal-61DAFB" alt="Modes"></a>
+  <a href="#-dual-mode-architecture"><img src="https://img.shields.io/badge/Task_Mode-code_%7C_iterate-7c3aed" alt="Task Modes"></a>
   <img src="https://img.shields.io/badge/python-%E2%89%A53.10-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.npmjs.org%2Fiterate-harness%2Flatest&query=version&label=version&color=brightgreen" alt="Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow" alt="License"></a>
@@ -50,7 +51,10 @@ It is a **standalone agent harness** built around the iterate review/fix
 loop: the kernel agent loop, React TUI, tool/skill/plugin systems and
 permission layer are iterate-native, with the iterate semantic layer (ported
 from the iterate skill's TypeScript implementation) plus the engine-level
-convergence policy at its core.
+convergence policy at its core. **v2.0 adds a dual-mode architecture**:
+`task_mode` flips between `iterate` (the 1.x review/fix loop) and `code` (a
+general-purpose agent mode hardened by the defensive kernel) — see
+[#dual-mode-architecture](#-dual-mode-architecture).
 
 > ⭐ If this project helps you, please consider giving it a GitHub star — it means a lot to open-source maintenance!
 
@@ -144,6 +148,55 @@ change) triggers a non-blocking warning before reviews.
 Set your API key first: `export ANTHROPIC_API_KEY=your_key` (OpenAI-compatible
 providers are also supported — see `ih --help`).
 
+## 🧭 Dual-Mode Architecture
+
+Since v2.0, `task_mode` decides **what the agent does** (orthogonal to
+`permission_mode`, which decides **what it may touch**):
+
+| Mode | Behavior |
+| --- | --- |
+| **`iterate`** (default) | The classic 1.x loop — deterministic multi-dimension review, per-dimension triage, atomic fixes validated every round, append-only decision log. |
+| **`code`** | General-purpose agent mode: the full toolset stays available, with the **defensive kernel** layered on so every edit is safe by construction. |
+
+Switch modes with `--task-mode` on the CLI or press **Tab** on an empty input
+in the TUI (the vertical mode bar on the input's left edge and the mode label
+beneath it recolor — primary for `code`, amber for `iterate`). Code-mode
+workers spawned by the leader inherit the same defensive kernel, so subagents
+write with the same guarantees (CLI → AppState → `agent_tool` → subprocess
+backend, design §20.5).
+
+### Defensive kernel (`code` mode)
+
+Three mechanical guarantees (design §20.3.2) — enforced by code, never by
+prompt:
+
+1. **Atomic mutations** — every mutating file tool is snapshotted before it
+   runs; a failed edit is rolled back automatically (fail-fast + atomic
+   transaction).
+2. **Invariant guarding** — after each successful mutation the project
+   invariants are re-checked; a violation rolls the edit back and surfaces as a
+   tool error the model must respond to. Invariants come from the
+   `invariants` section of `iterate.config.yaml` (`ensure` file assertions +
+   `commands` per-module command lists), falling back to `validation.commands`
+   when no `invariants` section is configured. Commands run only on an EXACT
+   match and refuse shell-chaining metacharacters.
+3. **Assumption audit** — assumptions the agent declares via
+   `record_assumption` are written to the decision log; a falsified assumption
+   is a fail-fast signal.
+
+```yaml
+# iterate.config.yaml — declare project invariants for code mode
+invariants:
+  ensure:
+    - pyproject.toml
+    - src/main.py
+  commands:
+    syntax:
+      - python -m py_compile src/main.py
+    tests:
+      - pytest -x
+```
+
 ## ✨ Iterate Features
 
 | Capability | What it does |
@@ -176,13 +229,17 @@ providers are also supported — see `ih --help`).
 | **Dimension doctor** | `ih iterate doctor` checks the whole dimension system in one shot: bundled canonical definitions vs harness internals vs your `iterate.config.yaml` (unknown dimension keys, inert resource/threshold entries, personalization references outside the enabled set); exits 1 on drift so CI can gate on it |
 | **Decision log** | Append-only `.iterate/decision-log.jsonl`: every round, fix, validation and triage decision is recorded |
 | **Project knowledge** | `ITERATE.md` project knowledge + per-project structured personalization (9 categories) |
+| **Dual-mode architecture** | `task_mode` (`code` / `iterate`) orthogonal to `permission_mode`: `iterate` keeps the 1.x review/fix loop, `code` is a general-purpose agent mode hardened by the defensive kernel — `--task-mode` on the CLI, Tab in the TUI |
+| **Defensive kernel (code mode)** | Atomic mutations (snapshot → auto-rollback on failure), invariant guarding (`invariants.ensure` + `invariants.commands`, falling back to `validation.commands`; EXACT-match, metachar-refusing commands) and assumption audit (`record_assumption` → decision log) — all enforced mechanically |
+| **Worker defensive inheritance** | `--task-mode` threads through CLI → AppState → `agent_tool` → subprocess backend (design §20.5): code-mode subagents run the same defensive kernel |
 
-## 🔧 The six iterate tools
+## 🔧 The seven iterate tools
 
 - `iterate_config` — effective config (defaults + `iterate.config.yaml` overrides)
 - `iterate_validate` — run a preconfigured validation command (EXACT match only)
 - `iterate_review` — deterministic engine: plan / aggregate / meta-review
 - `iterate_decision_log` — append-only decision log
+- `record_assumption` — declare / verify an assumption, persisted to the decision log (code-mode audit trail)
 - `iterate_context` — SKILL.md / ITERATE.md / personalization context
 - `iterate_triage` — interactive y/n/a findings triage with `known_intentional` persistence
 
@@ -203,9 +260,14 @@ src/iterate_harness/
 │   ├── personalization.py # 9-category per-project store
 │   ├── worktree_flow.py# git isolation: enter/commit/exit + rollback
 │   └── prompts.py      # canonical dry-run/normal loop templates
+├── defensive/          # code-mode defensive kernel (design §20.3.2)
+│   ├── kernel.py       # per-query coordinator: snapshot → post-check → commit/rollback
+│   ├── transaction.py  # atomic file transaction buffer
+│   ├── invariants.py   # ensure assertions + exact-match command guard
+│   └── assumptions.py  # assumption audit trail → decision log
 ├── engine/             # kernel agent loop (upstream + iterate control block)
 ├── permissions/        # checker + iterate auto-assembly (protected_paths …)
-├── tools/iterate_tools.py  # the six iterate_* tools
+├── tools/iterate_tools.py  # the seven iterate_* tools
 └── ui/                 # React TUI backend host + review_progress protocol
 ```
 
