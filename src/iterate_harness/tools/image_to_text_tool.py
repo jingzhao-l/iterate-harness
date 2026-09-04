@@ -152,6 +152,14 @@ class ImageToTextTool(BaseTool[ImageToTextToolInput]):
                 path = context.cwd / path
             path = path.expanduser().resolve()
 
+            from iterate_harness.sandbox.session import is_docker_sandbox_active
+            if is_docker_sandbox_active():
+                from iterate_harness.sandbox.path_validator import validate_sandbox_path
+                allowed, reason = validate_sandbox_path(path, context.cwd)
+                if not allowed:
+                    log.warning("image_to_text: path %s rejected: %s", path, reason)
+                    return None, None
+
             if not path.exists():
                 log.warning("image_to_text: image not found at %s", path)
                 return None, None

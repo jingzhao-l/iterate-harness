@@ -118,6 +118,10 @@ async def _glob(root: Path, pattern: str, *, limit: int) -> list[str]:
 
         session = get_docker_sandbox()
         if session is not None and session.is_running:
+            from iterate_harness.sandbox.path_validator import validate_sandbox_path
+            allowed, reason = validate_sandbox_path(root, Path("."))
+            if not allowed:
+                return [f"(error: search root '{root}' is outside the sandbox boundary: {reason})"]
             process = await session.exec_command(
                 cmd,
                 cwd=root,

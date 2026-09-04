@@ -191,7 +191,13 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 				queueTranscriptItem({role: 'log', text: line});
 				return;
 			}
-			const event = JSON.parse(line.slice(PROTOCOL_PREFIX.length)) as BackendEvent;
+			let event: BackendEvent;
+			try {
+				event = JSON.parse(line.slice(PROTOCOL_PREFIX.length)) as BackendEvent;
+			} catch {
+				queueTranscriptItem({role: 'log', text: `(malformed backend line: ${line.slice(0, 120)})`});
+				return;
+			}
 			handleEvent(event);
 		});
 

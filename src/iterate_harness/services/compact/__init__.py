@@ -173,15 +173,8 @@ def _replace_images_with_compaction_placeholders(
 
 
 def _sanitize_metadata(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _sanitize_metadata(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_sanitize_metadata(item) for item in value]
-    return str(value)
+    from iterate_harness.services.session_storage import _sanitize_metadata as _shared_sanitize
+    return _shared_sanitize(value)
 
 
 def _record_compact_checkpoint(

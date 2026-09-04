@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _active_session: DockerSandboxSession | None = None
+_atexit_registered: bool = False
 
 
 def get_docker_sandbox() -> DockerSandboxSession | None:
@@ -26,13 +27,22 @@ def is_docker_sandbox_active() -> bool:
     return _active_session is not None and _active_session.is_running
 
 
+def _atexit_cleanup() -> None:
+    """Best-effort sync cleanup of the sandbox on interpreter shutdown."""
+    if _active_session is not None and _active_session.is_running:
+        try:
+            _active_session.stop_sync()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def start_docker_sandbox(
     settings: Settings,
     session_id: str,
     cwd: Path,
 ) -> None:
     """Start a Docker sandbox session for the current IterateHarness session."""
-    global _active_session  # noqa: PLW0603
+    global _active_session, _atexit_registered  # noqa: PLW0603
 
     from iterate_harness.sandbox.docker_backend import DockerSandboxSession, get_docker_availability
 
@@ -52,7 +62,9 @@ async def start_docker_sandbox(
     _active_session = session
 
     # Safety net: stop the container if the process exits without close_runtime()
-    atexit.register(session.stop_sync)
+    if not _atexit_registered:
+        atexit.register(_atexit_cleanup)
+        _atexit_registered = True
 
 
 async def stop_docker_sandbox() -> None:

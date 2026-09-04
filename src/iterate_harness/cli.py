@@ -822,7 +822,7 @@ app = typer.Typer(
 
 auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
-iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/report)")
+iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/report/batch/schedule/hook/onboard/personalize)")
 web_app = typer.Typer(name="web", help="WebUI management console (design §17)")
 
 app.add_typer(auth_app)
@@ -921,7 +921,15 @@ def _run_headless(kickoff: str, branch: str | None = None) -> None:
         ensure_onboarding_fingerprints,
         warn_if_drifted,
     )
+    from iterate_harness.iterate.config_loader import load_effective_config
     from iterate_harness.ui.app import run_print_mode
+
+    effective_goal = load_effective_config(str(Path.cwd())).config.goal
+    goal_preview = (effective_goal or "full codebase review")[:80]
+    print(
+        f"Starting iterate review — goal: {goal_preview}",
+        file=sys.stderr,
+    )
 
     if branch:
         kickoff = (
@@ -933,8 +941,8 @@ def _run_headless(kickoff: str, branch: str | None = None) -> None:
     asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
     print(
         "\nRun finished. "
-        "View the report with `ih iterate report --html --serve` "
-        "(or `ih iterate log --tail 40` for the decision log).",
+        "View the report with `ih iterate report --html` "
+        "or browse the decision log with `ih iterate log --tail 40`.",
         file=sys.stderr,
     )
 
@@ -958,6 +966,7 @@ def _resolve_changed_files(
         raise typer.Exit(1) from exc
     if not files:
         print(f"No changed files vs {ref} (clean tree / not a git repo).")
+        print("Hint: use --clean-ok to exit cleanly for scheduled runs, or remove --changed for a full review.", file=sys.stderr)
         raise typer.Exit(0 if clean_ok else 1)
     print(f"Changed-only quick review: {len(files)} file(s) vs {ref}")
     return files
@@ -1120,8 +1129,18 @@ def iterate_review(
         False, "--clean-ok", help="Exit 0 when there are no changes (scheduled runs)"
     ),
     branch: str = typer.Option("", "--branch", help="Target branch for the review (creates worktree if different from current)"),
+    template: str = typer.Option(
+        "standard", "--template", help="Kickoff template: standard (balanced), strict (conservative), quick (fast)"
+    ),
 ) -> None:
-    """Dry-run pure review: multi-round convergence, read-only, audited report."""
+    """Dry-run pure review: multi-round convergence, read-only, audited report.
+
+    Examples:
+        ih iterate review
+        ih iterate review --changed --ref main
+        ih iterate review --template strict --rounds 5
+        ih iterate review --branch feature/my-branch
+    """
     from iterate_harness.iterate import prompts as iterate_prompts
     from iterate_harness.iterate.config_loader import load_effective_config
 
@@ -1130,7 +1149,7 @@ def iterate_review(
         effective_goal = load_effective_config(str(Path.cwd())).config.goal
         changed_files = _resolve_changed_files(changed, ref, clean_ok)
         _run_headless(
-            iterate_prompts.dry_run_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd())),
+            iterate_prompts.dry_run_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd()), template=template),
             branch=branch or None,
         )
     finally:
@@ -1150,8 +1169,17 @@ def iterate_run(
         False, "--clean-ok", help="Exit 0 when there are no changes (scheduled runs)"
     ),
     branch: str = typer.Option("", "--branch", help="Target branch for the review (creates worktree if different from current)"),
+    template: str = typer.Option(
+        "standard", "--template", help="Kickoff template: standard (balanced), strict (conservative), quick (fast)"
+    ),
 ) -> None:
-    """Autonomous loop: review -> fix atomic findings -> validate -> repeat."""
+    """Autonomous loop: review -> fix atomic findings -> validate -> repeat.
+
+    Examples:
+        ih iterate run
+        ih iterate run --changed
+        ih iterate run --template quick --rounds 2
+    """
     from iterate_harness.iterate import prompts as iterate_prompts
     from iterate_harness.iterate.config_loader import load_effective_config
 
@@ -1160,7 +1188,7 @@ def iterate_run(
         effective_goal = load_effective_config(str(Path.cwd())).config.goal
         changed_files = _resolve_changed_files(changed, ref, clean_ok)
         _run_headless(
-            iterate_prompts.normal_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd())),
+            iterate_prompts.normal_kickoff(effective_goal, rounds, changed_files, cwd=str(Path.cwd()), template=template),
             branch=branch or None,
         )
     finally:
@@ -1214,6 +1242,7 @@ def iterate_resume(
         session_data = load_session_by_id(cwd, session_id)
         if session_data is None:
             print(f"Session not found: {session_id}", file=sys.stderr)
+            print("Run `ih iterate sessions` to list available sessions.", file=sys.stderr)
             raise typer.Exit(1)
     else:
         snapshots = list_session_snapshots(cwd, limit=1)
@@ -1231,6 +1260,74 @@ def iterate_resume(
             restore_tool_metadata=session_data.get("tool_metadata"),
         )
     )
+
+
+@iterate_app.command("validate")
+def iterate_validate_cmd(
+    command: str = typer.Argument(..., help="Validation command name (must be preconfigured in iterate.config.yaml)"),
+) -> None:
+    """Run a preconfigured validation command (exact-match whitelist only).
+
+    Examples:
+        ih iterate validate lint
+        ih iterate validate test
+        ih iterate validate mypy
+    """
+    from iterate_harness.iterate.validate import run_validation
+
+    result = run_validation(command, str(Path.cwd()))
+    if not result.allowed:
+        print(result.reject_reason, file=sys.stderr)
+        raise typer.Exit(1)
+    output = (result.stdout or "").strip()
+    if result.exit_code != 0:
+        err = (result.stderr or "").strip()
+        combined = f"{output}\n{err}".strip() if err else output
+        print(combined or f"Validation '{command}' failed (exit code {result.exit_code}).", file=sys.stderr)
+        raise typer.Exit(result.exit_code)
+    print(output or f"Validation '{command}' passed.")
+    raise typer.Exit(0)
+
+
+@iterate_app.command("sessions")
+def iterate_sessions(
+    limit: int = typer.Option(10, "--limit", min=1, max=50, help="Max sessions to show"),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON"),
+) -> None:
+    """List saved iterate sessions for the current project.
+
+    Examples:
+        ih iterate sessions
+        ih iterate sessions --limit 20
+        ih iterate sessions --json
+    """
+    from iterate_harness.services.session_storage import list_session_snapshots
+
+    cwd = str(Path.cwd())
+    sessions = list_session_snapshots(cwd, limit=limit)
+    if not sessions:
+        print("No saved sessions found for this project.", file=sys.stderr)
+        raise typer.Exit(0)
+
+    if as_json:
+        print(json.dumps(sessions, ensure_ascii=False, indent=2))
+        return
+
+    print(f"Saved sessions ({len(sessions)} found):\n")
+    for i, session in enumerate(sessions, start=1):
+        summary = session.get("summary", "(no summary)")[:60]
+        model = session.get("model", "?")
+        created = session.get("created_at", 0)
+        msg_count = session.get("message_count", 0)
+        sid = session.get("session_id", "?")
+        try:
+            from datetime import datetime, timezone
+            ts = datetime.fromtimestamp(created, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        except (OSError, ValueError):
+            ts = "unknown"
+        print(f"  {i}. [{sid}] {summary}")
+        print(f"     model={model}  messages={msg_count}  {ts}")
+    print("\nResume with: ih iterate resume --session <id>")
 
 
 @iterate_app.command("log")

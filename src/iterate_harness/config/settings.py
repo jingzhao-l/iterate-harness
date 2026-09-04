@@ -10,6 +10,7 @@ Settings are resolved with the following precedence (highest first):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from iterate_harness.mcp.types import McpServerConfig
 from iterate_harness.permissions.modes import PermissionMode
 from iterate_harness.utils.file_lock import exclusive_file_lock
 from iterate_harness.utils.fs import atomic_write_text
+
+log = logging.getLogger(__name__)
 
 
 # ANSI escape sequence pattern
@@ -667,21 +670,24 @@ class Settings(BaseModel):
         )
 
     def resolve_api_key(self) -> str:
-        """Resolve API key with precedence: instance value > env var > empty.
+        """Resolve API key with precedence: instance value > profile auth > env var > empty.
 
         Returns the API key string. Raises ValueError if no key is found.
         """
-        profile_name, profile = self.resolve_profile()
-        del profile_name, profile
-
         if self.api_key:
             return self.api_key
+
+        try:
+            auth = self.resolve_auth()
+            if auth.auth_kind == "api_key" and auth.value:
+                return auth.value
+        except ValueError:
+            pass
 
         env_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if env_key:
             return env_key
 
-        # Also check OPENAI_API_KEY for openai-format providers
         openai_key = os.environ.get("OPENAI_API_KEY", "")
         if openai_key:
             return openai_key
@@ -841,23 +847,38 @@ def _apply_env_overrides(settings: Settings) -> Settings:
 
     max_tokens = os.environ.get("ITERATE_MAX_TOKENS")
     if max_tokens:
-        updates["max_tokens"] = int(max_tokens)
+        try:
+            updates["max_tokens"] = int(max_tokens)
+        except ValueError:
+            log.warning("Invalid ITERATE_MAX_TOKENS value: %r (skipping)", max_tokens)
 
     timeout = os.environ.get("ITERATE_TIMEOUT")
     if timeout:
-        updates["timeout"] = float(timeout)
+        try:
+            updates["timeout"] = float(timeout)
+        except ValueError:
+            log.warning("Invalid ITERATE_TIMEOUT value: %r (skipping)", timeout)
 
     max_turns = os.environ.get("ITERATE_MAX_TURNS")
     if max_turns:
-        updates["max_turns"] = int(max_turns)
+        try:
+            updates["max_turns"] = int(max_turns)
+        except ValueError:
+            log.warning("Invalid ITERATE_MAX_TURNS value: %r (skipping)", max_turns)
 
     context_window_tokens = os.environ.get("ITERATE_CONTEXT_WINDOW_TOKENS")
     if context_window_tokens:
-        updates["context_window_tokens"] = int(context_window_tokens)
+        try:
+            updates["context_window_tokens"] = int(context_window_tokens)
+        except ValueError:
+            log.warning("Invalid ITERATE_CONTEXT_WINDOW_TOKENS value: %r (skipping)", context_window_tokens)
 
     auto_compact_threshold_tokens = os.environ.get("ITERATE_AUTO_COMPACT_THRESHOLD_TOKENS")
     if auto_compact_threshold_tokens:
-        updates["auto_compact_threshold_tokens"] = int(auto_compact_threshold_tokens)
+        try:
+            updates["auto_compact_threshold_tokens"] = int(auto_compact_threshold_tokens)
+        except ValueError:
+            log.warning("Invalid ITERATE_AUTO_COMPACT_THRESHOLD_TOKENS value: %r (skipping)", auto_compact_threshold_tokens)
 
     api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if api_key:
@@ -886,6 +907,10 @@ def _apply_env_overrides(settings: Settings) -> Settings:
         sandbox_updates["docker"] = settings.sandbox.docker.model_copy(
             update={"image": sandbox_docker_image}
         )
+        # Preserve existing docker sub-fields by merging into the current model
+        docker_data = settings.sandbox.docker.model_dump()
+        docker_data["image"] = sandbox_docker_image
+        sandbox_updates["docker"] = DockerSandboxSettings.model_validate(docker_data)
     if sandbox_updates:
         updates["sandbox"] = settings.sandbox.model_copy(update=sandbox_updates)
 
@@ -914,7 +939,11 @@ def load_settings(config_path: Path | None = None) -> Settings:
         config_path = get_config_file_path()
 
     if config_path.exists():
-        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError) as exc:
+            log.error("Malformed settings file %s: %s — using defaults", config_path, exc)
+            return _apply_env_overrides(Settings().materialize_active_profile())
         settings = Settings.model_validate(raw)
         if "profiles" not in raw or "active_profile" not in raw:
             profile_name, profile = _profile_from_flat_settings(settings)

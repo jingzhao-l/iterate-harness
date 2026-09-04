@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess
+import asyncio
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -31,12 +31,14 @@ class ExitWorktreeTool(BaseTool[ExitWorktreeToolInput]):
         path = Path(arguments.path).expanduser()
         if not path.is_absolute():
             path = (context.cwd / path).resolve()
-        result = subprocess.run(
-            ["git", "worktree", "remove", "--force", str(path)],
-            cwd=context.cwd,
-            capture_output=True,
-            text=True,
-            check=False,
+        proc = await asyncio.create_subprocess_exec(
+            "git", "worktree", "remove", "--force", str(path),
+            cwd=str(context.cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        output = (result.stdout or result.stderr).strip() or f"Removed worktree {path}"
-        return ToolResult(output=output, is_error=result.returncode != 0)
+        stdout, stderr = await proc.communicate()
+        output = ((stdout or b"").decode(errors="replace") + (stderr or b"").decode(errors="replace")).strip()
+        if not output:
+            output = f"Removed worktree {path}"
+        return ToolResult(output=output, is_error=proc.returncode != 0)

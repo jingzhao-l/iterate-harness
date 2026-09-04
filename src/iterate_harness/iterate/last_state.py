@@ -31,14 +31,14 @@ def summarize_last_run(project_root: str) -> dict[str, Any] | None:
     last successful convergence point.
     """
     entries = read_entries(project_root)
-    if not entries and load_checkpoint(project_root) is None:
+    checkpoint = load_checkpoint(project_root)
+    if not entries and checkpoint is None:
         return None
 
     report = _last_entry(entries, "report")
     if report is not None:
         summary = _summarize_report(entries, report)
     else:
-        checkpoint = load_checkpoint(project_root)
         if checkpoint is not None:
             summary = _summarize_checkpoint(entries, checkpoint)
         else:
@@ -46,7 +46,6 @@ def summarize_last_run(project_root: str) -> dict[str, Any] | None:
 
     # Carry the persisted deferred-architectural list so a resume prompt can
     # re-surface what was deliberately left unfixed (design §11.2.2).
-    checkpoint = load_checkpoint(project_root)
     raw_deferred = (checkpoint or {}).get("deferred_architectural")
     if isinstance(raw_deferred, list):
         cleaned = [entry for entry in raw_deferred if isinstance(entry, dict)]

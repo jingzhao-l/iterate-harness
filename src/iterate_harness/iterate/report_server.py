@@ -98,11 +98,10 @@ def serve_report(
     if not report_dir.is_dir():
         raise NotADirectoryError(f"Report directory not found: {report_dir}")
 
-    # Bind the served directory onto the handler class so every request
-    # resolves within it (SimpleHTTPRequestHandler already guards against
-    # path traversal by rejecting ``..`` segments).
-    handler_class = _ReportHandler
-    handler_class._report_directory = str(report_dir)
+    class _BoundReportHandler(_ReportHandler):
+        pass
+    _BoundReportHandler._report_directory = str(report_dir)
+    handler_class = _BoundReportHandler
     handler_class.extensions_map.update(
         {
             ".html": "text/html; charset=utf-8",

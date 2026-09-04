@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess
+import asyncio
 from pathlib import Path
 import re
 
@@ -32,7 +32,7 @@ class EnterWorktreeTool(BaseTool[EnterWorktreeToolInput]):
         arguments: EnterWorktreeToolInput,
         context: ToolExecutionContext,
     ) -> ToolResult:
-        top_level = _git_output(context.cwd, "rev-parse", "--show-toplevel")
+        top_level = await _git_output(context.cwd, "rev-parse", "--show-toplevel")
         if top_level is None:
             return ToolResult(output="enter_worktree requires a git repository", is_error=True)
 
@@ -44,30 +44,32 @@ class EnterWorktreeTool(BaseTool[EnterWorktreeToolInput]):
             cmd.extend(["-b", arguments.branch, str(worktree_path), arguments.base_ref])
         else:
             cmd.extend([str(worktree_path), arguments.branch])
-        result = subprocess.run(
-            cmd,
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(repo_root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        output = (result.stdout or result.stderr).strip() or f"Created worktree {worktree_path}"
-        if result.returncode != 0:
+        stdout, stderr = await proc.communicate()
+        output = ((stdout or b"").decode(errors="replace") + (stderr or b"").decode(errors="replace")).strip()
+        if not output:
+            output = f"Created worktree {worktree_path}"
+        if proc.returncode != 0:
             return ToolResult(output=output, is_error=True)
         return ToolResult(output=f"{output}\nPath: {worktree_path}")
 
 
-def _git_output(cwd: Path, *args: str) -> str | None:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
+async def _git_output(cwd: Path, *args: str) -> str | None:
+    proc = await asyncio.create_subprocess_exec(
+        "git", *args,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
-    if result.returncode != 0:
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
         return None
-    return (result.stdout or "").strip()
+    return (stdout.decode(errors="replace") or "").strip()
 
 
 def _resolve_worktree_path(repo_root: Path, branch: str, path: str | None) -> Path:

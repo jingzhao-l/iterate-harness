@@ -203,6 +203,10 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
 
 def load_session_by_id(cwd: str | Path, session_id: str) -> dict[str, Any] | None:
     """Load a specific session by ID."""
+    import re as _re
+    if not _re.fullmatch(r"[a-zA-Z0-9_\-]+", session_id):
+        log.warning("Invalid session_id format: %r", session_id)
+        return None
     session_dir = get_project_session_dir(cwd)
     # Try named session first
     path = session_dir / f"session-{session_id}.json"

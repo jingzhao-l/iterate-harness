@@ -13,9 +13,13 @@ never shared across turns.
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# Unique sentinel that cannot collide with real file content.
+_MISSING_SENTINEL = b"\x00__ITERATE_MISSING_" + uuid.UUID(int=0).hex.encode() + b"_\x00"
 
 
 class FileTransactionBuffer:
@@ -39,8 +43,8 @@ class FileTransactionBuffer:
         try:
             self._snapshots[resolved] = resolved.read_bytes()
         except OSError:
-            # Missing file → remember as absent so rollback removes it.
-            self._snapshots[resolved] = b"\x00__ITERATE_MISSING__\x00"
+            # Missing file -> remember as absent so rollback removes it.
+            self._snapshots[resolved] = _MISSING_SENTINEL
 
     def commit(self, path: str | Path) -> None:
         """Accept the edit: drop the snapshot for ``path`` (verified good)."""
@@ -56,7 +60,7 @@ class FileTransactionBuffer:
         restored: list[Path] = []
         for resolved, original in self._snapshots.items():
             try:
-                if original == b"\x00__ITERATE_MISSING__\x00":
+                if original == _MISSING_SENTINEL:
                     if resolved.exists():
                         resolved.unlink()
                         restored.append(resolved)

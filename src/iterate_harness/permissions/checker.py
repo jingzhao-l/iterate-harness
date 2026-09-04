@@ -318,12 +318,16 @@ def _project_risk_area_paths() -> tuple[str, ...]:
     return tuple(paths)
 
 
-def _project_personalization() -> dict[str, object]:
-    """The current project's ``personalization`` config block (or ``{}``)."""
+def _project_personalization(cwd: str | None = None) -> dict[str, object]:
+    """The current project's ``personalization`` config block (or ``{}``).
+
+    Args:
+        cwd: Optional working directory. If None, uses ``Path.cwd()``.
+    """
     try:
         from iterate_harness.iterate.config_loader import load_effective_config
 
-        personalization = load_effective_config(str(Path.cwd())).config.personalization
+        personalization = load_effective_config(cwd or str(Path.cwd())).config.personalization
     except Exception:  # noqa: BLE001 - permission bootstrap must never crash
         return {}
     return personalization if isinstance(personalization, dict) else {}

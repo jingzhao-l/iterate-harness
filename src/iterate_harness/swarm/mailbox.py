@@ -150,7 +150,7 @@ class TeammateMailbox:
                 os.replace(tmp_path, final_path)
 
         # Offload blocking I/O to thread pool
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _write_atomic)
 
     async def read_all(self, unread_only: bool = True) -> list[MailboxMessage]:
@@ -180,7 +180,7 @@ class TeammateMailbox:
             return messages
 
         # Offload blocking I/O to thread pool
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _read_all)
 
     async def mark_read(self, message_id: str) -> None:
@@ -208,7 +208,7 @@ class TeammateMailbox:
                 return False
 
         # Offload blocking I/O to thread pool
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _mark_read)
 
     async def clear(self) -> None:
@@ -228,7 +228,7 @@ class TeammateMailbox:
                         log.debug("Could not remove mailbox message %s: %s", path, exc)
 
         # Offload blocking I/O to thread pool
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _clear)
 
 

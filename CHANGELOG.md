@@ -2,6 +2,59 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.1.0] - 2026-09-05
+
+### Added
+
+- **CLI 新子命令 `ih iterate validate <command>`**：运行预配置的校验命令并输出
+  `allowed` / `reject_reason` / `exit_code`，供 CI / 脚本编排防御式 pre-check
+  与 post-check（此前只能经 REPL 斜杠命令访问）。
+- **CLI 新子命令 `ih iterate sessions`**：列出已存会话（summary / model /
+  时间戳 / 消息数），支持 `--limit` 与 `--json`，并提示 `ih iterate resume
+  --session <id>` 续接。
+- **`ih iterate review` / `ih iterate run` 新增 `--template` 标志**：可在
+  `standard`（默认）/ `strict`（保守）/ `quick`（快速）三种审查模板间切换，
+  模板预设此前已内置但 CLI 不可达。
+
+### Fixed
+
+- **安全加固（tools）**：
+  - `config_tool` 新增 `_ALLOWED_CONFIG_KEYS` 白名单，拦截通过 `setattr`
+    的任意属性注入。
+  - `bash_tool` / `image_to_text_tool` / `glob_tool` 对工作目录与文件路径
+    补充沙箱（sandbox）越界校验。
+  - `web_search_tool` 对 `search_url` 主机名做白名单校验，封堵 SSRF。
+  - `enter_worktree_tool` / `exit_worktree_tool` 由阻塞 `subprocess.run`
+    改为 `asyncio.create_subprocess_exec`，消除异步事件循环死锁风险。
+- **健壮性（内核 / 服务）**：
+  - `swarm/mailbox.py` 以 `asyncio.get_running_loop()` 替换废弃的
+    `asyncio.get_event_loop()`。
+  - `config/settings.py` `resolve_api_key()` 现优先解析 profile 级
+    auth 源；env 数值解析与 malformed JSON 均安全降级并告警；Docker
+    env 覆盖改为合并而非整体替换。
+  - `services/session_storage.py` 对 `session_id` 加入格式白名单，防路径穿越。
+  - `report_server.py` 改为每次调用绑定 handler 子类，消除类级状态竞态。
+  - `defensive/transaction.py` 以不可碰撞的 UUID sentinel 替换脆弱的
+    字符串哨兵。
+  - `permissions/checker.py` `_project_personalization` 注入 `cwd`，不再
+    依赖进程级 `Path.cwd()`。
+  - `sandbox/session.py` atexit 清理改为安全的同步包装。
+  - `defensive` 契约中的 `_sanitize_metadata` 去重，统一委托
+    `session_storage` 实现。
+- **CLI / TUI UX**：
+  - 运行结束提示改用非阻塞的 `--html` 报告命令。
+  - headless 模式启动时打印目标与进度预览。
+  - `--changed` 无变更时给出可操作提示（`--clean-ok`）。
+  - `iterate_app` 帮助文本补全全部子命令；resume 会话缺失时提示
+    `ih iterate sessions`。
+  - TUI 命令选择器加入 `/iterate`。
+
+### Verification
+
+- 全量 pytest：**234 passed, 2 failed, 1 skipped**（`test_swarm/test_spawn_utils.py`
+  两项 `TypeError: build_inherited_cli_flags() got an unexpected keyword argument
+  'task_mode'` 为既有失败，发版前经 git stash 复核与本版无关）；ruff clean。
+
 ## [2.0.1] - 2026-09-04
 
 ### Fixed
