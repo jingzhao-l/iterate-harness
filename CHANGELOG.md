@@ -2,7 +2,7 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
-## [Unreleased]
+## [2.0.1] - 2026-09-04
 
 ### Fixed
 
