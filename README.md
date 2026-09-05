@@ -118,7 +118,11 @@ ih iterate personalize   # 9-category wizard: constraints -> config + ITERATE.md
 ih iterate init          # detect the project, generate iterate.config.yaml (config only)
 ih iterate review        # headless dry-run (stream-json output available)
 ih iterate review --changed # quick review: only files changed vs --ref (default HEAD)
+ih iterate review --template strict # review template: standard (default) / strict / quick
 ih iterate run           # headless autonomous fix loop
+ih iterate run --template quick  # fix loop with a different review template
+ih iterate validate "pytest -x"  # run a preconfigured validation command; prints allowed / reject_reason / exit_code
+ih iterate sessions      # list saved sessions (--limit N, --json), then `ih iterate resume --session <id>`
 ih iterate resume        # resume the last session
 ih iterate log           # tail the decision log
 ih iterate log --trend   # cross-run finding trend (new/fixed/regressed/stubborn)
@@ -128,6 +132,7 @@ ih iterate report --pr    # post/update the report as a PR comment (gh CLI, idem
 ih iterate report --html # single-file HTML report (convergence curve, diffs, shareable)
 ih iterate batch a/ b/   # review multiple repos sequentially, rank worst-first
 ih iterate schedule add "0 9 * * 1-5" # daily changed-only quick review (cron, UTC)
+ih iterate cron start|stop|status|history  # manage the background cron scheduler daemon that executes scheduled jobs
 ih iterate hook install  # managed pre-commit hook: 1-round changed-only gate
 ih iterate doctor        # skill↔harness dimension-system consistency check
 ```
@@ -216,6 +221,10 @@ invariants:
 | **Changed-only quick review** | `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing |
 | **Batch ranking** | `ih iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch |
 | **Scheduled review** | `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library |
+| **Cron scheduler daemon** | `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`) |
+| **CLI validation runner** | `ih iterate validate "<command>"` runs a preconfigured validation command as a one-off from the shell and prints `allowed` / `reject_reason` / `exit_code` — ideal for scripting defensive pre/post-checks in CI, the same runner the tools layer invokes |
+| **Session listing** | `ih iterate sessions` lists saved sessions (summary / model / timestamp / message count, `--limit` / `--json`) then `ih iterate resume --session <id>` picks one up — no need to remember which run was which |
+| **Review templates** | `--template` on `review` / `run` (and editable prompt presets) switches between `standard` (default), `strict` (conservative, safety-first) and `quick` (impact-only) review prompts per invocation |
 | **HTML single-file report** | `ih iterate report --html` renders the run as ONE offline `.html` file: SVG convergence curve, severity/dimension bars, findings table with failure scenarios, and colorized per-fix diffs — share it as a CI artifact |
 | **Decision replay** | `ih iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording |
 | **Per-dimension resources** | `dimension_resources` in `iterate.config.yaml` sets per-dimension `model` / `concurrency` (1–8) / `token_budget` — a strong model for security, a fast one for style-tests; the plan carries them into every reviewer spawn |

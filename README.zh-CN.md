@@ -102,7 +102,11 @@ ih iterate personalize   # 9 类个性化向导：约束写入 config + ITERATE.
 ih iterate init          # 检测项目，生成 iterate.config.yaml（仅配置）
 ih iterate review        # 无头 dry-run（支持 stream-json 输出）
 ih iterate review --changed # 快审：只审相对 --ref（默认 HEAD）改动的文件
+ih iterate review --template strict # 评审模板：standard（默认）/ strict / quick
 ih iterate run           # 无头自治修复闭环
+ih iterate run --template quick  # 以不同评审模板跑修复闭环
+ih iterate validate "pytest -x"  # 运行预配置校验命令；输出 allowed / reject_reason / exit_code
+ih iterate sessions      # 列出已存会话（--limit N / --json），再 `ih iterate resume --session <id>` 续接
 ih iterate resume        # 恢复上次会话
 ih iterate log           # 查看决策日志尾部
 ih iterate log --trend   # 查看跨运行 finding 趋势（新增/已修复/回归/顽固）
@@ -112,6 +116,7 @@ ih iterate report --pr    # 把报告发布/更新为 PR 评论（gh CLI，幂�
 ih iterate report --html # 单文件 HTML 报告（收敛曲线、内嵌 diff、可直接分享）
 ih iterate batch a/ b/   # 顺序评审多个仓库，按严重度加权排出最差榜
 ih iterate schedule add "0 9 * * 1-5" # 每日 changed-only 快审（cron，UTC）
+ih iterate cron start|stop|status|history  # 管理执行定时任务的后台 cron 调度守护进程
 ih iterate hook install  # 托管 pre-commit 钩子：1 轮 changed-only 提交门禁
 ih iterate doctor        # skill↔harness 维度体系一致性检查
 ```
@@ -190,6 +195,10 @@ invariants:
 | **changed-only 快审** | `--changed [--ref <ref>]`（CLI 与 `/iterate review --changed`）把整个闭环钉在 git 增量上：kickoff、评审计划与每个维度 reviewer prompt 都携带明确的改动文件清单 |
 | **批量排行** | `ih iterate batch repoA repoB …` 顺序评审多个仓库，按严重度加权排出最差榜；单个仓库失败不会中断整批 |
 | **定时评审** | `ih iterate schedule add "0 9 * * 1-5"` 注册 cron 任务，每日（UTC）自动跑 changed-only 快审（`--clean-ok`）；新增 vs 顽固 finding 经趋势库呈现 |
+| **cron 调度守护进程** | `ih iterate cron start|stop|status|history` 管理执行定时任务的后台守护进程——启动一次后，定时评审无人值守持续运行，可查历史（`--limit` / `--json`） |
+| **CLI 校验执行器** | `ih iterate validate "<command>"` 在 shell 中以一次性方式运行预配置校验命令，输出 `allowed` / `reject_reason` / `exit_code`——适合在 CI 里编排防御式 pre/post-check，与工具层共用同一执行器 |
+| **会话列表** | `ih iterate sessions` 列出已存会话（summary / model / 时间戳 / 消息数，`--limit` / `--json`），再用 `ih iterate resume --session <id>` 精确续接——不必记住上次跑的是哪次 |
+| **评审模板** | `review` / `run` 支持 `--template`：在 `standard`（默认）、`strict`（保守、安全优先）与 `quick`（只看影响面）三种评审提示词模板间切换 |
 | **HTML 单文件报告** | `ih iterate report --html` 把整次运行渲染成一个可离线打开的 `.html`：SVG 收敛曲线、severity/维度分布条、含失败场景的 findings 表、按修复着色的 diff——可直接作为 CI 产物分享 |
 | **评审回放** | `ih iterate log --replay` 按时间序回放整次运行（`[+90s] r1 review_result newFindings=3`），像看录像一样还原闭环展开过程 |
 | **per-dimension 资源** | `iterate.config.yaml` 的 `dimension_resources` 支持按维度设置 `model` / `concurrency`（1–8）/ `token_budget`——security 用强模型、style-tests 用快模型；评审计划会携带到每次 reviewer 派发 |
