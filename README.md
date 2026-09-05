@@ -60,7 +60,71 @@ general-purpose agent mode hardened by the defensive kernel) — see
 
 ---
 
-## 🐳 OrcaRouter — built-in gateway with free models
+## 📑 Table of Contents
+
+- [🚀 Quick Start](#-quick-start)
+- [🔌 Model providers](#-model-providers)
+- [🧭 Dual-mode architecture](#-dual-mode-architecture)
+- [📖 Daily usage](#-daily-usage)
+- [✨ Iterate features](#-iterate-features)
+- [🔧 The seven iterate tools](#-the-seven-iterate-tools)
+- [🧭 Architecture](#-architecture)
+- [📦 Install & tests](#-install--tests)
+- [🚑 Troubleshooting](#-troubleshooting)
+- [📄 License & disclaimer](#-license--disclaimer)
+
+---
+
+## 🚀 Quick Start
+
+```bash
+# install (npm wrapper; needs Node + Python >= 3.10)
+npm install -g iterate-harness
+# ...or no-Node one-liner (macOS / Linux / WSL, Python only)
+# curl -fsSL https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.sh | bash
+```
+
+Set your API key first:
+
+```bash
+export ANTHROPIC_API_KEY=your_key   # or use an OpenAI-compatible provider, see below
+```
+
+Launch the TUI to iterate interactively:
+
+```bash
+ih
+```
+
+Inside the REPL:
+
+```
+/iterate review        # dry-run: read-only multi-round review until convergence
+/iterate personalize   # directional-key 9-category wizard (interactive select + question modals)
+/iterate run           # normal mode: review → fix → validate → loop
+/iterate status        # config + onboarding state + drift check
+/iterate log           # tail the decision log
+```
+
+CLI-first instead — a minimal headless loop:
+
+```bash
+ih iterate onboard     # model-driven project scan → ITERATE.md + config + fingerprints
+ih iterate review      # dry-run review until convergence
+ih iterate run         # autonomous fix loop
+```
+
+> The first command to run in any project is `ih iterate onboard` (or the
+> detection-only `ih iterate onboard --no-ai` when you don't want a model
+> call). It generates the project knowledge base — the same `ITERATE.md` +
+> `iterate.config.yaml` the skill ecosystem uses. Everything below assumes
+> that's done.
+
+---
+
+## 🔌 Model providers
+
+### 🐳 OrcaRouter — built-in gateway with free models
 
 [OrcaRouter](https://www.orcarouter.ai/ref/ref_5eca75a9c809c95ab152) is a
 built-in OpenAI-compatible gateway provider with **free models** — e.g.
@@ -88,70 +152,17 @@ export ORCA_KEY=sk-orca-...
 > can exceed the free-tier prompt cap (HTTP 429 without `Retry-After`), so they
 > suit CI / lightweight reviews best.
 
+### Other providers
+
+Any OpenAI-compatible provider works. Manage them with:
+
+```bash
+ih provider list        # see available providers and their default models
+ih provider use <name>  # activate a profile (interactively re-enter the key)
+ih provider edit <name> # fix base_url / api_format / default_model / auth_source
+```
+
 ---
-
-## 🚀 Quick Start
-
-```bash
-# install (npm wrapper; needs Node + Python >= 3.10)
-npm install -g iterate-harness
-# ...or no-Node one-liner (macOS / Linux / WSL, Python only)
-# curl -fsSL https://raw.githubusercontent.com/jingzhao-l/iterate-harness/main/scripts/install.sh | bash
-
-# launch the TUI
-ih
-
-# inside the REPL
-/iterate review        # dry-run: read-only multi-round review until convergence
-/iterate personalize   # directional-key 9-category wizard (interactive select + question modals)
-```
-
-CLI-first instead:
-
-```bash
-ih iterate onboard       # MODEL-DRIVEN project scan -> ITERATE.md knowledge base + config + fingerprints
-ih iterate onboard --no-ai # detection-only fallback (no model call, channel=cli)
-ih iterate status        # config + onboarding state + drift check
-ih iterate refresh       # re-fingerprint manifests, report drift, refresh metadata
-ih iterate reonboard     # backup, full model re-scan, preserve your user-owned region
-ih iterate personalize   # 9-category wizard: constraints -> config + ITERATE.md user region
-ih iterate init          # detect the project, generate iterate.config.yaml (config only)
-ih iterate review        # headless dry-run (stream-json output available)
-ih iterate review --changed # quick review: only files changed vs --ref (default HEAD)
-ih iterate review --template strict # review template: standard (default) / strict / quick
-ih iterate run           # headless autonomous fix loop
-ih iterate run --template quick  # fix loop with a different review template
-ih iterate validate "pytest -x"  # run a preconfigured validation command; prints allowed / reject_reason / exit_code
-ih iterate sessions      # list saved sessions (--limit N, --json), then `ih iterate resume --session <id>`
-ih iterate resume        # resume the last session
-ih iterate log           # tail the decision log
-ih iterate log --trend   # cross-run finding trend (new/fixed/regressed/stubborn)
-ih iterate log --replay  # replay the whole run chronologically (relative timestamps)
-ih iterate report        # render the final report (CI mode, see below)
-ih iterate report --pr    # post/update the report as a PR comment (gh CLI, idempotent)
-ih iterate report --html # single-file HTML report (convergence curve, diffs, shareable)
-ih iterate batch a/ b/   # review multiple repos sequentially, rank worst-first
-ih iterate schedule add "0 9 * * 1-5" # daily changed-only quick review (cron, UTC)
-ih iterate cron start|stop|status|history  # manage the background cron scheduler daemon that executes scheduled jobs
-ih iterate hook install  # managed pre-commit hook: 1-round changed-only gate
-ih iterate doctor        # skill↔harness dimension-system consistency check
-```
-
-Onboarding note: `ih iterate onboard` first gates on a configured model
-credential (`ih auth login`), then lets the model explore the project with its
-read tools (manifests, 2-3 level directory tree, specs/tests/CI, README —
-never `.env`/keys) and write `ITERATE.md` with byte-exact AI-maintained /
-user-owned region markers. The harness itself validates the markers, captures
-SHA-256 manifest fingerprints and writes `iterate.config.yaml` — untrusted
-model output never touches trusted config structure. Both files are
-byte-compatible with the skill's onboarding (same markers, same
-`onboarding.fingerprints` schema), so projects onboarded by either ecosystem
-interoperate. Every later loop kickoff injects the `ITERATE.md` knowledge
-base into the system prompt, and a drifted manifest (dependency bump, stack
-change) triggers a non-blocking warning before reviews.
-
-Set your API key first: `export ANTHROPIC_API_KEY=your_key` (OpenAI-compatible
-providers are also supported — see `ih --help`).
 
 ## 🧭 Dual-Mode Architecture
 
@@ -202,40 +213,135 @@ invariants:
       - pytest -x
 ```
 
+---
+
+## 📖 Daily Usage
+
+### Onboarding & project knowledge
+
+```bash
+ih iterate onboard            # model-driven scan → ITERATE.md + config + fingerprints
+ih iterate onboard --no-ai    # detection-only fallback (no model call, channel=cli)
+ih iterate status             # config + onboarding state + drift check
+ih iterate refresh            # re-fingerprint manifests, report drift, refresh metadata
+ih iterate reonboard          # backup, full model re-scan, preserve your user-owned region
+ih iterate personalize        # 9-category wizard: constraints → config + ITERATE.md user region
+ih iterate init               # detect the project, generate iterate.config.yaml (config only)
+```
+
+Onboarding note: `ih iterate onboard` first gates on a configured model
+credential, then lets the model explore the project with its read tools
+(manifests, 2-3 level directory tree, specs/tests/CI, README — never
+`.env`/keys) and write `ITERATE.md` with byte-exact AI-maintained /
+user-owned region markers. The harness validates the markers, captures SHA-256
+manifest fingerprints and writes `iterate.config.yaml` — untrusted model
+output never touches trusted config structure. Both files are byte-compatible
+with the skill's onboarding (same markers, same `onboarding.fingerprints`
+schema), so projects onboarded by either ecosystem interoperate. Every later
+loop kickoff injects the `ITERATE.md` knowledge base into the system prompt,
+and a drifted manifest (dependency bump, stack change) triggers a
+non-blocking warning before reviews.
+
+### Review & fix
+
+```bash
+ih iterate review                    # headless dry-run (stream-json output available)
+ih iterate review --changed          # quick review: only files changed vs --ref (default HEAD)
+ih iterate review --template strict  # review template: standard (default) / strict / quick
+ih iterate run                       # headless autonomous fix loop
+ih iterate run --template quick      # fix loop with a different review template
+ih iterate validate "pytest -x"      # run a preconfigured validation command; prints allowed / reject_reason / exit_code
+ih iterate resume                    # resume the last session
+ih iterate sessions                  # list saved sessions (--limit N, --json), then `ih iterate resume --session <id>`
+```
+
+### Reports, logs & audit
+
+```bash
+ih iterate log            # tail the decision log
+ih iterate log --trend    # cross-run finding trend (new/fixed/regressed/stubborn)
+ih iterate log --replay   # replay the whole run chronologically (relative timestamps)
+ih iterate report         # render the final report (CI mode, see below)
+ih iterate report --pr    # post/update the report as a PR comment (gh CLI, idempotent)
+ih iterate report --html  # single-file HTML report (convergence curve, diffs, shareable)
+ih iterate doctor         # skill↔harness dimension-system consistency check
+```
+
+### Batch & scheduling
+
+```bash
+ih iterate batch a/ b/                  # review multiple repos sequentially, rank worst-first
+ih iterate schedule add "0 9 * * 1-5"   # daily changed-only quick review (cron, UTC)
+ih iterate cron start|stop|status|history  # manage the background cron scheduler daemon
+```
+
+### Git-hook integration
+
+```bash
+ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
+```
+
+> TUI equivalents: `/iterate` slash commands (status / review / run / log /
+> config / validate) expose the same loops through different entries.
+
+---
+
 ## ✨ Iterate Features
+
+### Review engine & loop
 
 | Capability | What it does |
 | --- | --- |
 | **Deterministic review engine** | `iterate_review` plan / aggregate / meta-review: cross-round dedupe, `known_intentional` filtering, severity sort, convergence math, 6-check report audit — all pure computation, zero LLM judgment |
 | **Two modes** | `dry-run` (read-only review, never touches files) and `normal` (review → atomic fix → validate → loop, validation failure rolls the round back via git isolation) |
 | **Engine-enforced convergence** | `IterateLoopPolicy` lives in the kernel query loop: round caps, convergence auto-stop and next-round steering cannot be prompt-injected away |
-| **Convergence dashboard** | Live React TUI panel: per-round findings trend, per-dimension counts with per-dimension USD estimates, running metered cost, converged badge |
 | **Findings triage** | `iterate_triage`: walk findings with `y` fix / `n` skip / `a` always-ignore; `a` persists to `known_intentional` so future rounds filter it automatically |
-| **Cost transparency** | Token usage → per-round and cumulative USD from a built-in price table (overridable per model) |
-| **Security boundaries as code** | `protected_paths` and `forbidden_fix_patterns` from settings are auto-assembled into the permission layer (deny path rules + write-payload regex); validation commands run through an EXACT-match allowlist |
 | **Per-fix diff approval** | `require_fix_approval` routes every file write during a normal-mode loop through an interactive prompt with an inline diff preview — even in full-auto mode; hard denials are never downgraded |
 | **Esc intervention** | Press Esc mid-loop: the loop pauses at the next round boundary and opens a directional-key menu (skip top finding / narrow dimensions / stop / resume); a second Esc force-interrupts the turn |
-| **Finding trend library** | Every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `ih iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs |
 | **Breakpoint resume** | The TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings |
+| **Finding trend library** | Every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `ih iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs |
+
+### Reports & integration
+
+| Capability | What it does |
+| --- | --- |
+| **Convergence dashboard** | Live React TUI panel: per-round findings trend, per-dimension counts with per-dimension USD estimates, running metered cost, converged badge |
 | **CI / PR mode** | `ih iterate report --github --fail-on high` turns the final report into GitHub Actions annotations with a severity-based exit-code gate for PRs; `--pr` posts (and on later runs UPDATES) a Markdown report comment via the gh CLI (marker lookup paginates, so giant PRs stay idempotent) — every failure mode degrades gracefully, never breaking the exit-code policy |
+| **HTML single-file report** | `ih iterate report --html` renders the run as ONE offline `.html` file: SVG convergence curve, severity/dimension bars, findings table with failure scenarios, and colorized per-fix diffs — share it as a CI artifact |
+| **Decision replay** | `ih iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording |
 | **Changed-only quick review** | `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing |
 | **Batch ranking** | `ih iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch |
 | **Scheduled review** | `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library |
 | **Cron scheduler daemon** | `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`) |
+
+### Cost, resources & gates
+
+| Capability | What it does |
+| --- | --- |
+| **Cost transparency** | Token usage → per-round and cumulative USD from a built-in price table (overridable per model) |
+| **Token budget enforcement** | `token_budget` caps the whole run at the engine level (hard-stop + closing report); `iterate_review(operation="aggregate", dimension_usage=…, dimension_usage_io=…)` audits per-dimension usage, relays reviewer-reported totals into the engine cost meter — dimensions reporting an input/output split bill at exact prices, bare totals at the blended price — and steers the next round away from exhausted dimensions |
+| **Per-dimension resources** | `dimension_resources` in `iterate.config.yaml` sets per-dimension `model` / `concurrency` (1–8) / `token_budget` — a strong model for security, a fast one for style-tests; the plan carries them into every reviewer spawn |
+| **Threshold gates** | `thresholds.max_critical` / `max_high` / `max_medium` / `max_low` (global or per dimension) cap finding counts in the final report — a violation flips the verdict to `needs_revision` and fails the `ih iterate report` exit code (`threshold gate: FAIL`) |
 | **CLI validation runner** | `ih iterate validate "<command>"` runs a preconfigured validation command as a one-off from the shell and prints `allowed` / `reject_reason` / `exit_code` — ideal for scripting defensive pre/post-checks in CI, the same runner the tools layer invokes |
 | **Session listing** | `ih iterate sessions` lists saved sessions (summary / model / timestamp / message count, `--limit` / `--json`) then `ih iterate resume --session <id>` picks one up — no need to remember which run was which |
 | **Review templates** | `--template` on `review` / `run` (and editable prompt presets) switches between `standard` (default), `strict` (conservative, safety-first) and `quick` (impact-only) review prompts per invocation |
-| **HTML single-file report** | `ih iterate report --html` renders the run as ONE offline `.html` file: SVG convergence curve, severity/dimension bars, findings table with failure scenarios, and colorized per-fix diffs — share it as a CI artifact |
-| **Decision replay** | `ih iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording |
-| **Per-dimension resources** | `dimension_resources` in `iterate.config.yaml` sets per-dimension `model` / `concurrency` (1–8) / `token_budget` — a strong model for security, a fast one for style-tests; the plan carries them into every reviewer spawn |
-| **Token budget enforcement** | `token_budget` caps the whole run at the engine level (hard-stop + closing report); `iterate_review(operation="aggregate", dimension_usage=…, dimension_usage_io=…)` audits per-dimension usage, relays reviewer-reported totals into the engine cost meter — dimensions reporting an input/output split bill at exact prices, bare totals at the blended price — and steers the next round away from exhausted dimensions |
-| **Threshold gates** | `thresholds.max_critical` / `max_high` / `max_medium` / `max_low` (global or per dimension) cap finding counts in the final report — a violation flips the verdict to `needs_revision` and fails the `ih iterate report` exit code (`threshold gate: FAIL`) |
-| **Schedule timezones** | `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` evaluates the cron in local time (stored UTC-normalized) so "daily at 9" means 9 where you live |
+
+### Onboarding, security & config
+
+| Capability | What it does |
+| --- | --- |
 | **Detection-driven init** | `ih iterate init` probes marker files (package.json / pyproject / go.mod / Cargo.toml / …), infers the test command from real evidence, suggests dimensions (frontend deps unlock `frontend-backend` / `ui-ux`), previews the yaml and writes it only after confirmation — `/iterate init` does the same in the TUI |
 | **Model-driven onboarding** | `ih iterate onboard` chains auth gate → detection evidence → model scan → `ITERATE.md` knowledge base (AI/user region markers) + manifest fingerprints; `refresh` re-fingerprints, `reonboard` re-scans while preserving your notes; every kickoff injects the knowledge base and warns on drift — skill-compatible artifacts. TUI onboarding gets its fingerprints auto-captured on the next review/run — no manual `refresh` needed |
-| **Personalization wizard** | `ih iterate personalize` walks the skill's 9 categories (protected paths, risk areas, known-intentional, dimension focus, fix priority, forbidden fixes, notes, conventions, extra validation commands): structured rules land in `iterate.config.yaml` (protected paths ALSO enforced by the kernel permission layer), free text lands in the `ITERATE.md` user region, and every kickoff carries the constraints; extra commands pass a strict whitelist before merging into `validation.commands`. `/iterate personalize` runs the same wizard inside the TUI as a directional-key menu flow (category menu with live entry counts → add/remove → save/keep-editing/discard); headless sessions keep the summary + CLI pointer |
+| **Personalization wizard** | `ih iterate personalize` walks the skill's 9 categories (protected paths, risk areas, known-intentional, dimension focus, fix priority, forbidden fixes, notes, conventions, extra validation commands): structured rules land in `iterate.config.yaml` (protected paths ALSO enforced by the kernel permission layer), free text lands in the `ITERATE.md` user region, and every kickoff carries the constraints; extra commands pass a strict whitelist before merging into `validation.commands` |
+| **Security boundaries as code** | `protected_paths` and `forbidden_fix_patterns` from settings are auto-assembled into the permission layer (deny path rules + write-payload regex); validation commands run through an EXACT-match allowlist |
 | **Pre-commit hook** | `ih iterate hook install` writes a MARKED managed `.git/hooks/pre-commit` that runs a 1-round changed-only review and gates the commit on `--fail-on` severity; refuses to touch foreign hooks, skippable via `ITERATE_SKIP_HOOK=1` / `--no-verify` |
 | **Dimension doctor** | `ih iterate doctor` checks the whole dimension system in one shot: bundled canonical definitions vs harness internals vs your `iterate.config.yaml` (unknown dimension keys, inert resource/threshold entries, personalization references outside the enabled set); exits 1 on drift so CI can gate on it |
+| **Schedule timezones** | `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` evaluates the cron in local time (stored UTC-normalized) so "daily at 9" means 9 where you live |
+
+### Recording & dual-mode
+
+| Capability | What it does |
+| --- | --- |
 | **Decision log** | Append-only `.iterate/decision-log.jsonl`: every round, fix, validation and triage decision is recorded |
 | **Project knowledge** | `ITERATE.md` project knowledge + per-project structured personalization (9 categories) |
 | **Dual-mode architecture** | `task_mode` (`code` / `iterate`) orthogonal to `permission_mode`: `iterate` keeps the 1.x review/fix loop, `code` is a general-purpose agent mode hardened by the defensive kernel — `--task-mode` on the CLI, Tab in the TUI |
@@ -280,7 +386,9 @@ src/iterate_harness/
 └── ui/                 # React TUI backend host + review_progress protocol
 ```
 
-## 📦 Install
+## 📦 Install & Tests
+
+Choose one install path:
 
 - **npm (easiest)**: `npm install -g iterate-harness` — a thin wrapper that
   pip-installs the release tarball into a managed venv (`~/.iterate-harness-npm`)
@@ -292,34 +400,14 @@ src/iterate_harness/
 - Requires Python ≥ 3.10; Node.js ≥ 18 enables the React TUI (skipped
   otherwise — the plain fallback UI still works)
 
-## 🧪 Tests
+Run the tests:
 
 ```bash
 python -m pytest tests/test_iterate -q   # semantic layer + kernel integration
 python -m pytest -q                      # full suite
 ```
 
-## 📄 License & Attribution
-
-MIT. iterate-harness is maintained at
-[jingzhao-l/iterate-harness](https://github.com/jingzhao-l/iterate-harness).
-The iterate semantic layer originates from the
-[iterate-skill](https://github.com/jingzhao-l/iterate-skill) project.
-
-## ⚠️ Disclaimer
-
-This project is provided "AS IS", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose and noninfringement.
-
-**Automated code review and fixing carries inherent risk.** All changes produced in normal mode are generated by AI models and may introduce bugs, regressions, or unintended behavior. Before merging, you should:
-
-- Review every diff before applying it to your main branch or pushing.
-- Make sure your project is under git control and can be rolled back (`git restore`, revert, or restore from backup).
-- Run your project's own test suite and build checks after each round of fixes.
-- Never run this on secrets, credentials, `.env`, or files that must not be modified — configure `protected_paths` accordingly.
-
-Users are solely responsible for the code that is generated, modified, or committed as a result of using this project. By using it, you acknowledge that neither the maintainers nor contributors are liable for any loss, damage, or legal consequences arising from its use.
-
-## Troubleshooting / 常见失败自愈指南
+## 🚑 Troubleshooting
 
 ### TLS / SSL Certificate Errors
 **Symptom**: `SSL: CERTIFICATE_VERIFY_FAILED` or `certificate verify failed` during API calls.
@@ -361,3 +449,24 @@ Users are solely responsible for the code that is generated, modified, or commit
 2. **Custom provider misconfigured** — Run `ih provider edit <name>` to verify the `base_url`, `api_format`, and `default_model` fields.
 3. **Local endpoint not running** — For local/ollama providers, verify the server is running: `curl http://localhost:11434/api/tags`.
 
+## 📄 License & Disclaimer
+
+### License & Attribution
+
+MIT. iterate-harness is maintained at
+[jingzhao-l/iterate-harness](https://github.com/jingzhao-l/iterate-harness).
+The iterate semantic layer originates from the
+[iterate-skill](https://github.com/jingzhao-l/iterate-skill) project.
+
+### ⚠️ Disclaimer
+
+This project is provided "AS IS", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose and noninfringement.
+
+**Automated code review and fixing carries inherent risk.** All changes produced in normal mode are generated by AI models and may introduce bugs, regressions, or unintended behavior. Before merging, you should:
+
+- Review every diff before applying it to your main branch or pushing.
+- Make sure your project is under git control and can be rolled back (`git restore`, revert, or restore from backup).
+- Run your project's own test suite and build checks after each round of fixes.
+- Never run this on secrets, credentials, `.env`, or files that must not be modified — configure `protected_paths` accordingly.
+
+Users are solely responsible for the code that is generated, modified, or committed as a result of using this project. By using it, you acknowledge that neither the maintainers nor contributors are liable for any loss, damage, or legal consequences arising from its use.
