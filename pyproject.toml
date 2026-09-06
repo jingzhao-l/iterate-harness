@@ -101,3 +101,10 @@ strict = true
 # generic classes like `BaseTool[T]` look non-generic).
 mypy_path = "src"
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+# keyring is an optional dependency (file-backed credential storage is used
+# when it is absent). Importing it must not fail type-checking on machines
+# without it installed. `keyring.*` covers submodules such as `keyring.errors`.
+module = ["keyring", "keyring.*"]
+ignore_missing_imports = true

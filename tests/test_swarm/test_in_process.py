@@ -141,9 +141,10 @@ async def test_send_message_writes_to_mailbox(backend, tmp_path, monkeypatch):
     # Should not raise
     await backend.send_message("rcvr@myteam", msg)
 
-    # Verify the message was written to mailbox
+    # Verify the message lands in the mailbox the RECEIVER polls — the one
+    # created at spawn with the full agent_id (name@team), not a bare name.
     from iterate_harness.swarm.mailbox import TeammateMailbox
-    mailbox = TeammateMailbox(team_name="myteam", agent_id="rcvr")
+    mailbox = TeammateMailbox(team_name="myteam", agent_id="rcvr@myteam")
     messages = await mailbox.read_all(unread_only=False)
     assert any(m.payload.get("content") == "work on it" for m in messages)
 
@@ -169,7 +170,7 @@ async def test_send_message_non_numeric_timestamp_is_safe(backend, tmp_path, mon
     await backend.send_message("rcvr@myteam", msg)  # must not raise
 
     from iterate_harness.swarm.mailbox import TeammateMailbox
-    mailbox = TeammateMailbox(team_name="myteam", agent_id="rcvr")
+    mailbox = TeammateMailbox(team_name="myteam", agent_id="rcvr@myteam")
     messages = await mailbox.read_all(unread_only=False)
     assert any(m.payload.get("content") == "hi" for m in messages)
     for m in messages:
@@ -192,7 +193,7 @@ async def test_send_message_numeric_timestamp_preserved(backend, tmp_path, monke
     await backend.send_message("rcvr@myteam", msg)
 
     from iterate_harness.swarm.mailbox import TeammateMailbox
-    mailbox = TeammateMailbox(team_name="myteam", agent_id="rcvr")
+    mailbox = TeammateMailbox(team_name="myteam", agent_id="rcvr@myteam")
     messages = await mailbox.read_all(unread_only=False)
     assert any(m.timestamp == 1234567890.5 for m in messages)
     await backend.shutdown("rcvr@myteam", force=True)

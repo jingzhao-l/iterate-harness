@@ -852,7 +852,12 @@ class ReactBackendHost:
             )
         )
         try:
-            return await future
+            # Bounded wait like _ask_permission — an unanswered modal must not
+            # hang the agent loop forever.
+            return await asyncio.wait_for(future, timeout=300)
+        except asyncio.TimeoutError:
+            log.warning("Question request %s timed out after 300s, aborting", request_id)
+            return ""
         finally:
             self._question_requests.pop(request_id, None)
 

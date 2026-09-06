@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from iterate_harness.swarm import spawn_utils as spawn_utils_mod
+from iterate_harness.swarm.mailbox import validate_team_name
 from iterate_harness.swarm.team_lifecycle import (
     TeamFile,
     TeamLifecycleManager,
@@ -99,6 +100,36 @@ def test_create_team_duplicate_raises(manager):
     manager.create_team("beta")
     with pytest.raises(ValueError, match="already exists"):
         manager.create_team("beta")
+
+
+def test_team_name_walk_up_rejected(manager, tmp_path):
+    """A trailing/embedded ``..`` must not let delete_team rmtree outside the
+    teams base directory (agent-driven names are untrusted input)."""
+    with pytest.raises(ValueError, match="path-safe"):
+        manager.create_team("..")
+    with pytest.raises(ValueError, match="path-safe"):
+        manager.create_team("../../outside")
+    with pytest.raises(ValueError, match="path-safe"):
+        manager.create_team("team/sub")
+    with pytest.raises(ValueError, match="path-safe"):
+        manager.delete_team("../escape")
+    assert not (tmp_path / "outside").exists()
+
+
+def test_validate_team_name_accepts_normal_names():
+    assert validate_team_name("alpha")
+    assert validate_team_name("my-team-2")
+
+
+def test_validate_team_name_rejects_empty_and_separators():
+    with pytest.raises(ValueError):
+        validate_team_name("")
+    with pytest.raises(ValueError):
+        validate_team_name("a/b")
+    with pytest.raises(ValueError):
+        validate_team_name("a\\b")
+    with pytest.raises(ValueError):
+        validate_team_name("..")
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,53 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.1.1] - 2026-09-06
+
+### Fixed
+
+- **预算暂停（budget pause）注入信息修正**（`iterate/loop_policy.py`）：预算暂停在
+  `inject_message` 注入下一轮审查指令（`_build_next_round_message`）而非人工菜单文本，
+  恢复后模型可继续审查流程。
+- **Kimi/Moonshot 工具调用兼容**（`api/openai_client.py`）：`stream_options` 仅对
+  `kimi` / `moonshot` 前缀模型弹出（`_is_kimi_tool_call_provider`），其余提供商恢复
+  usage 跟踪。
+- **WebUI 配置恢复截断修正**（`web/routes/config.py`）：配置项与来源 `zip` 对齐改为
+  `zip_longest`，入参列表更长时不再截断/丢项。
+- **工作区（worktree）状态同步**（`iterate/worktree_runtime.py` / `worktree_flow.py`）：
+  - `finalize()` 在异常中止路径也执行项目状态同步回写（仅提交仍限定 merged）。
+  - `merge --ff-only` 失败时回退 `git merge --no-edit`（以 merge commit 合入）。
+  - `except TimeoutError` 改为 `except asyncio.TimeoutError`，兼容 Python 3.10。
+- **fix_scope 原子最大行数来源修正**（`engine/query.py`）：使用
+  `load_effective_config(...).config.atomic.max_lines`，缺省回退
+  `DEFAULT_ATOMIC_MAX_LINES`；单一工具调用的异常被封装为 `ToolResultBlock`
+  （`CancelledError` 仍上抛）。
+- **配置加载**（`iterate/config_loader.py`）：`max_rounds` 排除布尔值。
+- **证据核验二进制判定**（`iterate/evidence.py`）：含 NUL 字节的文件在整文件
+  （whole-file）核验下不再误报 `out-of-range`。
+- **记忆删除入口保护**（`memory/manager.py`）：`remove_memory_entry` 排除
+  `MEMORY.md` 入口点，入口文件不可再被删除。
+- **notebook 编辑容错**（`tools/notebook_edit_tool.py`）：JSON 损坏的 `.ipynb` 返回
+  明确的工具错误信息，不再抛未捕获 `JSONDecodeError` 中断整个查询。
+- **cron 列表容错**（`tools/cron_list_tool.py`）：`name` / `command` 缺失时回退
+  `<unnamed>` / `<unknown>`。
+- **团队名路径穿越防护**（`swarm/mailbox.py`）：新增 `validate_team_name`，拒绝空、
+  NUL、`/`、`\`、`.`/`..`；`get_team_dir` 强制校验，封堵 agent 驱动的目录穿越。
+- **swarm 收件箱修正**（`swarm/in_process.py`）：`send_message` 以完整 `agent_id`
+  定位收件箱（修复名前不匹配）。
+- **checkpoint 时间戳**（`iterate/checkpoint.py`）：payload 新增 `timestamp`。
+- **事件轮询尾行处理**（`web/events.py`）：无 `\n` 结尾的末行在下轮轮询重读，
+  不再永久跳过。
+- **配置工具**（`tools/config_tool.py`）：`show` 将 `api_key` 脱敏为 `<redacted>`；
+  `set` 将整型键（max_tokens 等）按 int 类型写入。
+- **`_ask_question` 超时保护**（`ui/backend_host.py`）：`asyncio.wait_for(future,
+  timeout=300)`，超时返回 `""` 不再挂死。
+- **进程任务 API key 传递**（`tasks/manager.py`）：API key 改经子进程环境变量
+  `ANTHROPIC_API_KEY` 传递，不再暴露在命令行参数。
+- **路径展开与远端提供商**（`tools/image_to_text_tool.py` / `auth/manager.py`）：
+  `~` 先 `expanduser` 再拼接 `cwd`；新增 `orcarouter` 提供商（env `ORCA_KEY`）。
+- **keyring 类型检查**（`pyproject.toml` / `auth/storage.py`）：经 `[tool.mypy]`
+  overrides 忽略 keyring 缺失导入，环境无关且 mypy strict 归零。
+
 ## [2.1.0] - 2026-09-05
 
 ### Added

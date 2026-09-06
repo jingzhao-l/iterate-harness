@@ -45,7 +45,10 @@ class NotebookEditTool(BaseTool[NotebookEditToolInput]):
             if not allowed:
                 return ToolResult(output=f"Sandbox: {reason}", is_error=True)
 
-        notebook = _load_notebook(path, create_if_missing=arguments.create_if_missing)
+        try:
+            notebook = _load_notebook(path, create_if_missing=arguments.create_if_missing)
+        except ValueError as exc:
+            return ToolResult(output=f"Cannot edit notebook {path}: {exc}", is_error=True)
         if notebook is None:
             return ToolResult(output=f"Notebook not found: {path}", is_error=True)
 
@@ -78,7 +81,12 @@ def _resolve_path(base: Path, candidate: str) -> Path:
 
 def _load_notebook(path: Path, *, create_if_missing: bool) -> dict[str, Any] | None:
     if path.exists():
-        return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
+        try:
+            return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            # A malformed notebook file must surface as a clean error response,
+            # never as an unhandled exception that aborts the query.
+            raise ValueError(f"not a valid .ipynb JSON file: {exc}") from exc
     if not create_if_missing:
         return None
     return {

@@ -13,6 +13,7 @@ from iterate_harness.api.openai_client import (
     OpenAICompatibleClient,
     _convert_messages_to_openai,
     _convert_tools_to_openai,
+    _is_kimi_tool_call_provider,
     _normalize_openai_base_url,
     _strip_think_blocks,
     _token_limit_param_for_model,
@@ -215,6 +216,17 @@ class TestTokenLimitParams:
 
     def test_legacy_chat_models_keep_max_tokens(self):
         assert _token_limit_param_for_model("gpt-4o", 4096) == {"max_tokens": 4096}
+
+
+class TestIsKimiToolCallProvider:
+    def test_kimi_and_moonshot_models_opt_out(self):
+        assert _is_kimi_tool_call_provider("kimi-k2")
+        assert _is_kimi_tool_call_provider("moonshot-v1-8k")
+
+    def test_other_models_keep_usage_tracking(self):
+        assert not _is_kimi_tool_call_provider("gpt-4o")
+        assert not _is_kimi_tool_call_provider("deepseek-chat")
+        assert not _is_kimi_tool_call_provider("")
 
 
 class _FakeUsage:

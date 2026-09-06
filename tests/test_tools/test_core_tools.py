@@ -218,6 +218,19 @@ async def test_notebook_edit_tool(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_notebook_edit_malformed_file_is_error_not_crash(tmp_path: Path):
+    """A malformed .ipynb must surface as a tool error, never an unhandled
+    JSONDecodeError that aborts the whole query."""
+    (tmp_path / "broken.ipynb").write_text("{not valid json", encoding="utf-8")
+    result = await NotebookEditTool().execute(
+        NotebookEditToolInput(path="broken.ipynb", cell_index=0, new_source="x=1"),
+        ToolExecutionContext(cwd=tmp_path),
+    )
+    assert result.is_error is True
+    assert "not a valid .ipynb JSON file" in result.output
+
+
+@pytest.mark.asyncio
 async def test_todo_write_rejects_path_outside_sandbox(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("iterate_harness.sandbox.session.is_docker_sandbox_active", lambda: True)
     ctx = ToolExecutionContext(cwd=tmp_path)

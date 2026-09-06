@@ -554,7 +554,10 @@ class TestBudgetHeadroomPause:
         assert decision.stop_reason is None
         assert decision.paused is True
         assert decision.pause_reason == "budget"
-        assert "token headroom" in decision.inject_message
+        # The injected message is the next-round instruction (what the model
+        # should act on after resume), NOT the human-facing pause notice —
+        # pushing menu text into the model derails the resumed round.
+        assert "Start the next review round" in decision.inject_message
 
     def test_usd_headroom_below_one_round_pauses(self):
         policy = IterateLoopPolicy(
@@ -571,7 +574,7 @@ class TestBudgetHeadroomPause:
         assert decision.stop_reason is None
         assert decision.paused is True
         assert decision.pause_reason == "budget"
-        assert "monetary headroom" in decision.inject_message
+        assert "Start the next review round" in decision.inject_message
 
     def test_over_budget_is_hard_stop_not_pause(self):
         policy = IterateLoopPolicy(

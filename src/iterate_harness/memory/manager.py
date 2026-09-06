@@ -39,7 +39,15 @@ def add_memory_entry(cwd: str | Path, title: str, content: str) -> Path:
 def remove_memory_entry(cwd: str | Path, name: str) -> bool:
     """Delete a memory file and remove its index entry."""
     memory_dir = get_project_memory_dir(cwd)
-    matches = [path for path in memory_dir.glob("*.md") if path.stem == name or path.name == name]
+    entrypoint = get_memory_entrypoint(cwd)
+    # Never delete the index/entrypoint file itself (MEMORY.md) — memory_scan
+    # treats it as the index and skips it; deleting it would break every
+    # subsequent add/list/scan.
+    matches = [
+        path
+        for path in memory_dir.glob("*.md")
+        if path != entrypoint and (path.stem == name or path.name == name)
+    ]
     if not matches:
         return False
     path = matches[0]
@@ -47,7 +55,6 @@ def remove_memory_entry(cwd: str | Path, name: str) -> bool:
         if path.exists():
             path.unlink()
 
-        entrypoint = get_memory_entrypoint(cwd)
         if entrypoint.exists():
             lines = [
                 line

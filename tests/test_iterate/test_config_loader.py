@@ -178,6 +178,15 @@ class TestLoadEffectiveConfig:
         assert effective.source == "defaults"
         assert effective.override is None
 
+    def test_boolean_max_rounds_ignored_not_bool_as_one(self, tmp_path):
+        """``max_rounds: true`` (a YAML bool) must NOT be treated as the int 1 —
+        bool is an int subclass, so an unguarded isinstance() would cap the
+        loop at one round."""
+        d = make_temp_dir(tmp_path)
+        write_config(d, "max_rounds: true\n")
+        effective = load_effective_config(d)
+        assert effective.config.max_rounds == default_config().max_rounds
+
     def test_invariants_section_parsed_from_config(self, tmp_path):
         d = make_temp_dir(tmp_path)
         write_config(

@@ -185,7 +185,10 @@ def verify_finding(
     # A file is not line-addressable if it contains a NUL byte (binary payload).
     # Anchored line numbers on a binary file cannot be trusted, so treat them
     # the same as an out-of-range line rather than credulously accepting them.
-    if b"\x00" in raw:
+    # A whole-file finding (line is None/0) only asserts the file exists, so a
+    # binary payload must NOT invalidate it — that would fail every structural
+    # finding over binary assets (images, lockfiles, shaders...).
+    if b"\x00" in raw and line is not None and line != WHOLE_FILE_LINE:
         return FindingEvidence(
             file=rel_file,
             line=line,

@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,7 @@ def save_checkpoint(
         "output_tokens": output_tokens,
         "cost_usd": cost_usd,
         "mode": mode,
+        "timestamp": time.time(),
         "deferred_architectural": list(deferred_architectural or []),
     }
     # Process-unique temp name (mkstemp) avoids concurrent writers using the

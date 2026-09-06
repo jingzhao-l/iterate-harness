@@ -83,8 +83,32 @@ class MailboxMessage:
 # ---------------------------------------------------------------------------
 
 
+def validate_team_name(team_name: str) -> str:
+    """Validate a team name for use in on-disk paths.
+
+    Swarm team/tool tool names come from the model and must never be able to
+    escape the ``~/.iterate-harness/teams`` base directory (``delete_team``
+    rmtree's the resolved directory — a ``../`` name would delete arbitrary
+    user data). Rejects empty names, path separators, absolute paths, ``.`` /
+    ``..`` components and NUL bytes.
+
+    Returns the validated name.
+
+    Raises:
+        ValueError: if *team_name* cannot be safely used in a path.
+    """
+    if not team_name:
+        raise ValueError("team name must not be empty")
+    if "\x00" in team_name or "/" in team_name or "\\" in team_name:
+        raise ValueError(f"team name is not path-safe: {team_name!r}")
+    if team_name in {".", ".."}:
+        raise ValueError(f"team name is not path-safe: {team_name!r}")
+    return team_name
+
+
 def get_team_dir(team_name: str) -> Path:
     """Return ~/.iterate-harness/teams/<team_name>/"""
+    validate_team_name(team_name)
     base = Path.home() / ".iterate-harness" / "teams" / team_name
     base.mkdir(parents=True, exist_ok=True)
     return base

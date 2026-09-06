@@ -181,11 +181,19 @@ async def finalize(context: object, *, merged: bool) -> None:
     if session is None:
         return
     try:
-        if merged and session.worktree_path.exists():
-            round_number = _round_from_slug(session.slug)
-            await worktree_flow.commit(
-                session, _MERGE_MESSAGE.format(round_number=round_number)
-            )
+        if session.worktree_path.exists():
+            # Round-2+ checkpoint / decision-log state was written INSIDE the
+            # worktree. Always sync it back to the main checkout before we
+            # leave, so nothing is lost even when deterministic validation
+            # rejects the fix batch (merged=False) — state continuity must not
+            # depend on which finalize branch ran. The commit only happens on
+            # the normal (merged) path; the rollback path drops the branch but
+            # still preserves project state.
+            if merged:
+                round_number = _round_from_slug(session.slug)
+                await worktree_flow.commit(
+                    session, _MERGE_MESSAGE.format(round_number=round_number)
+                )
             _sync_project_state(session.worktree_path, session.repo_path)
         await worktree_flow.exit_session(session, merged=merged)
     except Exception as exc:  # noqa: BLE001 - finalize must never crash the engine

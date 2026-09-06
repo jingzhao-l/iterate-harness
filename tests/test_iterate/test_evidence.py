@@ -106,6 +106,21 @@ class TestVerifyFinding:
         assert result.verified is True
         assert result.error is None
 
+    def test_whole_file_finding_on_binary_file_still_verified(self, tmp_path: Path):
+        """A whole-file (structural) finding over a binary asset only asserts
+        the file exists; a NUL byte must not fail every structural finding."""
+        (tmp_path / "image.bin").write_bytes(b"\x00\x01\x02\xff")
+        result = verify_finding(tmp_path, rel_file="image.bin", line=0)
+        assert result.verified is True
+        assert result.error is None
+
+    def test_anchored_finding_on_binary_file_out_of_range(self, tmp_path: Path):
+        """Anchored line numbers on a binary payload cannot be trusted."""
+        (tmp_path / "image.bin").write_bytes(b"\x00\x01\x02\xff")
+        result = verify_finding(tmp_path, rel_file="image.bin", line=2)
+        assert result.verified is False
+        assert result.error == "line_out_of_range"
+
     def test_anchored_finding_verified(self, tmp_path: Path):
         (tmp_path / "a.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
         result = verify_finding(tmp_path, rel_file="a.py", line=2)

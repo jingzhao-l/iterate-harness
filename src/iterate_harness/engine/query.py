@@ -872,7 +872,25 @@ async def run_query(
             # Single tool: sequential (stream events immediately)
             tc = tool_calls[0]
             yield ToolExecutionStarted(tool_name=tc.name, tool_input=tc.input), None
-            result = await _execute_tool_call(context, tc.name, tc.id, tc.input)
+            try:
+                result = await _execute_tool_call(context, tc.name, tc.id, tc.input)
+            except asyncio.CancelledError:
+                # Cancellation must propagate (shutdown, Esc) — converting it
+                # into a tool result would pretend the turn completed.
+                raise
+            except BaseException as exc:
+                # Mirror the multi-tool containment below: an unhandled tool
+                # exception must become a tool_result, never abort the query
+                # (the API rejects a session left with an unmatched tool_use
+                # block).
+                log.exception(
+                    "tool execution raised: name=%s id=%s", tc.name, tc.id, exc_info=exc
+                )
+                result = ToolResultBlock(
+                    tool_use_id=tc.id,
+                    content=f"Tool {tc.name} failed: {type(exc).__name__}: {exc}",
+                    is_error=True,
+                )
             yield ToolExecutionCompleted(
                 tool_name=tc.name,
                 output=result.content,
@@ -985,6 +1003,9 @@ async def run_query(
                 # architectural changes — log it and steer the next round.
                 try:
                     from iterate_harness.iterate import fix_scope
+                    from iterate_harness.iterate.config_loader import (
+                        load_effective_config,
+                    )
                     from iterate_harness.iterate.decision_log import (
                         append_entry,
                         make_entry,
@@ -993,8 +1014,18 @@ async def run_query(
                         DEFAULT_ATOMIC_MAX_LINES,
                     )
 
+                    # Honor the project's own atomic.max_lines cap instead of
+                    # hardcoding the default — a lowered cap must steer scope
+                    # here too.
+                    try:
+                        atomic_max_lines = load_effective_config(
+                            context.cwd
+                        ).config.atomic.max_lines
+                    except Exception:  # noqa: BLE001 - fall back to the default
+                        atomic_max_lines = DEFAULT_ATOMIC_MAX_LINES
+
                     assessment = fix_scope.assess_fix_scope(
-                        context.cwd, DEFAULT_ATOMIC_MAX_LINES
+                        context.cwd, atomic_max_lines
                     )
                     if assessment.over_limit:
                         append_entry(

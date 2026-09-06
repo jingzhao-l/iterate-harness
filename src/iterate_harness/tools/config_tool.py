@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel, Field
 
 from iterate_harness.config.settings import load_settings, save_settings
@@ -30,6 +32,28 @@ _ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset({
     "verbose",
 })
 
+#: Settings keys expected to hold int/float values (argv strings must be
+#: coerced before assignment, otherwise a `config set max_tokens 5000`
+#: writes the string "5000" into a numeric field).
+_INT_KEYS = frozenset({
+    "max_tokens",
+    "timeout",
+    "context_window_tokens",
+    "auto_compact_threshold_tokens",
+    "max_turns",
+    "passes",
+})
+
+
+def _coerce_value(key: str, value: str) -> object:
+    """Coerce a CLI string value into the Python type the setting expects."""
+    if key in _INT_KEYS:
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    return value
+
 
 class ConfigToolInput(BaseModel):
     """Arguments for config access."""
@@ -50,7 +74,12 @@ class ConfigTool(BaseTool[ConfigToolInput]):
         del context
         settings = load_settings()
         if arguments.action == "show":
-            return ToolResult(output=settings.model_dump_json(indent=2))
+            # Never echo credentials into the model context — the plain dump
+            # leaks api_key (and other secrets) to the LLM and into the
+            # conversation transcript.
+            redacted = settings.model_dump()
+            redacted["api_key"] = "<redacted>"
+            return ToolResult(output=json.dumps(redacted, indent=2, ensure_ascii=False))
         if arguments.action == "set" and arguments.key and arguments.value is not None:
             if arguments.key not in _ALLOWED_CONFIG_KEYS:
                 return ToolResult(
@@ -59,7 +88,7 @@ class ConfigTool(BaseTool[ConfigToolInput]):
                 )
             if not hasattr(settings, arguments.key):
                 return ToolResult(output=f"Unknown config key: {arguments.key}", is_error=True)
-            setattr(settings, arguments.key, arguments.value)
+            setattr(settings, arguments.key, _coerce_value(arguments.key, arguments.value))
             save_settings(settings)
             return ToolResult(output=f"Updated {arguments.key}")
         return ToolResult(output="Usage: action=show or action=set with key/value", is_error=True)

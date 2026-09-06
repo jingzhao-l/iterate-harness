@@ -526,7 +526,7 @@ class InProcessBackend:
             raise ValueError(
                 f"Invalid agent_id {agent_id!r}: expected 'agentName@teamName'"
             )
-        agent_name, team_name = agent_id.split("@", 1)
+        _, team_name = agent_id.split("@", 1)
 
         from iterate_harness.swarm.mailbox import MailboxMessage
 
@@ -541,7 +541,10 @@ class InProcessBackend:
             },
             timestamp=_safe_message_timestamp(message.timestamp),
         )
-        mailbox = TeammateMailbox(team_name=team_name, agent_id=agent_name)
+        # Use the FULL agent_id (name@team) — the in-process teammate's
+        # mailbox was created with that exact id at spawn, so a message
+        # written to a bare `agent_name` inbox would never be polled.
+        mailbox = TeammateMailbox(team_name=team_name, agent_id=agent_id)
         await mailbox.write(msg)
         logger.debug("[InProcessBackend] sent message to %s", agent_id)
 

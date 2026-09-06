@@ -372,7 +372,12 @@ class IterateLoopPolicy:
         budget_reason = self._budget_pause_reason()
         if budget_reason is not None:
             return LoopDecision(
-                inject_message=prompts.budget_headroom_pause_notice(budget_reason),
+                # When the user resumes, the engine re-injects this message into
+                # the conversation (design §11.4.1). The model must receive the
+                # canonical next-round instructions, not the human-facing pause
+                # menu text — otherwise a resume derails the loop into a
+                # confused reply. The notice is surfaced by the engine UI.
+                inject_message=self._build_next_round_message(snapshot),
                 progress=progress,
                 paused=True,
                 pause_reason=PAUSE_REASON_BUDGET,

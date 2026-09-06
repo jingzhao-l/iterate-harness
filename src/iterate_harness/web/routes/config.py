@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
@@ -53,11 +54,16 @@ def _restore_redacted(
         elif isinstance(value, list):
             prior = existing.get(key)
             if isinstance(prior, list):
+                # zip() would silently truncate a new list longer than the
+                # prior one, dropping freshly-added items on a config save.
+                # Use the longer length so every incoming item resolves its
+                # redaction marker against the matching prior item when one
+                # exists.
                 out[key] = [
                     _restore_redacted(item, prev)
                     if isinstance(item, dict) and isinstance(prev, dict)
                     else item
-                    for item, prev in zip(value, prior)
+                    for item, prev in zip_longest(value, prior)
                 ]
             else:
                 out[key] = value

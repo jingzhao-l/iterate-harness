@@ -39,6 +39,8 @@ class CronListTool(BaseTool[CronListToolInput]):
 
         for job in jobs:
             enabled = "on" if job.get("enabled", True) else "off"
+            name = job.get("name", "<unnamed>")
+            command = job.get("command", "<unknown>")
             last_run = job.get("last_run", "never")
             if last_run != "never":
                 last_run = last_run[:19]
@@ -48,8 +50,8 @@ class CronListTool(BaseTool[CronListToolInput]):
             last_status = job.get("last_status", "")
             status_str = f" ({last_status})" if last_status else ""
             lines.append(
-                f"[{enabled}] {job['name']}  {job.get('schedule', '?')}\n"
-                f"     cmd: {job['command']}\n"
+                f"[{enabled}] {name}  {job.get('schedule', '?')}\n"
+                f"     cmd: {command}\n"
                 f"     last: {last_run}{status_str}  next: {next_run}"
             )
         return ToolResult(output="\n".join(lines))

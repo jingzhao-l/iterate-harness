@@ -97,7 +97,23 @@ def _decision_log_tail(log_path: Path, cursor: int) -> tuple[list[dict[str, Any]
         with log_path.open("r", encoding="utf-8") as handle:
             handle.seek(cursor)
             new_lines = handle.read()
-            new_cursor = handle.tell()
+            if not new_lines:
+                return [], cursor
+            if new_lines.endswith("\n"):
+                new_cursor = handle.tell()
+            else:
+                # No trailing newline: the last line may still be being
+                # written. Do NOT park the cursor past it — a JSONDecodeError
+                # on a half-written record would otherwise permanently skip
+                # the rest of that line. Keep the cursor at the start of the
+                # unterminated line so the next poll re-reads it once it has
+                # completed.
+                last_nl = new_lines.rfind("\n")
+                if last_nl == -1:
+                    return [], cursor
+                new_cursor = cursor + last_nl + 1
+                new_lines = new_lines[: last_nl + 1]
+                handle.seek(new_cursor)
         entries: list[dict[str, Any]] = []
         for line in new_lines.splitlines():
             if not line.strip():

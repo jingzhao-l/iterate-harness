@@ -19,6 +19,7 @@ from iterate_harness.iterate.types import DecisionLogEntry
 from iterate_harness.web import api as api_module
 from iterate_harness.web import events as events_module
 from iterate_harness.web.api import create_app
+from iterate_harness.web.routes.config import REDACTION_PREFIX, _restore_redacted
 
 #: A config dict that passes ``validate_config``.
 VALID_CONFIG: dict[str, object] = {
@@ -286,6 +287,26 @@ class TestCheckpoints:
 
 
 class TestConfig:
+    def test_restore_redacted_longer_incoming_list_not_truncated(self):
+        """Regression: zip() silently dropped new list items when the editor's
+        draft was LONGER than the prior config; zip_longest preserves them."""
+        prior = {
+            "agents": [
+                {"name": "alice", "api_key": "sk-real-alice"},
+            ]
+        }
+        incoming = {
+            "agents": [
+                {"name": "alice", "api_key": f"{REDACTION_PREFIX}api_key"},
+                {"name": "bob", "api_key": "sk-real-bob"},
+            ]
+        }
+        restored = _restore_redacted(incoming, prior)
+        assert restored["agents"] == [
+            {"name": "alice", "api_key": "sk-real-alice"},
+            {"name": "bob", "api_key": "sk-real-bob"},
+        ]
+
     def test_get_config_empty(self, client: TestClient, tmp_path: Path):
         body = client.get("/api/v1/config", params={"project_root": str(tmp_path)}).json()
         assert body["exists"] is False

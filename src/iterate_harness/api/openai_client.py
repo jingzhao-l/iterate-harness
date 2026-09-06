@@ -56,6 +56,18 @@ def _token_limit_param_for_model(model: str, max_tokens: int) -> dict[str, int]:
     return {"max_tokens": max_tokens}
 
 
+def _is_kimi_tool_call_provider(model: str) -> bool:
+    """Return True for Moonshot/Kimi models needing the ``stream_options``
+    workaround on tool calls.
+
+    The family is identified by its model name prefix (``kimi-``,
+    ``moonshot-v1``/``moonshot-v2`` ...); unknown models keep full usage
+    tracking.
+    """
+    normalized = model.strip().lower()
+    return normalized.startswith(("kimi", "moonshot"))
+
+
 def _convert_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert Anthropic tool schemas to OpenAI function-calling format.
 
@@ -305,10 +317,13 @@ class OpenAICompatibleClient:
         if openai_tools:
             params["tools"] = openai_tools
             # Some providers (Kimi) error on empty reasoning_content in
-            # tool-call follow-ups.  Omit the entire stream_options key if
-            # tools are present – avoids triggering model-side thinking mode
-            # that requires reasoning_content on every assistant message.
-            params.pop("stream_options", None)
+            # tool-call follow-ups. Omitting `stream_options` for THOSE models
+            # only avoids triggering model-side thinking mode that requires
+            # reasoning_content on every assistant message. Scoping the
+            # workaround to the affected family keeps usage tracking
+            # (stream_options.include_usage) intact for every other provider.
+            if _is_kimi_tool_call_provider(request.model):
+                params.pop("stream_options", None)
 
         # Collect full response while streaming text deltas
         collected_content = ""

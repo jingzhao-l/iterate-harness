@@ -147,10 +147,12 @@ class ImageToTextTool(BaseTool[ImageToTextToolInput]):
             return arguments.image_data, arguments.media_type
 
         if arguments.image_path:
-            path = Path(arguments.image_path)
+            # Expand the tilde BEFORE joining with cwd, so `~/pic.png`
+            # resolves to the home directory rather than cwd/~/pic.png.
+            path = Path(arguments.image_path).expanduser()
             if not path.is_absolute():
                 path = context.cwd / path
-            path = path.expanduser().resolve()
+            path = path.resolve()
 
             from iterate_harness.sandbox.session import is_docker_sandbox_active
             if is_docker_sandbox_active():

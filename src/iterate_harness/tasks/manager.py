@@ -138,9 +138,14 @@ class BackgroundTaskManager:
                 raise ValueError(
                     "Local agent tasks require ANTHROPIC_API_KEY or an explicit command/argv override"
                 )
-            argv = ["python", "-m", "iterate_harness", "--api-key", effective_api_key]
+            argv = ["python", "-m", "iterate_harness"]
             if model:
                 argv.extend(["--model", model])
+            # Pass the key through the (merged) subprocess environment rather
+            # than argv: `--api-key <secret>` is visible to every local user
+            # via `ps` while it runs.
+            env = dict(env or {})
+            env["ANTHROPIC_API_KEY"] = effective_api_key
 
         record = await self.create_shell_task(
             command=command,

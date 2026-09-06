@@ -92,7 +92,7 @@ async def _git(args: list[str], cwd: Path) -> str:
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=GIT_TIMEOUT_SECONDS)
-    except TimeoutError:
+    except asyncio.TimeoutError:
         proc.kill()
         raise WorktreeFlowError(f"git {' '.join(args)} timed out after {GIT_TIMEOUT_SECONDS}s") from None
     if proc.returncode != 0:
@@ -172,7 +172,22 @@ async def exit_session(
     mgr = manager or WorktreeManager()
     try:
         if merged:
-            await _git(["merge", "--ff-only", session.branch], cwd=session.repo_path)
+            try:
+                # Fast-forward is the common case and keeps history linear.
+                await _git(["merge", "--ff-only", session.branch], cwd=session.repo_path)
+            except WorktreeFlowError:
+                # The main checkout diverged while the fix round ran (another
+                # session / user edit landed on it). A bare `git merge` would
+                # make a merge commit and preserve BOTH histories — without
+                # it, the --ff-only failure silently drops the branch's
+                # fixes. Fall back to a merge commit rather than discarding
+                # the round's work.
+                log.warning(
+                    "iterate worktree %s: fast-forward merge failed; falling back to "
+                    "a merge commit (main checkout diverged while the round ran)",
+                    session.branch,
+                )
+                await _git(["merge", "--no-edit", session.branch], cwd=session.repo_path)
     finally:
         removed = await mgr.remove_worktree(session.slug)
         if not removed:
