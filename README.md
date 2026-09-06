@@ -41,20 +41,20 @@ and an append-only decision log that makes every iteration auditable. It is
 one of **three interchangeable components** that share the same
 `iterate.config.yaml` and dimension system:
 
-| Component | Form | Targets |
-| --- | --- | --- |
-| [**Core Skill + CLI**](https://github.com/jingzhao-l/iterate-skill) | A portable AI skill `/iterate` + `iterate` CLI | Conversation-driven multi-round iteration inside Trae / Claude Code / Cursor / Copilot / Codex and 25+ assistants |
-| **iterate-harness** | A standalone headless engine (`ih`, npm: `iterate-harness`) | **This repo** — runs the same loop in terminal / CI / git hooks, no conversational assistant needed |
-| [**iterate-plugin**](https://github.com/jingzhao-l/iterate-plugin) | A dsh desktop-client plugin | Surface the iterate dashboard / review progress inside the dsh UI |
+- **[Core Skill + CLI](https://github.com/jingzhao-l/iterate-skill)** — a portable AI skill `/iterate` + `iterate` CLI. Conversation-driven multi-round iteration inside Trae / Claude Code / Cursor / Copilot / Codex and 25+ assistants.
+- **iterate-harness** — a standalone headless engine (`ih`, npm: `iterate-harness`). **This repo** — runs the same loop in terminal / CI / git hooks, no conversational assistant needed.
+- **[iterate-plugin](https://github.com/jingzhao-l/iterate-plugin)** — a dsh desktop-client plugin. Surfaces the iterate dashboard / review progress inside the dsh UI.
 
 It is a **standalone agent harness** built around the iterate review/fix
 loop: the kernel agent loop, React TUI, tool/skill/plugin systems and
 permission layer are iterate-native, with the iterate semantic layer (ported
 from the iterate skill's TypeScript implementation) plus the engine-level
-convergence policy at its core. **v2.0 adds a dual-mode architecture**:
-`task_mode` flips between `iterate` (the 1.x review/fix loop) and `code` (a
-general-purpose agent mode hardened by the defensive kernel) — see
-[#dual-mode-architecture](#-dual-mode-architecture).
+convergence policy at its core.
+
+The harness has been through two major version lines:
+
+- **2.0 dual-mode architecture** — `task_mode` flips between `iterate` (the 1.x review/fix loop) and `code` (a general-purpose agent mode hardened by the defensive kernel) — see [#dual-mode-architecture](#-dual-mode-architecture).
+- **2.1 headless expansion** — new CLI-first commands for unattended use: `validate` (one-off whitelisted validation in CI), `sessions` / `resume --session` (pick up any past run), `--template` review presets (`standard` / `strict` / `quick`), `batch` (multi-repo ranking), `schedule` + `cron` (scheduled reviews), `hook install` (pre-commit gate), and `report --pr` / `--html` (CI-friendly reporting).
 
 > ⭐ If this project helps you, please consider giving it a GitHub star — it means a lot to open-source maintenance!
 
@@ -169,10 +169,8 @@ ih provider edit <name> # fix base_url / api_format / default_model / auth_sourc
 Since v2.0, `task_mode` decides **what the agent does** (orthogonal to
 `permission_mode`, which decides **what it may touch**):
 
-| Mode | Behavior |
-| --- | --- |
-| **`iterate`** (default) | The classic 1.x loop — deterministic multi-dimension review, per-dimension triage, atomic fixes validated every round, append-only decision log. |
-| **`code`** | General-purpose agent mode: the full toolset stays available, with the **defensive kernel** layered on so every edit is safe by construction. |
+- **`iterate`** (default) — the classic 1.x loop: deterministic multi-dimension review, per-dimension triage, atomic fixes validated every round, append-only decision log.
+- **`code`** — general-purpose agent mode: the full toolset stays available, with the **defensive kernel** layered on so every edit is safe by construction.
 
 Switch modes with `--task-mode` on the CLI or press **Tab** on an empty input
 in the TUI (the vertical mode bar on the input's left edge and the mode label
@@ -290,63 +288,53 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 
 ### Review engine & loop
 
-| Capability | What it does |
-| --- | --- |
-| **Deterministic review engine** | `iterate_review` plan / aggregate / meta-review: cross-round dedupe, `known_intentional` filtering, severity sort, convergence math, 6-check report audit — all pure computation, zero LLM judgment |
-| **Two modes** | `dry-run` (read-only review, never touches files) and `normal` (review → atomic fix → validate → loop, validation failure rolls the round back via git isolation) |
-| **Engine-enforced convergence** | `IterateLoopPolicy` lives in the kernel query loop: round caps, convergence auto-stop and next-round steering cannot be prompt-injected away |
-| **Findings triage** | `iterate_triage`: walk findings with `y` fix / `n` skip / `a` always-ignore; `a` persists to `known_intentional` so future rounds filter it automatically |
-| **Per-fix diff approval** | `require_fix_approval` routes every file write during a normal-mode loop through an interactive prompt with an inline diff preview — even in full-auto mode; hard denials are never downgraded |
-| **Esc intervention** | Press Esc mid-loop: the loop pauses at the next round boundary and opens a directional-key menu (skip top finding / narrow dimensions / stop / resume); a second Esc force-interrupts the turn |
-| **Breakpoint resume** | The TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings |
-| **Finding trend library** | Every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `ih iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs |
+- **Deterministic review engine** — `iterate_review` plan / aggregate / meta-review: cross-round dedupe, `known_intentional` filtering, severity sort, convergence math, 6-check report audit — all pure computation, zero LLM judgment.
+- **Two modes** — `dry-run` (read-only review, never touches files) and `normal` (review → atomic fix → validate → loop, validation failure rolls the round back via git isolation).
+- **Engine-enforced convergence** — `IterateLoopPolicy` lives in the kernel query loop: round caps, convergence auto-stop and next-round steering cannot be prompt-injected away.
+- **Findings triage** — `iterate_triage`: walk findings with `y` fix / `n` skip / `a` always-ignore; `a` persists to `known_intentional` so future rounds filter it automatically.
+- **Per-fix diff approval** — `require_fix_approval` routes every file write during a normal-mode loop through an interactive prompt with an inline diff preview — even in full-auto mode; hard denials are never downgraded.
+- **Esc intervention** — press Esc mid-loop: the loop pauses at the next round boundary and opens a directional-key menu (skip top finding / narrow dimensions / stop / resume); a second Esc force-interrupts the turn.
+- **Breakpoint resume** — the TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings.
+- **Finding trend library** — every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `ih iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs.
 
 ### Reports & integration
 
-| Capability | What it does |
-| --- | --- |
-| **Convergence dashboard** | Live React TUI panel: per-round findings trend, per-dimension counts with per-dimension USD estimates, running metered cost, converged badge |
-| **CI / PR mode** | `ih iterate report --github --fail-on high` turns the final report into GitHub Actions annotations with a severity-based exit-code gate for PRs; `--pr` posts (and on later runs UPDATES) a Markdown report comment via the gh CLI (marker lookup paginates, so giant PRs stay idempotent) — every failure mode degrades gracefully, never breaking the exit-code policy |
-| **HTML single-file report** | `ih iterate report --html` renders the run as ONE offline `.html` file: SVG convergence curve, severity/dimension bars, findings table with failure scenarios, and colorized per-fix diffs — share it as a CI artifact |
-| **Decision replay** | `ih iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording |
-| **Changed-only quick review** | `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing |
-| **Batch ranking** | `ih iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch |
-| **Scheduled review** | `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library |
-| **Cron scheduler daemon** | `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`) |
+- **Convergence dashboard** — live React TUI panel: per-round findings trend, per-dimension counts with per-dimension USD estimates, running metered cost, converged badge.
+- **CI / PR mode** — `ih iterate report --github --fail-on high` turns the final report into GitHub Actions annotations with a severity-based exit-code gate for PRs; `--pr` posts (and on later runs UPDATES) a Markdown report comment via the gh CLI (marker lookup paginates, so giant PRs stay idempotent) — every failure mode degrades gracefully, never breaking the exit-code policy.
+- **HTML single-file report** — `ih iterate report --html` renders the run as ONE offline `.html` file: SVG convergence curve, severity/dimension bars, findings table with failure scenarios, and colorized per-fix diffs — share it as a CI artifact.
+- **Decision replay** — `ih iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording.
+- **Changed-only quick review** — `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing.
+- **Batch ranking** — `ih iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch.
+- **Scheduled review** — `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library.
+- **Cron scheduler daemon** — `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`).
 
 ### Cost, resources & gates
 
-| Capability | What it does |
-| --- | --- |
-| **Cost transparency** | Token usage → per-round and cumulative USD from a built-in price table (overridable per model) |
-| **Token budget enforcement** | `token_budget` caps the whole run at the engine level (hard-stop + closing report); `iterate_review(operation="aggregate", dimension_usage=…, dimension_usage_io=…)` audits per-dimension usage, relays reviewer-reported totals into the engine cost meter — dimensions reporting an input/output split bill at exact prices, bare totals at the blended price — and steers the next round away from exhausted dimensions |
-| **Per-dimension resources** | `dimension_resources` in `iterate.config.yaml` sets per-dimension `model` / `concurrency` (1–8) / `token_budget` — a strong model for security, a fast one for style-tests; the plan carries them into every reviewer spawn |
-| **Threshold gates** | `thresholds.max_critical` / `max_high` / `max_medium` / `max_low` (global or per dimension) cap finding counts in the final report — a violation flips the verdict to `needs_revision` and fails the `ih iterate report` exit code (`threshold gate: FAIL`) |
-| **CLI validation runner** | `ih iterate validate "<command>"` runs a preconfigured validation command as a one-off from the shell and prints `allowed` / `reject_reason` / `exit_code` — ideal for scripting defensive pre/post-checks in CI, the same runner the tools layer invokes |
-| **Session listing** | `ih iterate sessions` lists saved sessions (summary / model / timestamp / message count, `--limit` / `--json`) then `ih iterate resume --session <id>` picks one up — no need to remember which run was which |
-| **Review templates** | `--template` on `review` / `run` (and editable prompt presets) switches between `standard` (default), `strict` (conservative, safety-first) and `quick` (impact-only) review prompts per invocation |
+- **Cost transparency** — token usage → per-round and cumulative USD from a built-in price table (overridable per model).
+- **Token budget enforcement** — `token_budget` caps the whole run at the engine level (hard-stop + closing report); `iterate_review(operation="aggregate", dimension_usage=…, dimension_usage_io=…)` audits per-dimension usage, relays reviewer-reported totals into the engine cost meter — dimensions reporting an input/output split bill at exact prices, bare totals at the blended price — and steers the next round away from exhausted dimensions.
+- **Per-dimension resources** — `dimension_resources` in `iterate.config.yaml` sets per-dimension `model` / `concurrency` (1–8) / `token_budget` — a strong model for security, a fast one for style-tests; the plan carries them into every reviewer spawn.
+- **Threshold gates** — `thresholds.max_critical` / `max_high` / `max_medium` / `max_low` (global or per dimension) cap finding counts in the final report — a violation flips the verdict to `needs_revision` and fails the `ih iterate report` exit code (`threshold gate: FAIL`).
+- **CLI validation runner** — `ih iterate validate "<command>"` runs a preconfigured validation command as a one-off from the shell and prints `allowed` / `reject_reason` / `exit_code` — ideal for scripting defensive pre/post-checks in CI, the same runner the tools layer invokes.
+- **Session listing** — `ih iterate sessions` lists saved sessions (summary / model / timestamp / message count, `--limit` / `--json`) then `ih iterate resume --session <id>` picks one up — no need to remember which run was which.
+- **Review templates** — `--template` on `review` / `run` (and editable prompt presets) switches between `standard` (default), `strict` (conservative, safety-first) and `quick` (impact-only) review prompts per invocation.
 
 ### Onboarding, security & config
 
-| Capability | What it does |
-| --- | --- |
-| **Detection-driven init** | `ih iterate init` probes marker files (package.json / pyproject / go.mod / Cargo.toml / …), infers the test command from real evidence, suggests dimensions (frontend deps unlock `frontend-backend` / `ui-ux`), previews the yaml and writes it only after confirmation — `/iterate init` does the same in the TUI |
-| **Model-driven onboarding** | `ih iterate onboard` chains auth gate → detection evidence → model scan → `ITERATE.md` knowledge base (AI/user region markers) + manifest fingerprints; `refresh` re-fingerprints, `reonboard` re-scans while preserving your notes; every kickoff injects the knowledge base and warns on drift — skill-compatible artifacts. TUI onboarding gets its fingerprints auto-captured on the next review/run — no manual `refresh` needed |
-| **Personalization wizard** | `ih iterate personalize` walks the skill's 9 categories (protected paths, risk areas, known-intentional, dimension focus, fix priority, forbidden fixes, notes, conventions, extra validation commands): structured rules land in `iterate.config.yaml` (protected paths ALSO enforced by the kernel permission layer), free text lands in the `ITERATE.md` user region, and every kickoff carries the constraints; extra commands pass a strict whitelist before merging into `validation.commands` |
-| **Security boundaries as code** | `protected_paths` and `forbidden_fix_patterns` from settings are auto-assembled into the permission layer (deny path rules + write-payload regex); validation commands run through an EXACT-match allowlist |
-| **Pre-commit hook** | `ih iterate hook install` writes a MARKED managed `.git/hooks/pre-commit` that runs a 1-round changed-only review and gates the commit on `--fail-on` severity; refuses to touch foreign hooks, skippable via `ITERATE_SKIP_HOOK=1` / `--no-verify` |
-| **Dimension doctor** | `ih iterate doctor` checks the whole dimension system in one shot: bundled canonical definitions vs harness internals vs your `iterate.config.yaml` (unknown dimension keys, inert resource/threshold entries, personalization references outside the enabled set); exits 1 on drift so CI can gate on it |
-| **Schedule timezones** | `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` evaluates the cron in local time (stored UTC-normalized) so "daily at 9" means 9 where you live |
+- **Detection-driven init** — `ih iterate init` probes marker files (package.json / pyproject / go.mod / Cargo.toml / …), infers the test command from real evidence, suggests dimensions (frontend deps unlock `frontend-backend` / `ui-ux`), previews the yaml and writes it only after confirmation — `/iterate init` does the same in the TUI.
+- **Model-driven onboarding** — `ih iterate onboard` chains auth gate → detection evidence → model scan → `ITERATE.md` knowledge base (AI/user region markers) + manifest fingerprints; `refresh` re-fingerprints, `reonboard` re-scans while preserving your notes; every kickoff injects the knowledge base and warns on drift — skill-compatible artifacts. TUI onboarding gets its fingerprints auto-captured on the next review/run — no manual `refresh` needed.
+- **Personalization wizard** — `ih iterate personalize` walks the skill's 9 categories (protected paths, risk areas, known-intentional, dimension focus, fix priority, forbidden fixes, notes, conventions, extra validation commands): structured rules land in `iterate.config.yaml` (protected paths ALSO enforced by the kernel permission layer), free text lands in the `ITERATE.md` user region, and every kickoff carries the constraints; extra commands pass a strict whitelist before merging into `validation.commands`.
+- **Security boundaries as code** — `protected_paths` and `forbidden_fix_patterns` from settings are auto-assembled into the permission layer (deny path rules + write-payload regex); validation commands run through an EXACT-match allowlist.
+- **Pre-commit hook** — `ih iterate hook install` writes a MARKED managed `.git/hooks/pre-commit` that runs a 1-round changed-only review and gates the commit on `--fail-on` severity; refuses to touch foreign hooks, skippable via `ITERATE_SKIP_HOOK=1` / `--no-verify`.
+- **Dimension doctor** — `ih iterate doctor` checks the whole dimension system in one shot: bundled canonical definitions vs harness internals vs your `iterate.config.yaml` (unknown dimension keys, inert resource/threshold entries, personalization references outside the enabled set); exits 1 on drift so CI can gate on it.
+- **Schedule timezones** — `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` evaluates the cron in local time (stored UTC-normalized) so "daily at 9" means 9 where you live.
 
 ### Recording & dual-mode
 
-| Capability | What it does |
-| --- | --- |
-| **Decision log** | Append-only `.iterate/decision-log.jsonl`: every round, fix, validation and triage decision is recorded |
-| **Project knowledge** | `ITERATE.md` project knowledge + per-project structured personalization (9 categories) |
-| **Dual-mode architecture** | `task_mode` (`code` / `iterate`) orthogonal to `permission_mode`: `iterate` keeps the 1.x review/fix loop, `code` is a general-purpose agent mode hardened by the defensive kernel — `--task-mode` on the CLI, Tab in the TUI |
-| **Defensive kernel (code mode)** | Atomic mutations (snapshot → auto-rollback on failure), invariant guarding (`invariants.ensure` + `invariants.commands`, falling back to `validation.commands`; EXACT-match, metachar-refusing commands) and assumption audit (`record_assumption` → decision log) — all enforced mechanically |
-| **Worker defensive inheritance** | `--task-mode` threads through CLI → AppState → `agent_tool` → subprocess backend (design §20.5): code-mode subagents run the same defensive kernel |
+- **Decision log** — append-only `.iterate/decision-log.jsonl`: every round, fix, validation and triage decision is recorded.
+- **Project knowledge** — `ITERATE.md` project knowledge + per-project structured personalization (9 categories).
+- **Dual-mode architecture** — `task_mode` (`code` / `iterate`) orthogonal to `permission_mode`: `iterate` keeps the 1.x review/fix loop, `code` is a general-purpose agent mode hardened by the defensive kernel — `--task-mode` on the CLI, Tab in the TUI.
+- **Defensive kernel (code mode)** — atomic mutations (snapshot → auto-rollback on failure), invariant guarding (`invariants.ensure` + `invariants.commands`, falling back to `validation.commands`; EXACT-match, metachar-refusing commands) and assumption audit (`record_assumption` → decision log) — all enforced mechanically.
+- **Worker defensive inheritance** — `--task-mode` threads through CLI → AppState → `agent_tool` → subprocess backend (design §20.5): code-mode subagents run the same defensive kernel.
 
 ## 🔧 The seven iterate tools
 

@@ -33,18 +33,18 @@
 以及全程可审计的 append-only 决策日志。它是**三个可互换组件**之一，三者共用同一套
 `iterate.config.yaml` 与维度体系：
 
-| 组件 | 形态 | 面向场景 |
-| --- | --- | --- |
-| [**Core Skill + CLI**](https://github.com/jingzhao-l/iterate-skill) | 可移植 AI 技能 `/iterate` + `iterate` CLI | 在 Trae / Claude Code / Cursor / Copilot / Codex 等 25+ 助手的对话式界面里迭代 |
-| **iterate-harness** | 独立无头引擎（`ih`，npm: `iterate-harness`） | **本仓库** —— 在终端 / CI / Git 钩子里运行同一闭环，无需对话式助手 |
-| [**iterate-plugin**](https://github.com/jingzhao-l/iterate-plugin) | dsh 桌面客户端插件 | 把 iterate 的收敛仪表盘 / review 进度带进 dsh 界面 |
+- [**Core Skill + CLI**](https://github.com/jingzhao-l/iterate-skill) — 可移植 AI 技能 `/iterate` + `iterate` CLI。在 Trae / Claude Code / Cursor / Copilot / Codex 等 25+ 助手的对话式界面里迭代。
+- **iterate-harness** — 独立无头引擎（`ih`，npm: `iterate-harness`）。**本仓库** —— 在终端 / CI / Git 钩子里运行同一闭环，无需对话式助手。
+- [**iterate-plugin**](https://github.com/jingzhao-l/iterate-plugin) — dsh 桌面客户端插件。把 iterate 的收敛仪表盘 / review 进度带进 dsh 界面。
 
 它是一款**独立的专属 agent harness**，围绕 iterate review/fix 闭环打造：
 内核 agent loop、React TUI、工具/技能/插件体系与权限层全部为 iterate 原生，
 核心是移植自 iterate skill TypeScript 实现的语义层，以及引擎级的收敛控制策略。
-**v2.0 引入双模式架构**：`task_mode` 在 `iterate`（1.x 审查/修复闭环）与
-`code`（通用编程 agent 模式，叠加防御式内核保证）之间切换——见
-[#双模式架构](#-双模式架构)。
+
+harness 已走过两条大版本主线：
+
+- **2.0 双模式架构**：`task_mode` 在 `iterate`（1.x 审查/修复闭环）与 `code`（通用编程 agent 模式，叠加防御式内核保证）之间切换——见 [#双模式架构](#-双模式架构)。
+- **2.1 无头化扩展**：新增一系列面向无人值守的 CLI 命令——`validate`（CI 一次性白名单验证）、`sessions` / `resume --session`（随时接续任意历史运行）、`--template` 审查模板（`standard` / `strict` / `quick`）、`batch`（多仓库排行）、`schedule` + `cron`（定时审查）、`hook install`（pre-commit 门禁）、`report --pr` / `--html`（CI 友好报告）。
 
 > ⭐ 如果这个项目对你有帮助，欢迎点亮 GitHub Star，这是对开源维护最大的支持！
 
@@ -153,10 +153,8 @@ ih provider edit <name> # 修正 base_url / api_format / default_model / auth_so
 自 v2.0 起，`task_mode` 决定 **agent 做什么**（与决定 **能碰什么** 的
 `permission_mode` 正交）：
 
-| 模式 | 行为 |
-| --- | --- |
-| **`iterate`**（默认） | 经典 1.x 闭环——确定性多维度评审、逐维度分诊、每轮验证的原子修复、append-only 决策日志 |
-| **`code`** | 通用编程 agent 模式：全套工具照常可用，叠加**防御式内核**，让每一次编辑天然安全 |
+- **`iterate`**（默认）— 经典 1.x 闭环：确定性多维度评审、逐维度分诊、每轮验证的原子修复、append-only 决策日志。
+- **`code`** — 通用编程 agent 模式：全套工具照常可用，叠加**防御式内核**，让每一次编辑天然安全。
 
 CLI 用 `--task-mode` 切换，TUI 内对空输入按 **Tab** 在 `code` ↔ `iterate`
 之间循环（输入框左侧竖向模式色条与底部模式文字随模式变色——code=primary、
@@ -264,63 +262,53 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 
 ### 评审引擎与闭环
 
-| 能力 | 说明 |
-| --- | --- |
-| **确定性评审引擎** | `iterate_review` plan / aggregate / meta-review：跨轮去重、`known_intentional` 过滤、severity 排序、收敛统计、6 项报告一致性审计——全部纯计算，零 LLM 判断 |
-| **两种模式** | `dry-run`（纯评审，绝不改文件）与 `normal`（评审 → 原子修复 → 验证 → 循环，验证失败经 git 隔离自动回滚） |
-| **引擎级收敛强制** | `IterateLoopPolicy` 位于内核查询循环：轮次上限、收敛自停、下一轮引导不受 prompt 注入影响 |
-| **findings 分诊** | `iterate_triage`：逐条 `y` 修复 / `n` 跳过 / `a` 永久忽略；`a` 持久化到 `known_intentional`，后续轮次自动过滤 |
-| **逐修复 diff 审批** | `require_fix_approval` 让 normal 模式闭环中的每次文件写入都走带 diff 预览的交互确认——即便处于全自动模式；硬拒绝（保护路径/禁止模式）绝不降级为可确认 |
-| **Esc 中途干预** | 闭环运行中按 Esc：在下一轮边界暂停并弹出方向键菜单（跳过当前 finding / 收窄维度 / 直接停 / 继续）；再按一次 Esc 强制打断当前 turn |
-| **断点续跑** | TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding |
-| **finding 指纹趋势库** | 每次收尾用 `文件\|行号\|维度` 指纹把 finding 记入 `.iterate/trend-library.json`；`ih iterate log --trend` / `/iterate trend` 跨运行统计新增 / 已修复 / 回归 / 顽固（连续 3+ 轮）finding |
+- **确定性评审引擎** — `iterate_review` plan / aggregate / meta-review：跨轮去重、`known_intentional` 过滤、severity 排序、收敛统计、6 项报告一致性审计——全部纯计算，零 LLM 判断。
+- **两种模式** — `dry-run`（纯评审，绝不改文件）与 `normal`（评审 → 原子修复 → 验证 → 循环，验证失败经 git 隔离自动回滚）。
+- **引擎级收敛强制** — `IterateLoopPolicy` 位于内核查询循环：轮次上限、收敛自停、下一轮引导不受 prompt 注入影响。
+- **findings 分诊** — `iterate_triage`：逐条 `y` 修复 / `n` 跳过 / `a` 永久忽略；`a` 持久化到 `known_intentional`，后续轮次自动过滤。
+- **逐修复 diff 审批** — `require_fix_approval` 让 normal 模式闭环中的每次文件写入都走带 diff 预览的交互确认——即便处于全自动模式；硬拒绝（保护路径/禁止模式）绝不降级为可确认。
+- **Esc 中途干预** — 闭环运行中按 Esc：在下一轮边界暂停并弹出方向键菜单（跳过当前 finding / 收窄维度 / 直接停 / 继续）；再按一次 Esc 强制打断当前 turn。
+- **断点续跑** — TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding。
+- **finding 指纹趋势库** — 每次收尾用 `文件\|行号\|维度` 指纹把 finding 记入 `.iterate/trend-library.json`；`ih iterate log --trend` / `/iterate trend` 跨运行统计新增 / 已修复 / 回归 / 顽固（连续 3+ 轮）finding。
 
 ### 报告与集成
 
-| 能力 | 说明 |
-| --- | --- |
-| **收敛仪表盘** | React TUI 实时面板：逐轮 findings 趋势、带分维度 USD 估算的维度分布、主循环累计成本、收敛徽标 |
-| **CI / PR 模式** | `ih iterate report --github --fail-on high` 将最终报告转为 GitHub Actions 批注，并按严重度门禁决定退出码；`--pr` 经 gh CLI 把报告以 Markdown 评论发布（marker 查找全量翻页，巨型 PR 同样幂等更新同一条评论），所有失败形态优雅降级、绝不破坏退出码策略 |
-| **HTML 单文件报告** | `ih iterate report --html` 把整次运行渲染成一个可离线打开的 `.html`：SVG 收敛曲线、severity/维度分布条、含失败场景的 findings 表、按修复着色的 diff——可直接作为 CI 产物分享 |
-| **评审回放** | `ih iterate log --replay` 按时间序回放整次运行（`[+90s] r1 review_result newFindings=3`），像看录像一样还原闭环展开过程 |
-| **changed-only 快审** | `--changed [--ref <ref>]`（CLI 与 `/iterate review --changed`）把整个闭环钉在 git 增量上：kickoff、评审计划与每个维度 reviewer prompt 都携带明确的改动文件清单 |
-| **批量排行** | `ih iterate batch repoA repoB …` 顺序评审多个仓库，按严重度加权排出最差榜；单个仓库失败不会中断整批 |
-| **定时评审** | `ih iterate schedule add "0 9 * * 1-5"` 注册 cron 任务，每日（UTC）自动跑 changed-only 快审（`--clean-ok`）；新增 vs 顽固 finding 经趋势库呈现 |
-| **cron 调度守护进程** | `ih iterate cron start|stop|status|history` 管理执行定时任务的后台守护进程——启动一次后，定时评审无人值守持续运行，可查历史（`--limit` / `--json`） |
+- **收敛仪表盘** — React TUI 实时面板：逐轮 findings 趋势、带分维度 USD 估算的维度分布、主循环累计成本、收敛徽标。
+- **CI / PR 模式** — `ih iterate report --github --fail-on high` 将最终报告转为 GitHub Actions 批注，并按严重度门禁决定退出码；`--pr` 经 gh CLI 把报告以 Markdown 评论发布（marker 查找全量翻页，巨型 PR 同样幂等更新同一条评论），所有失败形态优雅降级、绝不破坏退出码策略。
+- **HTML 单文件报告** — `ih iterate report --html` 把整次运行渲染成一个可离线打开的 `.html`：SVG 收敛曲线、severity/维度分布条、含失败场景的 findings 表、按修复着色的 diff——可直接作为 CI 产物分享。
+- **评审回放** — `ih iterate log --replay` 按时间序回放整次运行（`[+90s] r1 review_result newFindings=3`），像看录像一样还原闭环展开过程。
+- **changed-only 快审** — `--changed [--ref <ref>]`（CLI 与 `/iterate review --changed`）把整个闭环钉在 git 增量上：kickoff、评审计划与每个维度 reviewer prompt 都携带明确的改动文件清单。
+- **批量排行** — `ih iterate batch repoA repoB …` 顺序评审多个仓库，按严重度加权排出最差榜；单个仓库失败不会中断整批。
+- **定时评审** — `ih iterate schedule add "0 9 * * 1-5"` 注册 cron 任务，每日（UTC）自动跑 changed-only 快审（`--clean-ok`）；新增 vs 顽固 finding 经趋势库呈现。
+- **cron 调度守护进程** — `ih iterate cron start|stop|status|history` 管理执行定时任务的后台守护进程——启动一次后，定时评审无人值守持续运行，可查历史（`--limit` / `--json`）。
 
 ### 成本、资源与门禁
 
-| 能力 | 说明 |
-| --- | --- |
-| **成本透明** | token 用量按内置价格表换算为每轮/累计 USD（可按模型覆盖） |
-| **token 预算强制** | `token_budget` 在引擎层封顶整轮运行（超限硬停并转入收尾报告）；`iterate_review(operation="aggregate", dimension_usage=…, dimension_usage_io=…)` 审计各维度用量，把 reviewer 上报的累计 token 回传引擎成本表——上报 input/output 拆分的维度按精确单价计费、仅上报总量的按混合价估算——下一轮自动跳过已超限维度 |
-| **per-dimension 资源** | `iterate.config.yaml` 的 `dimension_resources` 支持按维度设置 `model` / `concurrency`（1–8）/ `token_budget`——security 用强模型、style-tests 用快模型；评审计划会携带到每次 reviewer 派发 |
-| **阈值门禁** | `thresholds.max_critical` / `max_high` / `max_medium` / `max_low`（全局或按维度）封顶最终报告中的发现数量——违规即把结论翻转为 `needs_revision`，并让 `ih iterate report` 退出码失败（`threshold gate: FAIL`） |
-| **CLI 校验执行器** | `ih iterate validate "<command>"` 在 shell 中以一次性方式运行预配置校验命令，输出 `allowed` / `reject_reason` / `exit_code`——适合在 CI 里编排防御式 pre/post-check，与工具层共用同一执行器 |
-| **会话列表** | `ih iterate sessions` 列出已存会话（summary / model / 时间戳 / 消息数，`--limit` / `--json`），再用 `ih iterate resume --session <id>` 精确续接——不必记住上次跑的是哪次 |
-| **评审模板** | `review` / `run` 支持 `--template`：在 `standard`（默认）、`strict`（保守、安全优先）与 `quick`（只看影响面）三种评审提示词模板间切换 |
+- **成本透明** — token 用量按内置价格表换算为每轮/累计 USD（可按模型覆盖）。
+- **token 预算强制** — `token_budget` 在引擎层封顶整轮运行（超限硬停并转入收尾报告）；`iterate_review(operation="aggregate", dimension_usage=…, dimension_usage_io=…)` 审计各维度用量，把 reviewer 上报的累计 token 回传引擎成本表——上报 input/output 拆分的维度按精确单价计费、仅上报总量的按混合价估算——下一轮自动跳过已超限维度。
+- **per-dimension 资源** — `iterate.config.yaml` 的 `dimension_resources` 支持按维度设置 `model` / `concurrency`（1–8）/ `token_budget`——security 用强模型、style-tests 用快模型；评审计划会携带到每次 reviewer 派发。
+- **阈值门禁** — `thresholds.max_critical` / `max_high` / `max_medium` / `max_low`（全局或按维度）封顶最终报告中的发现数量——违规即把结论翻转为 `needs_revision`，并让 `ih iterate report` 退出码失败（`threshold gate: FAIL`）。
+- **CLI 校验执行器** — `ih iterate validate "<command>"` 在 shell 中以一次性方式运行预配置校验命令，输出 `allowed` / `reject_reason` / `exit_code`——适合在 CI 里编排防御式 pre/post-check，与工具层共用同一执行器。
+- **会话列表** — `ih iterate sessions` 列出已存会话（summary / model / 时间戳 / 消息数，`--limit` / `--json`），再用 `ih iterate resume --session <id>` 精确续接——不必记住上次跑的是哪次。
+- **评审模板** — `review` / `run` 支持 `--template`：在 `standard`（默认）、`strict`（保守、安全优先）与 `quick`（只看影响面）三种评审提示词模板间切换。
 
 ### Onboarding、安全与配置
 
-| 能力 | 说明 |
-| --- | --- |
-| **检测式 init** | `ih iterate init` 探测项目标记文件（package.json / pyproject / go.mod / Cargo.toml / …），基于真实证据推断测试命令，推荐评审维度（前端依赖解锁 `frontend-backend` / `ui-ux`），预览 yaml 并确认后才写入；TUI 内 `/iterate init` 同效 |
-| **模型驱动 onboarding** | `ih iterate onboard` 串联凭证门禁 → 检测证据 → 模型扫描 → `ITERATE.md` 知识库（AI/用户分区标记）+ manifest 指纹；`refresh` 重采指纹、`reonboard` 保留手写区重扫；每次 kickoff 注入知识库并检测漂移——产物与 skill 生态字节兼容。TUI onboard 的指纹会在下一次 review/run 自动补录，无需手动 `refresh` |
-| **个性化向导** | `ih iterate personalize` 走完 skill 同款 9 类（禁区、风险区、已知意图、维度定制、修复优先级、禁止修复方式、注意点、代码约定、补充验证命令）：结构化规则写入 `iterate.config.yaml`（禁区同时由内核权限层强制拦截），自由文本写入 `ITERATE.md` 用户区，每次 kickoff 附带约束；补充命令先过严格白名单再合并进 `validation.commands` |
-| **安全边界代码化** | 设置中的 `protected_paths` 与 `forbidden_fix_patterns` 自动装配进权限层（deny 路径规则 + 写载荷正则）；验证命令走精确匹配白名单 |
-| **pre-commit 钩子** | `ih iterate hook install` 写入带标记的托管 `.git/hooks/pre-commit`：提交前跑 1 轮 changed-only 评审并按 `--fail-on` 严重度门禁；拒绝覆盖第三方钩子，可用 `ITERATE_SKIP_HOOK=1` / `--no-verify` 跳过 |
-| **维度 doctor** | `ih iterate doctor` 一条命令检查整个维度体系：内置 canonical 定义 vs harness 内部常量 vs 你的 `iterate.config.yaml`（未知维度键、惰性的资源/门禁条目、超出启用集的个性化引用）；发现漂移退出码 1，可直接做 CI 门禁 |
-| **定时评审时区** | `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` 按本地时区解释 cron（存储为 UTC 标准化时间），"每天 9 点"就是你所在地的 9 点 |
+- **检测式 init** — `ih iterate init` 探测项目标记文件（package.json / pyproject / go.mod / Cargo.toml / …），基于真实证据推断测试命令，推荐评审维度（前端依赖解锁 `frontend-backend` / `ui-ux`），预览 yaml 并确认后才写入；TUI 内 `/iterate init` 同效。
+- **模型驱动 onboarding** — `ih iterate onboard` 串联凭证门禁 → 检测证据 → 模型扫描 → `ITERATE.md` 知识库（AI/用户分区标记）+ manifest 指纹；`refresh` 重采指纹、`reonboard` 保留手写区重扫；每次 kickoff 注入知识库并检测漂移——产物与 skill 生态字节兼容。TUI onboard 的指纹会在下一次 review/run 自动补录，无需手动 `refresh`。
+- **个性化向导** — `ih iterate personalize` 走完 skill 同款 9 类（禁区、风险区、已知意图、维度定制、修复优先级、禁止修复方式、注意点、代码约定、补充验证命令）：结构化规则写入 `iterate.config.yaml`（禁区同时由内核权限层强制拦截），自由文本写入 `ITERATE.md` 用户区，每次 kickoff 附带约束；补充命令先过严格白名单再合并进 `validation.commands`。
+- **安全边界代码化** — 设置中的 `protected_paths` 与 `forbidden_fix_patterns` 自动装配进权限层（deny 路径规则 + 写载荷正则）；验证命令走精确匹配白名单。
+- **pre-commit 钩子** — `ih iterate hook install` 写入带标记的托管 `.git/hooks/pre-commit`：提交前跑 1 轮 changed-only 评审并按 `--fail-on` 严重度门禁；拒绝覆盖第三方钩子，可用 `ITERATE_SKIP_HOOK=1` / `--no-verify` 跳过。
+- **维度 doctor** — `ih iterate doctor` 一条命令检查整个维度体系：内置 canonical 定义 vs harness 内部常量 vs 你的 `iterate.config.yaml`（未知维度键、惰性的资源/门禁条目、超出启用集的个性化引用）；发现漂移退出码 1，可直接做 CI 门禁。
+- **定时评审时区** — `ih iterate schedule add "0 9 * * 1-5" --timezone Asia/Shanghai` 按本地时区解释 cron（存储为 UTC 标准化时间），"每天 9 点"就是你所在地的 9 点。
 
 ### 记录与双模式
 
-| 能力 | 说明 |
-| --- | --- |
-| **决策日志** | append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘 |
-| **项目知识** | `ITERATE.md` 项目知识 + 按项目隔离的 9 类结构化个性化数据 |
-| **双模式架构** | `task_mode`（`code` / `iterate`）与 `permission_mode` 正交：`iterate` 保留 1.x 审查/修复闭环，`code` 为通用编程 agent 模式、叠加防御式内核——CLI 用 `--task-mode`，TUI 按 Tab |
-| **防御式内核（code 模式）** | 原子事务（快照 → 失败自动回滚）、不变量守护（`invariants.ensure` + `invariants.commands`，无段时回退 `validation.commands`；命令精确匹配、拒绝 shell 元字符）与假设审计（`record_assumption` → 决策日志）——全部由代码机械强制 |
-| **worker 防御内核继承** | `--task-mode` 经 CLI → AppState → `agent_tool` → subprocess backend 全链路穿透（设计 §20.5）：code 模式子代理以同一防御式内核运行 |
+- **决策日志** — append-only `.iterate/decision-log.jsonl`：每轮、每次修复、验证与分诊决策全部落盘。
+- **项目知识** — `ITERATE.md` 项目知识 + 按项目隔离的 9 类结构化个性化数据。
+- **双模式架构** — `task_mode`（`code` / `iterate`）与 `permission_mode` 正交：`iterate` 保留 1.x 审查/修复闭环，`code` 为通用编程 agent 模式、叠加防御式内核——CLI 用 `--task-mode`，TUI 按 Tab。
+- **防御式内核（code 模式）** — 原子事务（快照 → 失败自动回滚）、不变量守护（`invariants.ensure` + `invariants.commands`，无段时回退 `validation.commands`；命令精确匹配、拒绝 shell 元字符）与假设审计（`record_assumption` → 决策日志）——全部由代码机械强制。
+- **worker 防御内核继承** — `--task-mode` 经 CLI → AppState → `agent_tool` → subprocess backend 全链路穿透（设计 §20.5）：code 模式子代理以同一防御式内核运行。
 
 ## 🔧 七个 iterate 工具
 
