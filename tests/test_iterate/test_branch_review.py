@@ -168,12 +168,20 @@ def test_worktree_fallback_on_dirty_tree(tmp_path, monkeypatch, capsys):
 
     prev = cli._ensure_review_branch("feature-x")
     out = capsys.readouterr().out
-    assert prev == str(tmp_path)  # cwd was changed; caller must restore it
+    assert prev is not None
+    assert prev.prev_cwd == str(tmp_path)  # cwd was changed; caller restores it
+    assert prev.worktree_path is not None
     assert Path.cwd() != tmp_path  # now inside the linked worktree
     assert "Created isolated worktree for branch feature-x" in out
 
     # The linked worktree must hold the target branch checked out.
     assert _current_branch(Path.cwd()) == "feature-x"
+
+    # restore() chdirs back and removes the clean worktree (no stale linked
+    # worktrees left behind in .git/worktrees after a review run).
+    prev.restore()
+    assert Path.cwd() == tmp_path
+    assert not prev.worktree_path.exists()
 
 
 def test_missing_branch_raises_exit(tmp_path, monkeypatch, capsys):

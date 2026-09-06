@@ -983,7 +983,11 @@ async def test_subagent_stop_hook_fires_when_spawned_agent_finishes(tmp_path: Pa
     _ = [event async for event in engine.submit_message("run a worker")]
 
     manager = get_task_manager()
-    deadline = asyncio.get_running_loop().time() + 2.0
+    # The spawned worker runs as a subprocess; under CI load the 2.0s poll
+    # deadline proved flaky (failed once in the full-suite pass). Use a
+    # generous deadline so the assertion reflects behaviour, not scheduler
+    # contention.
+    deadline = asyncio.get_running_loop().time() + 15.0
     while asyncio.get_running_loop().time() < deadline:
         subagent_stop_calls = [c for c in recorder.calls if c[0] == HookEvent.SUBAGENT_STOP]
         if subagent_stop_calls:

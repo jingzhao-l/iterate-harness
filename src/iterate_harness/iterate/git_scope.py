@@ -21,6 +21,12 @@ MAX_CHANGED_FILES = 200
 #: Timeout for every git subprocess call.
 _GIT_TIMEOUT_SECONDS = 15
 
+#: Git config switches prepended to every porcelain-reading call. Without
+#: ``core.quotepath=false`` git quotes non-ASCII paths with C-style octal
+#: escapes (``"\\346\\226\\207..."``), so a Chinese filename would never
+#: resolve against disk and would silently drop out of the changed-file list.
+_GIT_PORCELAIN_OPTS = ("-c", "core.quotepath=false")
+
 #: A ref may only contain word chars, ``/``, ``.``, ``-``, ``_``, ``~`` and
 #: ``^`` (relative refs like ``HEAD~3`` / ``HEAD^2``) and must start with an
 #: alphanumeric (never ``-``, which git would parse as an option).
@@ -60,10 +66,15 @@ def detect_repo_root(cwd: str | Path) -> Path | None:
 
 
 def _run_git(root: Path, *args: str) -> str | None:
-    """Run git in ``root``; return stdout or ``None`` on any failure."""
+    """Run git in ``root``; return stdout or ``None`` on any failure.
+
+    ``core.quotepath=false`` is forced on every call so porcelain output
+    (``--name-only`` / ``--porcelain``) emits raw UTF-8 paths instead of
+    C-style octal-quoted names for non-ASCII files.
+    """
     try:
         proc = subprocess.run(
-            ["git", *args],
+            ["git", *_GIT_PORCELAIN_OPTS, *args],
             cwd=str(root),
             capture_output=True,
             text=True,

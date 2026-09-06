@@ -13,8 +13,11 @@ Architecture summary
 * :func:`get_teammate_context` / :func:`set_teammate_context` – ContextVar
   accessors so any code running inside a teammate task can discover its own
   identity without explicit argument threading.
-* :func:`start_in_process_teammate` – the actual coroutine that sets up
-  context, drives the query engine, and cleans up on exit.
+* :func:`build_teammate_query_context` – assembles the real engine wiring
+  (API client / tool registry / permission checker / system prompt) from the
+  spawn config so an in-process teammate runs the actual agent loop.
+* :func:`start_in_process_teammate` – the coroutine that sets up context,
+  builds the query context, drives the query engine, and cleans up on exit.
 * :class:`InProcessBackend` – implements
   :class:`~iterate_harness.swarm.types.TeammateExecutor` and manages the dict of
   live asyncio Tasks.
@@ -189,6 +192,86 @@ def set_teammate_context(ctx: TeammateContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Query-context construction (real agent loop, not a stub)
+# ---------------------------------------------------------------------------
+
+
+def build_teammate_query_context(config: TeammateSpawnConfig) -> Any | None:
+    """Build a real :class:`~iterate_harness.engine.query.QueryContext` for an
+    in-process teammate from its spawn config + the current settings.
+
+    This is what makes in-process teammates actually *work*: previously they
+    fell back to a "stub run" (log + sleep) whenever no pre-built context was
+    passed in, so an ``in_process`` teammate could never execute its prompt.
+    Now the backend assembles the standard engine wiring (API client, tool
+    registry, permission checker, system prompt) so ``_run_query_loop`` drives
+    the full agent loop — including the ``code`` defensive kernel when the
+    leader spawned a ``code`` worker (design §20.5 task-mode inheritance).
+
+    Returns ``None`` (never raises) when the environment cannot supply one —
+    missing auth, unreadable settings, or an unsupported install — in which
+    case the caller keeps the stub fallback so tests and direct invocations
+    still behave. The failure is logged once so the silent-stub path stays
+    diagnosable.
+    """
+    from pathlib import Path
+
+    from iterate_harness.config.settings import load_settings
+    from iterate_harness.engine.query import QueryContext
+    from iterate_harness.permissions import build_permission_checker
+    from iterate_harness.prompts import build_runtime_system_prompt
+    from iterate_harness.tools import create_default_tool_registry
+    from iterate_harness.ui.runtime import _resolve_api_client_from_settings
+
+    try:
+        settings = load_settings()
+        if config.model:
+            settings = settings.merge_cli_overrides(model=config.model)
+        api_client = _resolve_api_client_from_settings(settings)
+        cwd = str(Path(config.cwd).expanduser().resolve())
+        system_prompt = config.system_prompt or build_runtime_system_prompt(
+            settings,
+            cwd=cwd,
+            latest_user_prompt=config.prompt,
+            # Teammate spawns happen inside the leader's turn; skip the memory
+            # scan here to keep spawn cheap and non-blocking.
+            include_project_memory=False,
+        )
+        context = QueryContext(
+            api_client=api_client,
+            tool_registry=create_default_tool_registry(),
+            permission_checker=build_permission_checker(settings),
+            cwd=Path(cwd),
+            model=settings.model,
+            system_prompt=system_prompt,
+            max_tokens=settings.max_tokens,
+            context_window_tokens=settings.context_window_tokens,
+            auto_compact_threshold_tokens=settings.auto_compact_threshold_tokens,
+            max_turns=settings.max_turns,
+            tool_metadata={},
+        )
+        if config.task_mode == "code":
+            # Defensive kernel inheritance (design §20.5): a ``code``-mode
+            # leader spawns ``code`` workers so each subagent enforces the same
+            # per-action invariant guard + atomic rollback.
+            from iterate_harness.defensive.kernel import DefensiveKernel
+            from iterate_harness.iterate.config_loader import load_effective_config
+
+            context.defensive_kernel = DefensiveKernel(
+                Path(cwd), load_effective_config(cwd)
+            )
+        return context
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - defensive builder
+        logger.warning(
+            "[in_process] %s: could not build teammate QueryContext; "
+            "falling back to stub run: %s",
+            config.name,
+            exc,
+        )
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Agent execution loop
 # ---------------------------------------------------------------------------
 
@@ -225,9 +308,11 @@ async def start_in_process_teammate(
         Dual-signal abort controller for this teammate.
     query_context:
         Optional pre-built
-        :class:`~iterate_harness.engine.query.QueryContext`.  When *None* this
-        function runs a stub that respects the cancel signals so tests and
-        direct invocations still work.
+        :class:`~iterate_harness.engine.query.QueryContext`. When *None* this
+        function falls back to :func:`build_teammate_query_context` — and only
+        if THAT is also unavailable (missing auth / unreadable settings) does
+        it run a stub that respects the cancel signals, so tests and direct
+        invocations still work without an API key.
     """
     ctx = TeammateContext(
         agent_id=agent_id,
@@ -249,14 +334,21 @@ async def start_in_process_teammate(
     try:
         ctx.status = "running"
 
+        if query_context is None:
+            # Build the real engine wiring from the spawn config so the
+            # teammate executes its prompt instead of idling.
+            query_context = build_teammate_query_context(config)
+
         if query_context is not None:
             await _run_query_loop(query_context, config, ctx, mailbox)
         else:
-            # Minimal stub: log that we received the prompt and honour cancel.
-            # Replace this branch with a real QueryContext builder once the
-            # harness wires up the full engine for in-process teammates.
+            # No usable QueryContext (missing auth / broken settings): the
+            # teammate cannot do real work. Log the reason and honour cancel
+            # signals so the caller sees a clean, diagnosable no-op rather
+            # than a fake transcript.
             logger.info(
-                "[in_process] %s: no query_context supplied — stub run for prompt: %.80s",
+                "[in_process] %s: no query_context available — running "
+                "cancel-aware stub for prompt: %.80s",
                 agent_id,
                 config.prompt,
             )

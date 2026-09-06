@@ -72,6 +72,18 @@ class TestCollectChangedFiles:
         assert "base.py" not in files  # rename contributes only the new path
         assert "new.py" in files
 
+    def test_collects_non_ascii_filenames(self, git_repo):
+        # Git quotes non-ASCII paths with C-style octal escapes by default
+        # (core.quotepath=true). Without `-c core.quotepath=false` the quoted
+        # token never resolves against disk and the file silently drops out of
+        # the changed list — a real-world gap for Chinese filenames.
+        (git_repo / "文件.py").write_text("x = 1\n", encoding="utf-8")  # modified
+        (git_repo / "中文名.txt").write_text("hi\n", encoding="utf-8")  # untracked
+        files = git_scope.collect_changed_files(git_repo)
+        assert "文件.py" in files
+        assert "中文名.txt" in files
+        assert not any('"' in f or "\\" in f for f in files)
+
     def test_cap_limits_result_size(self, git_repo, monkeypatch):
         monkeypatch.setattr(git_scope, "MAX_CHANGED_FILES", 2)
         for index in range(5):

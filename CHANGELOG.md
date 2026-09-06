@@ -2,6 +2,63 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.2.0] - 2026-09-06
+
+### Added
+
+- **in-process teammates now run the real agent loop**（`swarm/in_process.py`）：
+  新增 `build_teammate_query_context`，按 `TeammateSpawnConfig` + 当前 settings
+  组装完整引擎接线（API client / tool registry / permission checker / system
+  prompt），`InProcessBackend.spawn` 自动装配并交给 `_run_query_loop` 执行——
+  此前 in-process 队友在无预置 context 时只会跑「日志 + sleep」的 stub，任务
+  从未真正执行。`code` 模式的防御内核（design §20.5）随 `task_mode` 一并继承；
+  仅在缺 API key / settings 不可读时回退为取消感知的 no-op（保留测试与直接调用
+  的无密钥行为），并显式记录回退原因。新增
+  `tests/test_swarm/test_in_process.py` 三组用例（完整接线 / 防御内核继承 /
+  无密钥降级）。
+
+### Fixed
+
+- **changed-only 审查漏掉非 ASCII 文件名**（`iterate/git_scope.py`）：git 默认
+  `core.quotepath=true` 会用 C 风格八进制转义引用中文等非 ASCII 路径
+  （`"\346\226\207..."`），转义串无法对回磁盘文件，导致该文件静默掉出
+  `--changed` 变更清单。所有 porcelain 读取现强制 `-c core.quotepath=false`
+  输出原始 UTF-8 路径；新增回归测试
+  `test_collects_non_ascii_filenames`。
+- **deferred 架构清单漏读历史 report 形状**（`iterate/decision_log.py`）：
+  `extract_deferred_architectural` 只认 `findings` 键，改用共享的
+  `findings_from_report` 兼容 `topFindings`/`notableFindings`/嵌套 `summary`
+  三种历史布局，resume 时不再丢遗留的架构级待办；新增回归测试。
+- **`--branch` 隔离 worktree 泄漏**（`cli.py`）：`_ensure_review_branch` 的回退
+  worktree 用完从未清理，会在 `.git/worktrees` 里不断堆积。返回值改为
+  `_BranchSwitch`，调用方 `finally` 里 `restore()` 恢复 cwd 并按「仅当干净才
+  `git worktree remove`（绝不 `--force` 丢弃未提交改动）否则打印移除提示」清理。
+- **两个环境相关 flaky 测试**：`test_subagent_stop_hook...` 轮询期限 2s →
+  15s、`test_task_and_todo_flow_across_registry` 输出等待 2s → 20s，消除全量
+  suite 并行负载下的偶发失败。
+- **WebUI 冗余收敛条件**（`frontend/web/src/store.ts`）：`notifyRunEnd` 的
+  `converged || converged === true` 恒等于 `converged`，简化。
+- **agent shell 执行不再加载用户 rc（login-hook 秒级开销，极端负载下
+  直接打穿 5s 任务超时）**（`utils/shell.py`）：`bash` 分支默认改传
+  `--noprofile --norc`，子进程直接继承父进程（ih 启动时已解析）的完整
+  环境——`~/.bash_profile`/`~/.bashrc` 里的 conda init / nvm / pyenv 等
+  hook 不再为**每一条** agent 命令（bash 工具、task manager、hook、cron、
+  bridge、remote trigger）重复付费。实测本机单条命令从 **9.9s 降到 0.009s**
+  （~1000×）。需要旧行为可用 `ITERATE_HARNESS_SHELL_LOAD_RC=1` 逃生阀
+  恢复 `-lc`。同步收紧 `script` PTY 包装、`_bash_is_usable` 探测与 Windows
+  git-bash 分支，新增逃生阀测试。
+- **真实子进程测试预算过紧**（`test_manager.py` / `test_task_tools.py`）：
+  task 等待统一从 5s/2s 放宽到 30s，消除高负载 CI 上的偶发超时失败
+  （修复后这些文件 **40 passed in 5.5s**）。
+
+### Verification
+
+- 全量 pytest **2065 passed, 6 skipped**；ruff clean；mypy strict clean
+  （246 源文件）；npm 包装器 `bootstrap.test.js` 36 passed；前端
+  `tsc --noEmit` + vitest 13 passed。
+- 版本号在 `__init__.py` / `npm/package.json` / `frontend/web/package.json` /
+  `CHANGELOG.md` 同步至 2.2.0。
+
 ## [2.1.1] - 2026-09-06
 
 ### Fixed

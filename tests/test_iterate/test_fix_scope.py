@@ -77,6 +77,44 @@ class TestExtractDeferredArchitectural:
         )
         assert extract_deferred_architectural(tmp_path) == []
 
+    def test_reads_legacy_trimmed_report_shapes(self, tmp_path):
+        # Producers have recorded report findings under different keys across
+        # versions (topFindings / notableFindings / nested summary). Deferred
+        # architectural extraction must see through every shape, not only the
+        # canonical ``findings`` key.
+        append_entry(
+            tmp_path,
+            make_entry(
+                entry_type="report",
+                round_number=1,
+                data={
+                    "verdict": "revise",
+                    "topFindings": [
+                        {"file": "legacy.py", "dimension": "security", "summary": "trimmed", "is_atomic": False},
+                    ],
+                },
+            ),
+        )
+        deferred = extract_deferred_architectural(tmp_path)
+        assert [d["file"] for d in deferred] == ["legacy.py"]
+
+        append_entry(
+            tmp_path,
+            make_entry(
+                entry_type="report",
+                round_number=2,
+                data={
+                    "verdict": "revise",
+                    "summary": {
+                        "findings": [
+                            {"file": "nested.py", "dimension": "security", "summary": "nested", "is_atomic": False},
+                        ]
+                    },
+                },
+            ),
+        )
+        assert extract_deferred_architectural(tmp_path)[0]["file"] == "nested.py"
+
     def test_empty_when_no_log(self, tmp_path):
         assert extract_deferred_architectural(tmp_path) == []
 

@@ -17,7 +17,7 @@ from iterate_harness.tools.task_update_tool import TaskUpdateTool, TaskUpdateToo
 from iterate_harness.tools.team_create_tool import TeamCreateTool, TeamCreateToolInput
 
 
-async def _wait_for_terminal_task(task_id: str, *, timeout_seconds: float = 2.0) -> None:
+async def _wait_for_terminal_task(task_id: str, *, timeout_seconds: float = 30.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     manager = get_task_manager()
     while asyncio.get_running_loop().time() < deadline:

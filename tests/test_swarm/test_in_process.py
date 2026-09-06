@@ -9,6 +9,7 @@ import pytest
 from iterate_harness.swarm.in_process import (
     InProcessBackend,
     TeammateContext,
+    build_teammate_query_context,
     get_teammate_context,
     set_teammate_context,
 )
@@ -68,6 +69,97 @@ async def test_set_and_get_teammate_context():
     ctx = TeammateContext(agent_id="x@y", agent_name="x", team_name="y")
     set_teammate_context(ctx)
     assert get_teammate_context() is ctx
+
+
+# ---------------------------------------------------------------------------
+# build_teammate_query_context (real agent wiring, not a stub)
+# ---------------------------------------------------------------------------
+
+
+def test_build_query_context_resolves_full_wiring(monkeypatch, tmp_path):
+    """With auth available the teammate gets a real QueryContext carrying the
+    spawn model, cwd, tool registry, and permission checker."""
+
+    class _FakeApiClient:
+        pass
+
+    monkeypatch.setattr(
+        "iterate_harness.ui.runtime._resolve_api_client_from_settings",
+        lambda settings: _FakeApiClient(),
+    )
+    monkeypatch.setattr(
+        "iterate_harness.config.settings.Settings.materialize_active_profile",
+        lambda self: self,
+    )
+    config = TeammateSpawnConfig(
+        name="worker",
+        team="team",
+        prompt="do the thing",
+        cwd=str(tmp_path),
+        parent_session_id="s",
+        model="claude-sonnet",
+    )
+    context = build_teammate_query_context(config)
+    assert context is not None
+    assert context.model == "claude-sonnet"
+    assert str(context.cwd) == str(tmp_path)
+    assert context.system_prompt
+    assert context.tool_registry.get("bash") is not None
+    assert context.max_tokens > 0
+
+
+def test_build_query_context_task_mode_code_inherits_kernel(monkeypatch, tmp_path):
+    class _FakeApiClient:
+        pass
+
+    monkeypatch.setattr(
+        "iterate_harness.ui.runtime._resolve_api_client_from_settings",
+        lambda settings: _FakeApiClient(),
+    )
+    monkeypatch.setattr(
+        "iterate_harness.config.settings.Settings.materialize_active_profile",
+        lambda self: self,
+    )
+    config = TeammateSpawnConfig(
+        name="worker",
+        team="team",
+        prompt="fix it",
+        cwd=str(tmp_path),
+        parent_session_id="s",
+        task_mode="code",
+    )
+    context = build_teammate_query_context(config)
+    assert context is not None
+    # A code-mode worker runs the defensive kernel (design §20.5).
+    assert context.defensive_kernel is not None
+
+
+def test_build_query_context_returns_none_without_auth(monkeypatch, tmp_path):
+    """Missing auth must degrade to None (stub fallback) instead of raising."""
+    import builtins
+
+    def _raise_system_exit(_settings):
+        raise SystemExit(1)
+
+    monkeypatch.setattr(
+        "iterate_harness.ui.runtime._resolve_api_client_from_settings",
+        _raise_system_exit,
+    )
+    monkeypatch.setattr(
+        "iterate_harness.config.settings.Settings.materialize_active_profile",
+        lambda self: self,
+    )
+    config = TeammateSpawnConfig(
+        name="worker",
+        team="team",
+        prompt="run",
+        cwd=str(tmp_path),
+        parent_session_id="s",
+    )
+    context = build_teammate_query_context(config)
+    assert context is None
+    # No stray writes to the real stderr from the failed builder.
+    del builtins
 
 
 # ---------------------------------------------------------------------------

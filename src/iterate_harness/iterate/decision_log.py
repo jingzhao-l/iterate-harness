@@ -197,9 +197,12 @@ def extract_deferred_architectural(project_root: str | Path) -> list[dict[str, A
         if entry.type not in ("review_result", "report"):
             continue
         data = entry.data if isinstance(entry.data, dict) else {}
-        findings = data.get("findings")
-        if not isinstance(findings, list):
-            continue
+        # Reuse the shared legacy-shape extraction so deferred architectural
+        # findings survive regardless of which report layout the producer
+        # wrote (full ``findings``, trimmed ``topFindings``/``notableFindings``,
+        # or a nested ``summary`` sub-object) — without it a trimmed/nested
+        # report would silently contribute no deferred list.
+        findings = findings_from_report(data)
         deferred: list[dict[str, Any]] = []
         for finding in findings:
             if not isinstance(finding, dict) or finding.get("is_atomic") is True:

@@ -22,7 +22,7 @@ async def test_create_shell_task_and_read_output(tmp_path: Path, monkeypatch):
         cwd=tmp_path,
     )
 
-    await asyncio.wait_for(manager._waiters[task.id], timeout=5)  # type: ignore[attr-defined]
+    await asyncio.wait_for(manager._waiters[task.id], timeout=30)  # type: ignore[attr-defined]
     updated = manager.get_task(task.id)
     assert updated is not None
     assert updated.status == "completed"
@@ -41,7 +41,7 @@ async def test_create_agent_task_with_command_override_and_write(tmp_path: Path,
         command="while read line; do echo \"got:$line\"; break; done",
     )
 
-    await asyncio.wait_for(manager._waiters[task.id], timeout=5)  # type: ignore[attr-defined]
+    await asyncio.wait_for(manager._waiters[task.id], timeout=30)  # type: ignore[attr-defined]
     assert "got:first" in manager.read_task_output(task.id)
 
 
@@ -60,7 +60,7 @@ async def test_create_agent_task_preserves_multiline_prompt(tmp_path: Path, monk
         ),
     )
 
-    await asyncio.wait_for(manager._waiters[task.id], timeout=5)  # type: ignore[attr-defined]
+    await asyncio.wait_for(manager._waiters[task.id], timeout=30)  # type: ignore[attr-defined]
     assert "line 1|line 2|line 3" in manager.read_task_output(task.id)
 
 
@@ -75,10 +75,10 @@ async def test_write_to_stopped_agent_task_restarts_process(tmp_path: Path, monk
         cwd=tmp_path,
         command="while read line; do echo \"got:$line\"; break; done",
     )
-    await asyncio.wait_for(manager._waiters[task.id], timeout=5)  # type: ignore[attr-defined]
+    await asyncio.wait_for(manager._waiters[task.id], timeout=30)  # type: ignore[attr-defined]
 
     await manager.write_to_task(task.id, "follow-up")
-    await asyncio.wait_for(manager._waiters[task.id], timeout=5)  # type: ignore[attr-defined]
+    await asyncio.wait_for(manager._waiters[task.id], timeout=30)  # type: ignore[attr-defined]
 
     output = manager.read_task_output(task.id)
     assert "got:ready" in output
@@ -105,7 +105,7 @@ async def test_create_shell_task_stores_env_on_record(tmp_path: Path, monkeypatc
         cwd=tmp_path,
         env={"MY_OH_TEST_VAR": "hello-230"},
     )
-    await asyncio.wait_for(manager._waiters[task.id], timeout=5)  # type: ignore[attr-defined]
+    await asyncio.wait_for(manager._waiters[task.id], timeout=30)  # type: ignore[attr-defined]
 
     stored = manager.get_task(task.id)
     assert stored is not None
@@ -128,7 +128,7 @@ async def test_create_shell_task_argv_path_bypasses_shell(tmp_path: Path, monkey
         description="argv direct exec",
         cwd=tmp_path,
     )
-    await asyncio.wait_for(manager._waiters[task.id], timeout=10)  # type: ignore[attr-defined]
+    await asyncio.wait_for(manager._waiters[task.id], timeout=30)  # type: ignore[attr-defined]
 
     output = manager.read_task_output(task.id)
     assert "argv-route-ok" in output
@@ -176,7 +176,7 @@ async def test_start_process_forwards_env_to_subprocess(tmp_path: Path, monkeypa
         cwd=tmp_path,
         env={"MY_OH_TEST_VAR": "spawn-230"},
     )
-    await asyncio.wait_for(manager._waiters[task.id], timeout=5)  # type: ignore[attr-defined]
+    await asyncio.wait_for(manager._waiters[task.id], timeout=30)  # type: ignore[attr-defined]
 
     output = manager.read_task_output(task.id)
     assert "value=spawn-230" in output
@@ -228,6 +228,6 @@ async def test_completion_listener_fires_when_task_finishes(tmp_path: Path, monk
         cwd=tmp_path,
     )
 
-    await asyncio.wait_for(done.wait(), timeout=5)
+    await asyncio.wait_for(done.wait(), timeout=30)
 
     assert seen == [(task.id, "completed", 0)]

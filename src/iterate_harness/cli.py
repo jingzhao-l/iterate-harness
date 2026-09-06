@@ -10,6 +10,7 @@ import shutil
 import sys
 import threading
 from contextlib import redirect_stderr
+from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
 from types import ModuleType
@@ -858,13 +859,15 @@ def _current_git_branch(cwd: str | Path) -> str | None:
     return branch if branch and branch != "HEAD" else None
 
 
-def _ensure_review_branch(branch: str) -> str | None:
+def _ensure_review_branch(branch: str) -> _BranchSwitch | None:
     """Switch to ``branch`` before a review/run when it differs from the current one.
 
     Prefers a plain ``git checkout``; when the working tree is dirty (checkout
     fails) it falls back to an isolated ``git worktree add`` and chdirs into
-    it. Returns the previous working directory when the cwd changed (caller
-    must restore it in ``finally``), otherwise ``None``.
+    it. Returns a :class:`_BranchSwitch` the caller must ``restore()`` in a
+    ``finally`` (restores the cwd and — when the isolated worktree is still
+    clean — removes it so stale linked worktrees never pile up in
+    ``.git/worktrees``), or ``None`` when nothing changed.
     """
     import os
     import subprocess
@@ -910,7 +913,64 @@ def _ensure_review_branch(branch: str) -> str | None:
         raise typer.Exit(1)
     os.chdir(worktree_path)
     print(f"Created isolated worktree for branch {branch} at {worktree_path} — reviewing there.")
-    return str(cwd)
+    return _BranchSwitch(prev_cwd=str(cwd), worktree_path=worktree_path)
+
+
+@dataclass
+class _BranchSwitch:
+    """Undo context for a ``--branch`` review run that created an isolated worktree.
+
+    ``restore()`` chdirs back to the previous working directory, then tries to
+    remove the isolated worktree **only when it is still clean** (a normal-mode
+    run commits its fixes to ``branch`` — a plain ``git worktree remove`` then
+    succeeds because the fix batch was committed, and the branch retains the
+    history; ``--force`` is never used so uncommitted model edits are never
+    silently discarded). A dirty worktree is left in place with an explicit
+    removal hint instead of being lost.
+    """
+
+    prev_cwd: str | None
+    worktree_path: Path | None = None
+
+    def restore(self) -> None:
+        import os
+        import subprocess
+
+        if self.prev_cwd is not None:
+            os.chdir(self.prev_cwd)
+        if self.worktree_path is None:
+            return
+        try:
+            proc = subprocess.run(
+                ["git", "worktree", "remove", str(self.worktree_path)],
+                cwd=self.prev_cwd or str(self.worktree_path),
+                capture_output=True,
+                text=True,
+                timeout=_BRANCH_GIT_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(
+                f"Warning: could not remove review worktree {self.worktree_path} ({exc}); "
+                f"remove it manually with: git worktree remove {self.worktree_path}",
+                file=sys.stderr,
+            )
+            return
+        if proc.returncode != 0:
+            print(
+                f"Warning: review worktree {self.worktree_path} still has uncommitted "
+                "changes, so it was kept. Inspect it, then remove it with:\n"
+                f"  git worktree remove {self.worktree_path}",
+                file=sys.stderr,
+            )
+            return
+        try:
+            import shutil
+
+            shutil.rmtree(self.worktree_path.parent, ignore_errors=True)
+        except OSError:  # pragma: no cover - best-effort tempdir cleanup
+            pass
+        print(f"Removed isolated review worktree {self.worktree_path}.")
 
 
 def _run_headless(kickoff: str, branch: str | None = None) -> None:
@@ -1154,8 +1214,7 @@ def iterate_review(
         )
     finally:
         if prev_cwd is not None:
-            import os
-            os.chdir(prev_cwd)
+            prev_cwd.restore()
 
 
 @iterate_app.command("run")
@@ -1193,8 +1252,7 @@ def iterate_run(
         )
     finally:
         if prev_cwd is not None:
-            import os
-            os.chdir(prev_cwd)
+            prev_cwd.restore()
 
 
 @iterate_app.command("batch")

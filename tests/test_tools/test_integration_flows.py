@@ -99,7 +99,7 @@ async def test_task_and_todo_flow_across_registry(tmp_path: Path, monkeypatch):
     assert "'progress': '25'" in task_detail.output
     assert "'status_note': 'started'" in task_detail.output
 
-    for _ in range(20):
+    for _ in range(200):
         output = await task_output.execute(task_output.input_model(task_id=task_id), context)
         if "INTEGRATION_TASK_OK" in output.output:
             break

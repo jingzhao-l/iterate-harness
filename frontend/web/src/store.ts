@@ -224,7 +224,7 @@ function notifyRunEnd(chatStatus: ChatRunStatus | null): void {
   if (chatStatus?.error) {
     title = "iterate 运行失败";
     body = chatStatus.error;
-  } else if (chatStatus?.converged || chatStatus?.converged === true) {
+  } else if (chatStatus?.converged) {
     title = "iterate 已收敛";
     body = "迭代已收敛，所有目标问题均已被处理。";
   }
