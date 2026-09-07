@@ -2,6 +2,27 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.2.2] - 2026-09-07
+
+### Fixed
+
+- **Python 3.10 import 回归**（`state/store.py`）：`from typing import Unpack`
+  在 Python < 3.11 上不存在，而包声明 `requires-python = ">=3.10"`（npm 包装器
+  也接受 >= 3.10 的解释器）——任何 3.10 安装都会在导入期
+  `ImportError: cannot import name 'Unpack' from 'typing'` 崩溃（CI 3.10 矩阵
+  暴露，此前已连续失败）。改为版本守卫导入：3.11+ 用 `typing.Unpack`，3.10
+  回退 `typing_extensions.Unpack`；`typing-extensions==4.16.0` 作为显式锁定
+  运行时依赖加入 `pyproject.toml`（此前仅经 pydantic 传递可用）。本机
+  Python 3.10.10 实测 `AppStateStore.set()` 正常。新增
+  `tests/test_state/test_app_state.py` 3.10 路径回归用例。
+
+### Verification
+
+- 全量 pytest **2069 passed, 6 skipped**；ruff clean；mypy strict clean
+  （246 源文件）；Python 3.10.10 冒烟导入通过。
+- 版本号在 `__init__.py` / `npm/package.json` / `frontend/web/package.json` /
+  `CHANGELOG.md` 同步至 2.2.2。
+
 ## [2.2.1] - 2026-09-07
 
 ### Fixed

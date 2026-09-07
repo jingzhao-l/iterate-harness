@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Unpack
+
+# ``typing.Unpack`` only exists on Python 3.11+; the package supports 3.10
+# (requires-python = ">=3.10", npm wrapper resolves any interpreter >= 3.10),
+# so fall back to ``typing_extensions`` (guaranteed present via pydantic).
+if sys.version_info >= (3, 11):
+    from typing import Unpack
+else:  # pragma: no cover - exercised on Python 3.10 only
+    from typing_extensions import Unpack
 
 from iterate_harness.state.app_state import AppState, AppStateUpdates
 

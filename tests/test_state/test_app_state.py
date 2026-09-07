@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from iterate_harness.state.app_state import AppState
+from iterate_harness.state.store import AppStateStore
 
 
 def _make_state(**overrides) -> AppState:
@@ -99,3 +100,25 @@ def test_keybindings_default_factory_is_isolated_per_instance():
 def test_preseeded_keybindings_are_kept():
     state = _make_state(keybindings={"ctrl+t": "tasks"})
     assert state.keybindings == {"ctrl+t": "tasks"}
+
+
+def test_store_notifies_listeners_and_returns_updated_state():
+    """AppStateStore.set uses ``Unpack[AppStateUpdates]`` kwargs typing, which
+    on Python < 3.11 must resolve via typing_extensions — importing the store
+    module is itself the 3.10 compatibility regression guard."""
+    store = AppStateStore(_make_state())
+    observed: list[AppState] = []
+    store.subscribe(lambda state: observed.append(state))
+
+    updated = store.set(theme="light", mcp_connected=3)
+    assert updated is store.get()
+    assert store.get().theme == "light"
+    assert store.get().mcp_connected == 3
+    assert len(observed) == 1
+    assert observed[0].theme == "light"
+
+    # Unsubscribe stops notifications while get() still reflects the value.
+    unsubscribe = store.subscribe(lambda state: None)
+    unsubscribe()
+    store.set(theme="dark")
+    assert store.get().theme == "dark"
