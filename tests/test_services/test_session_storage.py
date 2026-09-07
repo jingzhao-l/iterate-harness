@@ -10,6 +10,7 @@ from iterate_harness.engine.messages import ConversationMessage, TextBlock
 from iterate_harness.services.session_storage import (
     export_session_markdown,
     get_project_session_dir,
+    list_session_snapshots,
     load_session_snapshot,
     save_session_snapshot,
 )
@@ -91,3 +92,42 @@ def test_load_session_snapshot_sanitizes_legacy_empty_assistant_messages(tmp_pat
     assert snapshot["message_count"] == 2
     assert [message["role"] for message in snapshot["messages"]] == ["user", "assistant"]
     assert snapshot["messages"][1]["content"][0]["text"] == "world"
+
+
+def test_list_session_snapshots_tolerates_corrupt_created_at(tmp_path: Path, monkeypatch):
+    """A foreign/corrupt session file with a non-numeric ``created_at`` must not
+    crash listing (mixed-type sort) or timestamp rendering."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    project = tmp_path / "repo"
+    project.mkdir()
+    target_dir = get_project_session_dir(project)
+
+    base = {
+        "cwd": str(project),
+        "model": "claude-test",
+        "system_prompt": "system",
+        "messages": [],
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+        "tool_metadata": {},
+    }
+    good = {**base, "session_id": "good", "created_at": 2.0, "summary": "good"}
+
+    # corrupt created_at as a human-readable string (the sort breaker)
+    string_ts = {**base, "session_id": "string", "created_at": "2026-09-05T00:00:00Z", "summary": "string"}
+
+    # None (missing) created_at
+    none_ts = {**base, "session_id": "none", "summary": "none"}
+
+    for sid, payload in (("good", good), ("string", string_ts), ("none", none_ts)):
+        (target_dir / f"session-{sid}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    sessions = list_session_snapshots(project, limit=10)
+    assert len(sessions) == 3
+    ids = {session["session_id"] for session in sessions}
+    assert ids == {"good", "string", "none"}
+    # All coerced to numeric epoch floats (no mixed-type sort crash).
+    for session in sessions:
+        assert isinstance(session["created_at"], float)
+    # Descending by created_at.
+    timestamps = [session["created_at"] for session in sessions]
+    assert timestamps == sorted(timestamps, reverse=True)

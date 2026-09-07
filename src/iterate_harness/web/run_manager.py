@@ -41,6 +41,12 @@ log = logging.getLogger(__name__)
 #: How long a permission request waits before it is auto-denied (seconds).
 _PERMISSION_TIMEOUT = 300.0
 
+#: How long a free-text question / select-menu request waits before it is
+#: auto-answered with the safe default (seconds). Mirrors the bounded wait in
+#: ``ui/backend_host._ask_question`` / ``_ask_permission`` so an unattended
+#: WebUI loop can never hang on an unanswered human-intervention request.
+_QUESTION_TIMEOUT = 300.0
+
 #: Max chat history entries returned by the REST endpoint.
 _HISTORY_LIMIT = 500
 
@@ -474,7 +480,23 @@ class RunManager:
             "run-state", {"state": "paused", "waitingFor": "user_prompt", "question": question}
         )
         try:
-            return await future
+            # Bounded wait like _permission_prompt / backend_host._ask_question:
+            # an unanswered plan-mode question must not hang the loop forever
+            # (the engine treats "" as "continue with the default answer").
+            try:
+                return await asyncio.wait_for(future, timeout=_QUESTION_TIMEOUT)
+            except asyncio.TimeoutError:
+                log.warning(
+                    "user prompt %s timed out after %.0fs; continuing with an empty answer",
+                    request_id,
+                    _QUESTION_TIMEOUT,
+                )
+                await self._publish_chat(
+                    "system",
+                    f"问题超时未答复（{_QUESTION_TIMEOUT:.0f}s），已按空答复继续。",
+                    kind="status",
+                )
+                return ""
         finally:
             async with self._lock:
                 self._request_registry.pop(request_id, None)
@@ -511,7 +533,24 @@ class RunManager:
             },
         )
         try:
-            return await future
+            # Bounded wait: on timeout fall back to the menu's first option,
+            # which is the documented Esc-cancel (safe default, "resume").
+            try:
+                return await asyncio.wait_for(future, timeout=_QUESTION_TIMEOUT)
+            except asyncio.TimeoutError:
+                fallback = str(options[0].get("value", "resume")) if options else "resume"
+                log.warning(
+                    "user select %s timed out after %.0fs; applying fallback %r",
+                    request_id,
+                    _QUESTION_TIMEOUT,
+                    fallback,
+                )
+                await self._publish_chat(
+                    "system",
+                    f"选择超时未答复（{_QUESTION_TIMEOUT:.0f}s），已按默认「{fallback}」继续。",
+                    kind="status",
+                )
+                return fallback
         finally:
             async with self._lock:
                 self._request_registry.pop(request_id, None)

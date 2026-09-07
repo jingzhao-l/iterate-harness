@@ -1380,8 +1380,8 @@ def iterate_sessions(
         sid = session.get("session_id", "?")
         try:
             from datetime import datetime, timezone
-            ts = datetime.fromtimestamp(created, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        except (OSError, ValueError):
+            ts = datetime.fromtimestamp(float(created), tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        except (OSError, ValueError, TypeError, OverflowError):
             ts = "unknown"
         print(f"  {i}. [{sid}] {summary}")
         print(f"     model={model}  messages={msg_count}  {ts}")

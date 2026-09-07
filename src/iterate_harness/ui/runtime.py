@@ -160,7 +160,7 @@ def _resolve_api_client_from_settings(settings: Settings) -> SupportsStreamingMe
     def _safe_resolve_auth() -> ResolvedAuth:
         try:
             return settings.resolve_auth()
-        except (ValueError, Exception):
+        except Exception:
             print(
                 "Error: No API key configured.\n"
                 "  Run `ih auth login` to set up authentication, or set the\n"

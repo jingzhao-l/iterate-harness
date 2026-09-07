@@ -138,6 +138,21 @@ def load_session_snapshot(cwd: str | Path) -> dict[str, Any] | None:
     return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
 
 
+def _coerce_mtime(value: object, fallback: float) -> float:
+    """Normalize a persisted ``created_at`` value to a sortable epoch float.
+
+    Corrupt/foreign session files may store a string or ``None``; sorting
+    mixed types later raises ``TypeError``, so every value is coerced here.
+    """
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    if number != number or number in (float("inf"), float("-inf")):  # NaN / inf
+        return fallback
+    return number
+
+
 def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, Any]]:
     """List saved sessions for the project, newest first."""
     session_dir = get_project_session_dir(cwd)
@@ -164,7 +179,7 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
                 "summary": summary,
                 "message_count": data.get("message_count", len(data.get("messages", []))),
                 "model": data.get("model", ""),
-                "created_at": data.get("created_at", path.stat().st_mtime),
+                "created_at": _coerce_mtime(data.get("created_at"), path.stat().st_mtime),
             })
         except (json.JSONDecodeError, OSError):
             continue
@@ -191,7 +206,7 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
                     "summary": summary or "(latest session)",
                     "message_count": data.get("message_count", len(data.get("messages", []))),
                     "model": data.get("model", ""),
-                    "created_at": data.get("created_at", latest_path.stat().st_mtime),
+                    "created_at": _coerce_mtime(data.get("created_at"), latest_path.stat().st_mtime),
                 })
         except (json.JSONDecodeError, OSError) as exc:
             log.debug("Skipping unreadable latest session file %s: %s", latest_path, exc)

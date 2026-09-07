@@ -2,6 +2,33 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.2.1] - 2026-09-07
+
+### Fixed
+
+- **WebUI 干预通道无人值守挂死**（`web/run_manager.py`）：`_ask_user_prompt`
+  与 `_ask_user_select` 与 `_permission_prompt` / `ui/backend_host._ask_question`
+  的 300s 有界等待对齐——循环在无人值守的 WebUI 中暂停等待问题答复或菜单选择
+  时不再无限挂起。超时自动落入安全默认：自由文本问题返回空答复（引擎视为
+  「按默认继续」），选择菜单返回首个选项值（文档化的 Esc-cancel 安全默认，
+  即 continue/resume），并推送一条 `chat status` 消息让操作台可见「已超时自动
+  继续」。新增 `tests/test_web/test_run_manager.py` 三组有界等待回归测试。
+- **会话列表对损坏 time 字段的崩溃**（`cli.py` / `services/session_storage.py`）：
+  `ih iterate sessions` 遇到 `created_at` 为字符串/缺失值时，`fromtimestamp`
+  抛 `TypeError`/`OverflowError`（现一并捕获转 `unknown`）；`list_session_snapshots`
+  排序时混合字符串与 float 的比较崩 `TypeError`（现新增 `_coerce_mtime` 统一
+  规整为可排序的 epoch float，非法值回退文件 mtime）。新增
+  `tests/test_services/test_session_storage.py` 损坏字段回归测试。
+- **`ui/runtime.py` 冗余异常子句**：`except (ValueError, Exception)` 中
+  `ValueError` 是 `Exception` 的子类，冗余消除为 `except Exception`。
+
+### Verification
+
+- 全量 pytest **2069 passed, 6 skipped**；ruff clean；mypy strict clean
+  （246 源文件）；npm 包装器 `bootstrap.test.js` 36 passed。
+- 版本号在 `__init__.py` / `npm/package.json` / `frontend/web/package.json` /
+  `CHANGELOG.md` 同步至 2.2.1。
+
 ## [2.2.0] - 2026-09-06
 
 ### Added

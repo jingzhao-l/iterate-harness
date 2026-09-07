@@ -377,6 +377,57 @@ class TestHumanChannels:
         assert await asyncio.wait_for(task, timeout=1.0) == "stop"
 
 
+class TestBoundedInterventionWait:
+    """An unanswered intervention request must not hang the loop forever.
+
+    ``_ask_user_prompt`` / ``_ask_user_select`` mirror the bounded wait that
+    ``_permission_prompt`` (auto-deny) and ``ui/backend_host._ask_question``
+    (auto-empty) already implement: an unattended WebUI loop auto-defaults
+    instead of leaving the background task paused indefinitely.
+    """
+
+    async def test_ask_user_prompt_times_out_with_empty_answer(
+        self, manager: RunManager, monkeypatch
+    ):
+        monkeypatch.setattr("iterate_harness.web.run_manager._QUESTION_TIMEOUT", 0.05)
+        task = asyncio.create_task(manager._ask_user_prompt("有什么补充？"))
+        for _ in range(50):
+            if manager.waiting_for == "user_prompt":
+                break
+            await asyncio.sleep(0.01)
+        assert await asyncio.wait_for(task, timeout=1.0) == ""
+        assert manager.waiting_for == "none"
+        assert manager.state == "running"
+
+    async def test_ask_user_select_times_out_with_first_option(
+        self, manager: RunManager, monkeypatch
+    ):
+        monkeypatch.setattr("iterate_harness.web.run_manager._QUESTION_TIMEOUT", 0.05)
+        options = [
+            {"value": "resume", "label": "继续", "description": "keep"},
+            {"value": "stop", "label": "停止", "description": "halt"},
+        ]
+        task = asyncio.create_task(manager._ask_user_select("选择？", options))
+        for _ in range(50):
+            if manager.waiting_for == "user_select":
+                break
+            await asyncio.sleep(0.01)
+        assert await asyncio.wait_for(task, timeout=1.0) == "resume"
+        assert manager.waiting_for == "none"
+        assert manager.state == "running"
+
+    async def test_ask_user_select_times_out_with_resume_when_no_options(
+        self, manager: RunManager, monkeypatch
+    ):
+        monkeypatch.setattr("iterate_harness.web.run_manager._QUESTION_TIMEOUT", 0.05)
+        task = asyncio.create_task(manager._ask_user_select("选择？", []))
+        for _ in range(50):
+            if manager.waiting_for == "user_select":
+                break
+            await asyncio.sleep(0.01)
+        assert await asyncio.wait_for(task, timeout=1.0) == "resume"
+
+
 # ---------------------------------------------------------------------------
 # Control operations
 # ---------------------------------------------------------------------------
