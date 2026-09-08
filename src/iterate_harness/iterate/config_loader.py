@@ -18,6 +18,7 @@ Semantics preserved from the TS plugin:
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -37,6 +38,8 @@ from .types import (
     ThresholdsConfig,
     ValidationConfig,
 )
+
+log = logging.getLogger(__name__)
 
 CONFIG_FILENAME = "iterate.config.yaml"
 
@@ -427,12 +430,17 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
         # A malformed section (wrong sub-field shapes) degrades to None so the
         # kernel falls back to validation.commands instead of a bogus empty
         # config with invariants_configured=True.
-        if (ensure_raw is None or isinstance(ensure_raw, list)) and (
+        shape_ok = (ensure_raw is None or isinstance(ensure_raw, list)) and (
             commands_raw is None or isinstance(commands_raw, dict)
-        ):
-            invariants = InvariantConfig(
-                ensure=list(ensure_raw) if isinstance(ensure_raw, list) else [],
-                commands=dict(commands_raw) if isinstance(commands_raw, dict) else {},
+        )
+        if shape_ok:
+            ensure = list(ensure_raw) if isinstance(ensure_raw, list) else []
+            commands = dict(commands_raw) if isinstance(commands_raw, dict) else {}
+            # A section that declares no invariants is treated as absent so the
+            # kernel degrades to validation.commands rather than silently
+            # "configured but does nothing".
+            invariants = None if (not ensure and not commands) else InvariantConfig(
+                ensure=ensure, commands=commands
             )
 
     reviewer_raw = data.get("reviewer")
@@ -467,6 +475,16 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     reasoning_effort = parse_reasoning_effort(data.get("reasoning_effort"))
     worktree_isolation, _worktree_errors = parse_worktree_isolation(data.get("worktree_isolation"))
     thresholds, _threshold_errors = parse_thresholds(data.get("thresholds"))
+    for label, errors in (
+        ("dimension_resources", _resource_errors),
+        ("token_budget", _budget_errors),
+        ("budget_usd", _budget_usd_errors),
+        ("max_turns_per_minute", _rate_errors),
+        ("worktree_isolation", _worktree_errors),
+        ("thresholds", _threshold_errors),
+    ):
+        if errors:
+            log.warning("iterate config.%s: %s", label, "; ".join(map(str, errors)))
 
     language_raw = data.get("language", defaults.language)
     language = language_raw if language_raw in ("zh", "en") else defaults.language

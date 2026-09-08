@@ -327,8 +327,17 @@ class RunManager:
             await self._publish_chat("system", "iterate 循环已结束", kind="status")
             await self._set_state("stopped", message="iterate 循环已结束")
         except asyncio.CancelledError:
-            await self._publish_chat("system", "运行已被用户停止", kind="error")
-            await self._set_state("stopped", message="运行已被用户停止")
+            # A cancel propagates into every `await` we issue below, so shield the
+            # hand-off writes to guarantee the user sees the stop confirmation even
+            # when the run task is being torn down under cancellation.
+            try:
+                await asyncio.shield(self._publish_chat("system", "运行已被用户停止", kind="error"))
+                await asyncio.shield(self._set_state("stopped", message="运行已被用户停止"))
+            except asyncio.CancelledError:
+                # The enclosing task was cancelled again while we tried to deliver
+                # the shutdown message; nothing further can be awaited safely.
+                self._stopping = True
+                log.warning("iterate web run cancelled while publishing stop notice")
             raise
         except SystemExit as exc:
             message = f"引擎无法启动：{exc}"

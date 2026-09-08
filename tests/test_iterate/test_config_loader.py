@@ -218,6 +218,24 @@ class TestLoadEffectiveConfig:
         effective = load_effective_config(d)
         assert effective.config.invariants is None
 
+    def test_invariants_section_empty_falls_back_to_none(self, tmp_path):
+        """An invariants section that declares no ensure/commands must degrade
+        to None so the kernel falls back to validation.commands instead of
+        silently 'configured but does nothing'."""
+        d = make_temp_dir(tmp_path)
+        write_config(d, "invariants: {}\n")
+        effective = load_effective_config(d)
+        assert effective.config.invariants is None
+
+    def test_invariants_partial_empty_stays_configured(self, tmp_path):
+        """ensure present but no commands is still a real invariant config."""
+        d = make_temp_dir(tmp_path)
+        write_config(d, "invariants:\n  ensure:\n    - README.md\n")
+        effective = load_effective_config(d)
+        assert effective.config.invariants is not None
+        assert effective.config.invariants.ensure == ["README.md"]
+        assert effective.config.invariants.commands == {}
+
     def test_reasoning_effort_defaults_to_none(self, tmp_path):
         d = make_temp_dir(tmp_path)
         d.mkdir()

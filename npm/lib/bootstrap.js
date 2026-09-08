@@ -200,8 +200,20 @@ function pipInstallArgs(target) {
 
 function packageVersion() {
   const manifestPath = path.resolve(__dirname, "..", "package.json");
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  return manifest.version;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (typeof manifest.version === "string" && manifest.version) {
+      return manifest.version;
+    }
+  } catch (error) {
+    // A corrupted/missing manifest must not crash every `ih` invocation with an
+    // unhandled exception; fall back to an unknown version so the wrapper can
+    // still run the Python harness and surface the real error later if any.
+    process.stderr.write(
+      `[iterate-harness] warning: cannot read ${manifestPath}: ${error.message}\n`
+    );
+  }
+  return "0.0.0-unknown";
 }
 
 function runtimeHomeDir(env) {
@@ -518,7 +530,9 @@ async function ensureRuntime(env, options) {
   const executable = venvExecutablePaths(venvDir, process.platform);
   const stampPath = path.join(homeDir, STAMP_FILE_NAME);
 
-  const skipInstall = environment[SKIP_INSTALL_ENV_VAR] === "1";
+  const skipInstall = ["1", "true", "yes", "on"].includes(
+    String(environment[SKIP_INSTALL_ENV_VAR] || "").toLowerCase()
+  );
   const stampContent = fs.existsSync(stampPath)
     ? fs.readFileSync(stampPath, "utf8")
     : "";
@@ -602,14 +616,18 @@ async function runHarness(args, env) {
       child.kill(signal);
     }
   };
-  process.on("SIGINT", () => forwardSignal("SIGINT"));
-  process.on("SIGTERM", () => forwardSignal("SIGTERM"));
+  process.on("SIGINT", forwardSignal);
+  process.on("SIGTERM", forwardSignal);
 
   child.on("error", (error) => {
     process.stderr.write(`[iterate-harness] failed to launch ih: ${error.message}\n`);
     process.exit(1);
   });
   child.on("close", (code, signal) => {
+    // Tear the signal handlers down so repeated runHarness calls in one process
+    // never stack duplicate forwarders (would re-send each signal N times).
+    process.removeListener("SIGINT", forwardSignal);
+    process.removeListener("SIGTERM", forwardSignal);
     if (signal) {
       process.kill(process.pid, signal);
       return;

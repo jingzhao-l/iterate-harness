@@ -2,6 +2,61 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.2.3] - 2026-09-08
+
+### Fixed
+
+- **WebUI 停止确认消息在取消竞态下可能丢失**（`web/run_manager.py`）：`_run_loop`
+  的 `asyncio.CancelledError` 分支在任务正被取消时 `await _publish_chat` /
+  `_set_state`，取消信号会再次传播导致「运行已被用户停止」永远到不了用户。
+  现用 `asyncio.shield` 包裹这两笔写入，保证停止确认可靠送达；若外层再次被
+  取消则落位 `_stopping` 并记录 warning。
+- **`iterate.config.yaml` 空 `invariants` 段静默禁用校验**（`iterate/config_loader.py`）：
+  用户写 `invariants: {}`（或 `commands: {}` / `ensure: []` 全空）时，此前会产出一个
+  **「已配置但什么都不做」** 的空 `InvariantConfig`，防御内核据此不再回退到
+  `validation.commands`，项目失去 post-edit 校验。现在空 invariants 段降级为
+  `None`，内核正确回退到 `validation.commands`（非空 `ensure`/`commands` 仍为真实
+  配置）。新增 `test_invariants_section_empty_falls_back_to_none` 与
+  `test_invariants_partial_empty_stays_configured` 回归用例。
+- **配置解析错误被静默吞掉**（`iterate/config_loader.py`）：`dimension_resources` /
+  `token_budget` / `budget_usd` / `max_turns_per_minute` / `worktree_isolation` /
+  `thresholds` 六类字段解析失败时错误数组只赋给 `_` 前缀变量从不透出，配置里的
+  typo 静默回退默认值。现逐一 `log.warning` 记录具体错误，用户配置漂移不再无声。
+- **CLI `ih iterate report` 无报告条目时 `assert` 控制流**（`cli.py`）：`init` 的
+  `assert chosen is not None` 在 `python -O` 下会被剥离，改为显式 `RuntimeError`
+  守卫（该分支 `# pragma: no cover`，正常循环必不会触发）。
+- **`ITERATE_LOG_LEVEL` 非法值静默回退**（`cli.py`）：不认得的日志级别名默认落到
+  `WARNING` 且无提示，现打印一条 stderr 警告说明已回退。
+
+### Changed
+
+- **CLI 帮助文本补全**（`cli.py`）：`ih iterate --help` 概要从 11 个子命令补全到
+  全部 18 个（新增 doctor/status/validate/sessions/cron/refresh/reonboard）；
+  `web_app` 帮助移除内部 `design §17` 引用。
+- **`--theme` 持久化可见**（`cli.py`）：`ih --theme <name>` 写全局配置时在 stderr
+  打印已持久化提示，避免用户对一次性 flag 永久改配置感到意外。
+- **防御工具公开面**（`tools/iterate_tools.py`）：`__all__` 补上
+  `IterateAssumptionTool`（此前运行时已注册但星号导入不可见）。
+
+### Fixed (npm wrapper)
+
+- **`packageVersion()` 损坏 manifest 崩溃**（`npm/lib/bootstrap.js`）：`package.json`
+  缺失/坏 JSON 时此前抛出未捕获异常，现回退 `0.0.0-unknown` 并打印提示，保证
+  `ih` 调用不因 manifest 损坏而整体崩溃。
+- **信号处理器累积**（`npm/lib/bootstrap.js`）：`SIGINT`/`SIGTERM` 转发器在子进程
+  `close` 时未清理；重复 `runHarness`（如同进程测试）会堆叠重复转发。现子进程
+  close 后 `removeListener` 清理。
+- **`ITERATE_HARNESS_SKIP_INSTALL` 只认精确 `"1"`**（`npm/lib/bootstrap.js`）：
+  现在识别 `1/true/yes/on`（忽略大小写），符合常见 truthy 约定。
+
+### Verification
+
+- 全量 pytest **2072 passed, 6 skipped**（新增 2 个 invariants 回归用例）；ruff clean；
+  mypy strict clean（246 源文件）；npm 包装器 45 passed（bootstrap 36 + postinstall 3
+  + ui 6）；前端 `tsc --noEmit` + vitest 13 passed。
+- 版本号在 `__init__.py` / `npm/package.json` / `frontend/web/package.json` /
+  `CHANGELOG.md` 同步至 2.2.3。
+
 ## [2.2.2] - 2026-09-07
 
 ### Fixed

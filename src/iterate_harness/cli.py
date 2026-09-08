@@ -823,8 +823,8 @@ app = typer.Typer(
 
 auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
-iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/report/batch/schedule/hook/onboard/personalize)")
-web_app = typer.Typer(name="web", help="WebUI management console (design §17)")
+iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
+web_app = typer.Typer(name="web", help="WebUI management console")
 
 app.add_typer(auth_app)
 app.add_typer(provider_app)
@@ -1162,7 +1162,8 @@ def iterate_init(
             final_goal = typer.prompt("Review goal", default=final_goal)
         rounds = typer.prompt("Max review rounds", default=3, type=int)
 
-    assert chosen is not None  # loop above re-prompts until the selection is valid
+    if chosen is None:  # pragma: no cover - loop above re-prompts indefinitely
+        raise RuntimeError("impossible: dimension selection loop terminated without a valid selection")
     config = init_wizard.build_config_dict(
         goal=final_goal, dimensions=chosen, max_rounds=rounds, test_command=profile.test_command
     )
@@ -2901,8 +2902,15 @@ def main(
         )
         logging.getLogger("iterate_harness").setLevel(logging.DEBUG)
     elif os.environ.get("ITERATE_LOG_LEVEL"):
-        lvl = getattr(logging, os.environ["ITERATE_LOG_LEVEL"].upper(), logging.WARNING)
-        logging.basicConfig(level=lvl, format="%(asctime)s [%(name)s] %(levelname)s %(message)s", stream=sys.stderr)
+        level_name = os.environ["ITERATE_LOG_LEVEL"].upper()
+        level = getattr(logging, level_name, None)
+        if not isinstance(level, int):
+            print(
+                f"Unknown ITERATE_LOG_LEVEL {os.environ['ITERATE_LOG_LEVEL']!r}, defaulting to WARNING.",
+                file=sys.stderr,
+            )
+            level = logging.WARNING
+        logging.basicConfig(level=level, format="%(asctime)s [%(name)s] %(levelname)s %(message)s", stream=sys.stderr)
 
     if dangerously_skip_permissions:
         permission_mode = "full_auto"
@@ -2914,6 +2922,7 @@ def main(
         settings = load_settings()
         settings.theme = theme
         save_settings(settings)
+        print(f"Theme set to {theme} (persisted to global settings).", file=sys.stderr)
 
     from iterate_harness.ui.app import run_print_mode, run_repl, run_task_worker
 

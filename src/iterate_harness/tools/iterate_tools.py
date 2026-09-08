@@ -859,6 +859,7 @@ class IterateTriageTool(BaseTool[BaseModel]):
 
 
 __all__ = [
+    "IterateAssumptionTool",
     "IterateConfigTool",
     "IterateContextTool",
     "IterateDecisionLogTool",
