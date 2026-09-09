@@ -851,10 +851,11 @@ async def run_query(
         messages.append(final_message)
         yield AssistantTurnComplete(message=final_message, usage=usage), usage
 
-        if coordinator_context_message is not None:
-            messages.append(coordinator_context_message)
-
         if not final_message.tool_uses:
+            # No tool calls: nothing more to append, so restore the coordinator
+            # context as the trailing message before returning.
+            if coordinator_context_message is not None:
+                messages.append(coordinator_context_message)
             if context.hook_executor is not None:
                 await context.hook_executor.execute(
                     HookEvent.STOP,
@@ -938,6 +939,14 @@ async def run_query(
         messages.append(
             ConversationMessage(role="user", content=cast(list[ContentBlock], tool_results))
         )
+
+        # Re-append the coordinator context AFTER the tool results so the
+        # tool_result user message immediately follows the assistant's tool_use
+        # (the provider requires a tool_result to directly back each tool_use;
+        # an intervening plain user message would be out-of-order). The context
+        # stays as the trailing message, visible to the next model turn.
+        if coordinator_context_message is not None:
+            messages.append(coordinator_context_message)
 
         # --- iterate loop-policy control (deterministic convergence) ----
         if context.iterate_policy is not None:
@@ -1215,14 +1224,32 @@ async def _execute_tool_call(
     ):
         defensive_path = _file_path
         kernel.snapshot(defensive_path)
-    result = await tool.execute(
-        parsed_input,
-        ToolExecutionContext(
-            cwd=context.cwd,
-            metadata=exec_metadata,
-            hook_executor=context.hook_executor,
-        ),
-    )
+    try:
+        result = await tool.execute(
+            parsed_input,
+            ToolExecutionContext(
+                cwd=context.cwd,
+                metadata=exec_metadata,
+                hook_executor=context.hook_executor,
+            ),
+        )
+    except BaseException as exc:
+        # If a mutating tool raises mid-write, the pending defensive snapshot
+        # would otherwise never be committed or rolled back — the partial
+        # mutation stays on disk and the atomic-transaction guarantee is
+        # silently defeated. Roll the snapshot back on the failure path and
+        # re-raise so the caller's containment turns it into a tool error.
+        if kernel is not None and defensive_path is not None:
+            try:
+                await kernel.after_mutation(
+                    tool_name,
+                    defensive_path,
+                    success=False,
+                    error_hint=f"{type(exc).__name__}: {exc}",
+                )
+            except BaseException:
+                log.exception("defensive rollback failed for %s", defensive_path)
+        raise
     # Post-condition: verify the edit survived the project invariants; a
     # violation rolls the snapshot back and surfaces as a tool error the model
     # must respond to (fail-fast + atomic transaction).

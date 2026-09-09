@@ -15,6 +15,12 @@ from iterate_harness.utils.shell import create_shell_subprocess
 
 _READ_REMAINING_OUTPUT_TIMEOUT_SECONDS = 2.0
 
+#: Cap the amount of stdout we buffer for a bash command. Once this is hit we
+#: stop reading and discard the rest so a verbose command (e.g. `cat` of a huge
+#: file or a full build log) cannot balloon memory. Note that _format_output
+#: further trims the final message to 12k chars.
+_BASH_OUTPUT_MAX_BYTES = 10 * 1024 * 1024
+
 
 class BashToolInput(BaseModel):
     """Arguments for the bash tool."""
@@ -114,13 +120,16 @@ async def _read_remaining_output(process: asyncio.subprocess.Process) -> bytearr
     output_buffer = bytearray()
     if process.stdout is not None:
         try:
-            remaining = await asyncio.wait_for(
-                process.stdout.read(),
-                timeout=_READ_REMAINING_OUTPUT_TIMEOUT_SECONDS,
-            )
+            while len(output_buffer) < _BASH_OUTPUT_MAX_BYTES:
+                remaining = await asyncio.wait_for(
+                    process.stdout.read(_BASH_OUTPUT_MAX_BYTES),
+                    timeout=_READ_REMAINING_OUTPUT_TIMEOUT_SECONDS,
+                )
+                if not remaining:
+                    break
+                output_buffer.extend(remaining)
         except asyncio.TimeoutError:
-            remaining = b""
-        output_buffer.extend(remaining)
+            pass
     return output_buffer
 
 

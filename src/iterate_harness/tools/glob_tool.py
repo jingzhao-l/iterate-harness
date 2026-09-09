@@ -35,7 +35,7 @@ class GlobTool(BaseTool[GlobToolInput]):
 
     async def execute(self, arguments: GlobToolInput, context: ToolExecutionContext) -> ToolResult:
         root, pattern = _resolve_glob_request(context.cwd, arguments.root, arguments.pattern)
-        matches = await _glob(root, pattern, limit=arguments.limit)
+        matches = await _glob(root, pattern, limit=arguments.limit, project_root=context.cwd)
         if not matches:
             return ToolResult(output="(no matches)")
         return ToolResult(output="\n".join(matches))
@@ -95,7 +95,7 @@ def _looks_like_git_repo(path: Path) -> bool:
 _GLOB_RG_TIMEOUT_SECONDS = 30.0
 
 
-async def _glob(root: Path, pattern: str, *, limit: int) -> list[str]:
+async def _glob(root: Path, pattern: str, *, limit: int, project_root: Path) -> list[str]:
     """Fast glob implementation.
 
     Uses ripgrep's file walker when available (respects .gitignore and can skip
@@ -119,7 +119,7 @@ async def _glob(root: Path, pattern: str, *, limit: int) -> list[str]:
         session = get_docker_sandbox()
         if session is not None and session.is_running:
             from iterate_harness.sandbox.path_validator import validate_sandbox_path
-            allowed, reason = validate_sandbox_path(root, Path("."))
+            allowed, reason = validate_sandbox_path(root, project_root)
             if not allowed:
                 return [f"(error: search root '{root}' is outside the sandbox boundary: {reason})"]
             process = await session.exec_command(

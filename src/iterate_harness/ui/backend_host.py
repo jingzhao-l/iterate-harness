@@ -108,7 +108,8 @@ class ReactBackendHost:
             memory_backend=self._config.memory_backend,
             include_project_memory=self._config.include_project_memory,
         )
-        assert self._bundle is not None
+        if self._bundle is None:
+            raise RuntimeError("backend host started before runtime bundle was built")
         await start_runtime(self._bundle)
         await self._emit(
             BackendEvent.ready(
@@ -272,7 +273,8 @@ class ReactBackendHost:
         return True
 
     async def _process_line(self, line: str, *, transcript_line: str | None = None) -> bool:
-        assert self._bundle is not None
+        if self._bundle is None:
+            raise RuntimeError("backend host not started")
         await self._emit(
             BackendEvent(type="transcript_item", item=TranscriptItem(role="user", text=transcript_line or line))
         )
@@ -384,7 +386,8 @@ class ReactBackendHost:
                         await self._emit_todo_update_from_output(event.output)
                 # Emit plan_mode_change when plan-related tools complete
                 if event.tool_name in ("set_permission_mode", "plan_mode"):
-                    assert self._bundle is not None
+                    if self._bundle is None:
+                        raise RuntimeError("backend host not started")
                     new_mode = self._bundle.app_state.get().permission_mode
                     await self._emit(BackendEvent(type="plan_mode_change", plan_mode=new_mode))
                 return
@@ -460,7 +463,8 @@ class ReactBackendHost:
         return None
 
     def _status_snapshot(self) -> BackendEvent:
-        assert self._bundle is not None
+        if self._bundle is None:
+            raise RuntimeError("backend host not started")
         return BackendEvent.status_snapshot(
             state=self._bundle.app_state.get(),
             mcp_servers=self._bundle.mcp_manager.list_statuses(),
@@ -492,7 +496,8 @@ class ReactBackendHost:
         The frontend stays a pure controlled state: the updated ``task_mode``
         is pushed back via the state snapshot.
         """
-        assert self._bundle is not None
+        if self._bundle is None:
+            raise RuntimeError("backend host not started")
         from iterate_harness.engine.query_engine import TASK_MODES
 
         if mode not in TASK_MODES:
@@ -509,7 +514,8 @@ class ReactBackendHost:
     async def _handle_list_sessions(self) -> None:
         import time as _time
 
-        assert self._bundle is not None
+        if self._bundle is None:
+            raise RuntimeError("backend host not started")
         sessions = self._bundle.session_backend.list_snapshots(self._bundle.cwd, limit=10)
         options = []
         for s in sessions:
@@ -528,7 +534,8 @@ class ReactBackendHost:
         )
 
     async def _handle_select_command(self, command_name: str) -> None:
-        assert self._bundle is not None
+        if self._bundle is None:
+            raise RuntimeError("backend host not started")
         command = command_name.strip().lstrip("/").lower()
         if command == "resume":
             await self._handle_list_sessions()
@@ -892,7 +899,8 @@ class ReactBackendHost:
 
     async def _emit_last_loop_state(self) -> None:
         """Send the resume screen payload when iterate history exists."""
-        assert self._bundle is not None
+        if self._bundle is None:
+            return
         try:
             from iterate_harness.iterate.last_state import summarize_last_run
 

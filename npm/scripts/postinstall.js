@@ -17,9 +17,18 @@
 const { ensureRuntime, reportBootstrapFailure, SKIP_INSTALL_ENV_VAR } = require("../lib/bootstrap");
 const ui = require("../lib/ui");
 
+// Mirror the truthy-value handling in bootstrap.ensureRuntime so postinstall
+// and the CLI entry point agree on what counts as "skip install" (any of
+// 1/true/yes/on, case-insensitive).
+function skipInstallRequested() {
+  return ["1", "true", "yes", "on"].includes(
+    String(process.env[SKIP_INSTALL_ENV_VAR] || "").toLowerCase()
+  );
+}
+
 async function main() {
-  if (process.env[SKIP_INSTALL_ENV_VAR] === "1") {
-    ui.warning(`Skipped install during npm install (${SKIP_INSTALL_ENV_VAR}=1); harness installs on the first \`ih\` run.`);
+  if (skipInstallRequested()) {
+    ui.warning(`Skipped install during npm install (${SKIP_INSTALL_ENV_VAR}=${process.env[SKIP_INSTALL_ENV_VAR]}); harness installs on the first \`ih\` run.`);
     return;
   }
   try {

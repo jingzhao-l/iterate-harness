@@ -37,11 +37,15 @@ _ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset({
 #: writes the string "5000" into a numeric field).
 _INT_KEYS = frozenset({
     "max_tokens",
-    "timeout",
     "context_window_tokens",
     "auto_compact_threshold_tokens",
     "max_turns",
     "passes",
+})
+
+#: Settings keys that hold floating-point values (e.g. the request timeout).
+_FLOAT_KEYS = frozenset({
+    "timeout",
 })
 
 
@@ -50,6 +54,11 @@ def _coerce_value(key: str, value: str) -> object:
     if key in _INT_KEYS:
         try:
             return int(value)
+        except ValueError:
+            return value
+    if key in _FLOAT_KEYS:
+        try:
+            return float(value)
         except ValueError:
             return value
     return value

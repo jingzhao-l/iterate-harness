@@ -260,17 +260,23 @@ def _check_round_shape(rounds: list[ReviewRound]) -> list[MetaReviewIssue]:
                     "is the expected success signal.",
                 )
             )
-    for i in range(1, len(rounds) + 1):
-        if i not in seen_rounds:
-            issues.append(
-                _issue(
-                    "ROUND_GAP",
-                    "medium",
-                    f"Round {i} is missing from the round sequence",
-                    f"rounds present: "
-                    f"{', '.join(str(x) for x in sorted(seen_rounds)) or 'none'}.",
+    # Rounds are checked for *internal* gaps only: a resumed run carries a
+    # continuous sequence (e.g. [4,5,6,7]) whose preceding rounds 1-3 were
+    # completed in the previous session and are legitimately absent — flagging
+    # them as ROUND_GAP would spuriously flip a consistent report to "revise".
+    if seen_rounds:
+        present = sorted(seen_rounds)
+        for a, b in zip(present, present[1:]):
+            if b != a + 1:
+                issues.append(
+                    _issue(
+                        "ROUND_GAP",
+                        "medium",
+                        f"Round {b} is missing from the round sequence "
+                        f"(gap after round {a})",
+                        f"rounds present: {', '.join(str(x) for x in present) or 'none'}.",
+                    )
                 )
-            )
     return issues
 
 

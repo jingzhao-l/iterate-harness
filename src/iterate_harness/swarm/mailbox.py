@@ -207,8 +207,12 @@ class TeammateMailbox:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _read_all)
 
-    async def mark_read(self, message_id: str) -> None:
-        """Mark the message with *message_id* as read (in-place update)."""
+    async def mark_read(self, message_id: str) -> bool:
+        """Mark the message with *message_id* as read (in-place update).
+
+        Returns ``True`` if a matching message was found and marked, ``False``
+        if no message with that id existed (e.g. it was already removed).
+        """
         inbox = self.get_mailbox_dir()
         lock_path = self._lock_path()
 
@@ -233,7 +237,8 @@ class TeammateMailbox:
 
         # Offload blocking I/O to thread pool
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _mark_read)
+        return await loop.run_in_executor(None, _mark_read)
+
 
     async def clear(self) -> None:
         """Remove all message files from the inbox."""

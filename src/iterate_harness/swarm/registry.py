@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from iterate_harness.platforms import get_platform_capabilities
 from iterate_harness.swarm.types import BackendDetectionResult, BackendType, TeammateExecutor
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

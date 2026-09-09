@@ -2,6 +2,76 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.2.4] - 2026-09-09
+
+### Fixed
+
+- **防御内核在工具抛异常时从未回滚**（`engine/query.py`，design §20.3.2）：`_execute_tool_call`
+  对变更类工具先 `kernel.snapshot()` 再 `await tool.execute()`，此前若工具中途
+  **抛出异常**（而非返回错误结果），`after_mutation` 永不执行——部分写入留在磁盘、
+  挂起的快照既不提交也不回滚，`code` 模式的「原子事务 + fail-fast 回滚」保证被
+  静默击穿。现以 try/except 包裹执行：异常路径先 `kernel.after_mutation(..., success=False)`
+  回滚快照再上抛（回滚本身失败仅记录 warning），当前方调用方的异常包含逻辑照常将
+  其转为工具错误。新增回归用例
+  `test_mutating_tool_that_raises_rolls_back_snapshot`。
+- **`ui/backend_host.py` 依赖 `assert self._bundle is not None` 控制流**：8 处断言在
+  `python -O` 下会被剥离，使防护静默消失并退化成混乱的 `AttributeError`。全部改为
+  显式 `if self._bundle is None: raise RuntimeError(...)` 守卫（其中 inert 的
+  `_emit_last_loop_state` 改为静默返回）。
+- **`config set timeout` 类型误判**（`tools/config_tool.py`）：`timeout` 实为
+  `Settings.timeout: float`，却与整型键同置于 `_INT_KEYS`——小数（`30.5`）触发
+  `int()` 抛错、原始字符串被写进浮点字段直到下次重载才纠正。新增 `_FLOAT_KEYS`
+  独立浮点强转。
+- **meta-review 对续跑的 `ROUND_GAP` 误报**（`iterate/meta_review.py`）：`_check_round_shape`
+  假定序列恒从 round 1 开始，而 resume 会话携带连续片断（如 `[4,5,6,7]`）——此前
+  把合法的缺失前序片段误判为缺口、把一致报告翻转成 `revise`。改为只校验**片段内部**
+  的相邻缺口（`present[i]+1 == present[i+1]`），不再要求从 1 起连续。
+- **coordinator 模式的上下文消息破坏了 provider 的 tool_use/tool_result 顺序**
+  （`engine/query.py`）：每次回合把 `# Coordinator User Context` 追加在
+  final assistant 消息之后、tool result 之前——而 provider 要求 `tool_result`
+  必须紧跟在对应 `tool_use` 之后，中间插入一段纯文本 user 消息会造成乱序拒绝。
+  现把 coordinator 上下文改在 tool result 之后回落为尾消息（无 tool call 的路径
+  保持行为），并新增断言校验工具结果与 tool_use 之间不再夹杂上下文。
+- **`Mailbox.mark_read` 吞掉「消息不存在」的结果**（`swarm/mailbox.py`）：
+  内部 `_mark_read` 返回是否找到并标记的 bool，却从未回传——调用方无法分辨
+  「已标记」与「id 早已消失」，静默漏标。现 `mark_read` 返回该 bool。
+- **`glob` 沙箱校验用错了边界**（`tools/glob_tool.py`）：docker 沙箱激活时
+  `validate_sandbox_path(root, Path("."))` 以**进程工作目录**为边界而非
+  `context.cwd`（项目根）——从不同目录启动时会误拒项目内搜索或误放越界搜索。
+  现把 `project_root` 透传入 `_glob` 并以其为边界。
+- **`bash` 工具无上限缓冲 stdout**（`tools/bash_tool.py`）：`_read_remaining_output`
+  用 `process.stdout.read()` 一次读满整个管道，`cat`/构建日志可撑爆内存；现按
+  每次 10 MB 分块读取并在该上限处停止。
+- **`IterateLoopPolicy.cost_meter` 用 `field(default=None)` 强塞非可选类型**
+  （`iterate/loop_policy.py`）：消除 `# type: ignore[assignment]`，改为 `_cost_meter`
+  私有后备 + 类型化只读 `cost_meter` 属性（读取时若未初始化抛 `RuntimeError`），
+  `__post_init__` 负责填充，mypy strict 归零。
+- **死 `TYPE_CHECKING: pass` 脚手块**（`swarm/registry.py`、`swarm/subprocess_backend.py`、
+  `swarm/types.py`）：删除无任何导入内容的空 `if TYPE_CHECKING:` 块与其 `TYPE_CHECKING`
+  导入。
+- **非交互 `run_print_mode` 的 `_clear_output` 是纯 no-op**（`ui/app.py`）：会话恢复等
+  请求清屏的命令在 `text` 输出下实际清屏（ANSI `\x1b[2J\x1b[H`），`stream-json`
+  输出下发 `{"type":"clear_screen"}` 事件；管道 worker 的 no-op 补注释说明其语义。
+- **npm 包装器 `postinstall` 只认 `SKIP_INSTALL=1`**（`npm/scripts/postinstall.js`）：
+  与 `bootstrap.ensureRuntime`（`1/true/yes/on`，忽略大小写）对齐，消息不再硬编码
+  `=1`。
+
+### Changed (tooling / CI)
+
+- **npm 包装器测试纳入 CI**（`.github/workflows/ci.yml`）：新增 `npm-wrapper` job 运行
+  `npm test`（此前包装器测试从未在任何 CI 平台执行）；`package.json` 的 `test` 脚本
+  补入一直存在却从未运行过的 `test/ui.test.js`，并在 `files` 白名单纳入
+  `README.zh-CN.md`。
+
+### Verification
+
+- 全量 pytest **2073 passed, 6 skipped**（新增 1 个防御内核回滚回归用例）；ruff clean；
+  mypy strict clean（246 源文件）；npm 包装器 **45 passed**（bootstrap 36 + postinstall 3
+  + ui 6，现含此前未执行的 ui 用例）。
+- 版本号在 `__init__.py` / `npm/package.json` / `frontend/web/package.json` /
+  `CHANGELOG.md` 同步至 2.2.4。
+- 前端构建与 `tsc --noEmit`、vitest 不受本次变更影响（未触碰前端源码）。
+
 ## [2.2.3] - 2026-09-08
 
 ### Fixed

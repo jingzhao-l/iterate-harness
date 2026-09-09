@@ -130,6 +130,8 @@ async def run_task_worker(
             print(event.message, flush=True)
 
     async def _clear_output() -> None:
+        # Pipe-driven worker: there is no terminal screen to clear — a screen
+        # clear request has no visible effect, so no-op is the correct behavior.
         return None
 
     bundle = await build_runtime(
@@ -317,7 +319,16 @@ async def run_print_mode(
                     events_list.append(obj)
 
         async def _clear_output() -> None:
-            pass
+            if output_format == "text":
+                # Non-interactive terminal: emit an ANSI clear so a resumed /
+                # screen-clearing command actually clears the terminal instead
+                # of leaving stale output above the fresh transcript.
+                sys.stdout.write("\x1b[2J\x1b[H")
+                sys.stdout.flush()
+            elif output_format == "stream-json":
+                obj: dict[str, object] = {"type": "clear_screen"}
+                print(json.dumps(obj), flush=True)
+                events_list.append(obj)
 
         await handle_line(
             bundle,

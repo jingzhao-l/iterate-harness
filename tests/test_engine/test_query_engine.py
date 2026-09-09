@@ -448,6 +448,28 @@ async def test_query_engine_coordinator_mode_uses_coordinator_prompt_and_runs_ag
     assert isinstance(events[-1], AssistantTurnComplete)
     assert "coordinator mode is active" in events[-1].message.text
 
+    # Regression: the coordinator context is a plain user message and must NOT
+    # sit between an assistant tool_use and its tool_result (the provider
+    # requires a tool_result to immediately back each tool_use). Walk the
+    # second request (which carries the agent tool result) and assert ordering.
+    second_request_messages = api_client.requests[1].messages
+    for i, msg in enumerate(second_request_messages):
+        if msg.role == "assistant" and msg.tool_uses:
+            nxt = second_request_messages[i + 1]
+            assert nxt.role == "user"
+            assert any(
+                isinstance(block, ToolResultBlock)
+                for block in nxt.content
+            ), "coordinator context must not interleave between tool_use and tool_result"
+    coordinator_after_tools = [
+        msg for i, msg in enumerate(second_request_messages)
+        if msg.role == "user"
+        and "Coordinator User Context" in msg.text
+        and i > 0
+        and second_request_messages[i - 1].role == "user"
+    ]
+    assert coordinator_after_tools, "coordinator context should trail the tool results"
+
 
 @pytest.mark.asyncio
 async def test_query_engine_allows_unbounded_turns_when_max_turns_is_none(tmp_path: Path):

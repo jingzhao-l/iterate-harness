@@ -117,6 +117,65 @@ async def test_mutating_tool_without_kernel_is_unchanged(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_mutating_tool_that_raises_rolls_back_snapshot(tmp_path: Path) -> None:
+    """A mutating tool that *raises* mid-write must still roll back.
+
+    Regression: before the fix, if ``tool.execute`` raised (OSError, tool bug)
+    rather than returning an error result, the pending defensive snapshot was
+    never committed or rolled back — the partial mutation stayed on disk and
+    the atomic-transaction guarantee (design §20.3.2) was silently defeated.
+    """
+    from pydantic import BaseModel
+
+    from iterate_harness.tools.base import BaseTool, ToolResult
+
+    kernel = DefensiveKernel(tmp_path)
+
+    class BoomInput(BaseModel):
+        path: str
+
+    class BoomTool(BaseTool[BoomInput]):
+        # Register under a FILE_MUTATING_TOOLS name so the engine takes a
+        # snapshot before running it, then makes it raise mid-write.
+        name = "write_file"
+        description = "mutate the file then raise mid-write"
+        input_model = BoomInput
+
+        def is_read_only(self, arguments):
+            return False
+
+        async def execute(self, arguments, context) -> ToolResult:
+            target = tmp_path / arguments.path
+            target.write_text("partial", encoding="utf-8")
+            raise OSError("simulated disk failure")
+
+    registry = create_default_tool_registry()
+    registry.register(BoomTool())
+    context = QueryContext(
+        api_client=None,  # type: ignore[arg-type]
+        tool_registry=registry,
+        permission_checker=_permission_checker(),
+        cwd=tmp_path,
+        model="test-model",
+        system_prompt="",
+        max_tokens=1024,
+        defensive_kernel=kernel,
+    )
+
+    target = tmp_path / "a.py"
+    target.write_text("v1", encoding="utf-8")
+
+    # The exception propagates (the caller's containment converts it to a tool
+    # error), but the snapshot must be rolled back.
+    with pytest.raises(OSError):
+        await _execute_tool_call(context, "write_file", "use_1", {"path": "a.py"})
+
+    # Atomic transaction: the partial "simulated disk failure" write is gone.
+    assert target.read_text(encoding="utf-8") == "v1"
+    assert kernel.pending_mutations == []
+
+
+@pytest.mark.asyncio
 async def test_kernel_visible_to_tools_via_exec_metadata(tmp_path: Path) -> None:
     """Tools must be able to reach the kernel through their exec metadata."""
     from pydantic import BaseModel

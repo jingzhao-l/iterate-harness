@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
 
 from iterate_harness.swarm.spawn_utils import (
     build_inherited_cli_flags,
@@ -18,9 +17,6 @@ from iterate_harness.swarm.types import (
     TeammateSpawnConfig,
 )
 from iterate_harness.tasks.manager import get_task_manager
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

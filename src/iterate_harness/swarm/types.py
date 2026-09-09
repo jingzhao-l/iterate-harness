@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
-
-if TYPE_CHECKING:
-    pass
+from typing import Literal, Protocol, runtime_checkable
 
 
 # ---------------------------------------------------------------------------

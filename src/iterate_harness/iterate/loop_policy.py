@@ -195,8 +195,6 @@ class IterateLoopPolicy:
     # rounds at the recent burn rate, asking whether to top up / stop.
     # ``0`` disables the feature.
     budget_pause_min_rounds: int = 1
-
-    cost_meter: CostMeter = field(default=None)  # type: ignore[assignment]
     _rounds_seen: int = 0
     _emitted_progress: int = 0
     # Rolling window of turn timestamps for rate limiting (seconds since
@@ -211,10 +209,26 @@ class IterateLoopPolicy:
     # Recent single-round consumption, used for budget-headroom estimation.
     _last_round_tokens: int = 0
     _last_round_cost_usd: float = 0.0
+    # Backing store for the :attr:`cost_meter` property — always filled by
+    # ``__post_init__``, so the property is non-None in practice.
+    _cost_meter: CostMeter | None = field(default=None)
+
+    @property
+    def cost_meter(self) -> CostMeter:
+        """Return the run's cost meter (built in ``__post_init__``).
+
+        Exposed as a typed property so the field's None default is invisible
+        to consumers without a ``type: ignore``: ``__post_init__`` guarantees
+        the backing store is populated before any consumer runs.
+        """
+        meter = self._cost_meter
+        if meter is None:
+            raise RuntimeError("iterate loop policy cost meter not initialized")
+        return meter
 
     def __post_init__(self) -> None:
-        if self.cost_meter is None:
-            self.cost_meter = CostMeter(price_overrides=self.price_overrides)
+        if self._cost_meter is None:
+            self._cost_meter = CostMeter(price_overrides=self.price_overrides)
 
     def request_pause(self) -> None:
         """Ask the loop to pause at the next round boundary (user pressed Esc)."""
