@@ -587,6 +587,13 @@ function reportBootstrapFailure(error) {
   process.stderr.write(`[iterate-harness] ${message}\n`);
 }
 
+// The install wizard only makes sense when a human can actually answer: both
+// stdin and stderr must be TTYs. Piped/CI/`< /dev/null` runs bootstrap
+// non-interactively so they never block on a prompt that nobody can see.
+function interactiveSession() {
+  return Boolean(process.stdin.isTTY && process.stderr.isTTY);
+}
+
 async function runHarness(args, env) {
   // Print the banner on every run (claude-code style). Skipped automatically
   // when stderr is not a TTY (e.g. piped output), so `ih --version | jq` stays clean.
@@ -594,7 +601,7 @@ async function runHarness(args, env) {
 
   let target;
   try {
-    target = await ensureRuntime(env, { interactive: true });
+    target = await ensureRuntime(env, { interactive: interactiveSession() });
   } catch (error) {
     if (error instanceof CancelledError) {
       ui.info(error.message);
@@ -658,6 +665,7 @@ module.exports = {
   installCandidates,
   installHarness,
   installRemoteArtifact,
+  interactiveSession,
   isRemoteHttpUrl,
   isSupportedPython,
   needsBootstrap,

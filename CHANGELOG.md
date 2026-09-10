@@ -2,6 +2,34 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.2.5] - 2026-09-10
+
+### Fixed
+
+- **npm 包装器在无人值守/非 TTY 环境下首次运行会永久挂死**
+  （`npm/lib/ui.js` 的 `askYesNo` + `npm/lib/bootstrap.js` 的 `runHarness`）：
+  `askYesNo` 只监听 `rl.question` 回调，从不处理 EOF（`readline` 在 stdin
+  被关闭/管道化/重定向 `< /dev/null` 时发出 `close` 事件）或无人应答的超时；
+  而 `runHarness` 无条件以 `{ interactive: true }` 调用 `ensureRuntime`——于是
+  在 CI、`ih ... < /dev/null`、`npx` 管道、cron 等无人可答的场景，首次运行
+  （stamp 不匹配触发 bootstrap）会卡死在安装向导的 y/n 提示上，直到外层超时。
+  现：
+  - `askYesNo` 在 EOF（`rl.on("close")`）与超时（默认 120s，可用
+    `options.timeoutMs` 覆盖，`0` 关闭）时回落到默认值并明确提示，绝不挂死；
+    额外接受可注入的 `input`/`output`，便于测试；`timer.unref()` 不阻塞进程退出。
+  - 新增 `interactiveSession()`（`process.stdin.isTTY && process.stderr.isTTY`），
+    `runHarness` 仅在真正存在可交互终端时传 `interactive: true`；管道/CI 场景
+    走非交互 bootstrap，不弹提示（安装失败仍可诊断，`ih` 下次运行会重试）。
+  - 导出 `DEFAULT_PROMPT_TIMEOUT_MS` / `interactiveSession`，新增 5 个回归用例
+    （EOF 回落、超时回落、显式 yes、`interactiveSession` 类型、默认超时常量）。
+
+### Verification
+
+- 全量 pytest **2073 passed, 6 skipped**；ruff clean；mypy strict clean（246 源文件）；
+  npm 包装器 **50 passed**（bootstrap + postinstall + ui，新增 5 个用例）。
+- 版本号在 `__init__.py` / `npm/package.json` / `frontend/web/package.json` /
+  `CHANGELOG.md` 同步至 2.2.5。
+
 ## [2.2.4] - 2026-09-09
 
 ### Fixed

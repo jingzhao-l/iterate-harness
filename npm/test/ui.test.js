@@ -4,9 +4,10 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { PassThrough } = require("node:stream");
 
 const ui = require("../lib/ui");
-const { CancelledError } = require("../lib/bootstrap");
+const { CancelledError, interactiveSession } = require("../lib/bootstrap");
 
 test("ITERATE_BANNER is a 6-line ASCII art block", () => {
   assert.equal(ui.ITERATE_BANNER.length, 6);
@@ -55,4 +56,40 @@ test("CancelledError is exported and is an Error", () => {
   const err = new CancelledError("skipped");
   assert.ok(err instanceof Error);
   assert.equal(err.message, "skipped");
+});
+
+test("interactiveSession reports a boolean", () => {
+  assert.equal(typeof interactiveSession(), "boolean");
+});
+
+test("askYesNo resolves the default on EOF (unattended stdin)", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const promise = ui.askYesNo("Install?", true, { input, output, timeoutMs: 0 });
+  input.end();
+  assert.equal(await promise, true);
+});
+
+test("askYesNo resolves the default on timeout", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const value = await ui.askYesNo("Install?", false, {
+    input,
+    output,
+    timeoutMs: 20,
+  });
+  assert.equal(value, false);
+});
+
+test("askYesNo parses an explicit yes", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const promise = ui.askYesNo("Install?", false, { input, output, timeoutMs: 1000 });
+  input.write("y\n");
+  assert.equal(await promise, true);
+});
+
+test("DEFAULT_PROMPT_TIMEOUT_MS is a positive number", () => {
+  assert.equal(typeof ui.DEFAULT_PROMPT_TIMEOUT_MS, "number");
+  assert.ok(ui.DEFAULT_PROMPT_TIMEOUT_MS > 0);
 });

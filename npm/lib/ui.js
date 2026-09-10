@@ -80,24 +80,50 @@ function frameSection(title, lines) {
   console.error(bottom);
 }
 
-function askYesNo(question, defaultNo = false) {
+// Safety net for unattended runs: if stdin is closed (EOF) or the user never
+// answers, fall back to the default instead of hanging forever. Override per
+// call with `options.timeoutMs` (0 disables the timeout entirely).
+const DEFAULT_PROMPT_TIMEOUT_MS = 120000;
+
+function askYesNo(question, defaultNo = false, options = {}) {
+  const input = options.input || process.stdin;
+  const output = options.output || process.stdout;
+  const timeoutMs =
+    options.timeoutMs === undefined ? DEFAULT_PROMPT_TIMEOUT_MS : options.timeoutMs;
   return new Promise((resolve) => {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
+    let settled = false;
+    let timer = null;
+    const rl = readline.createInterface({ input, output });
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      rl.close();
+      resolve(value);
+    };
+    // readline emits "close" on EOF (piped/`< /dev/null` stdin) — never hang.
+    rl.on("close", () => finish(defaultNo));
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        process.stderr.write(
+          `\x1b[2m   no response after ${Math.round(timeoutMs / 1000)}s; using default\x1b[0m\n`
+        );
+        finish(defaultNo);
+      }, timeoutMs);
+      if (typeof timer.unref === "function") timer.unref();
+    }
     const hint = defaultNo ? "[y/N]" : "[Y/n]";
     rl.question(`\x1b[36m◆\x1b[0m  ${question} ${hint} `, (answer) => {
-      rl.close();
-      const a = answer.trim().toLowerCase();
-      if (a === "y" || a === "yes") resolve(true);
-      else if (a === "n" || a === "no") resolve(false);
-      else resolve(defaultNo);
+      const a = String(answer).trim().toLowerCase();
+      if (a === "y" || a === "yes") finish(true);
+      else if (a === "n" || a === "no") finish(false);
+      else finish(defaultNo);
     });
   });
 }
 
 module.exports = {
+  DEFAULT_PROMPT_TIMEOUT_MS,
   ITERATE_BANNER,
   printBanner,
   info,
