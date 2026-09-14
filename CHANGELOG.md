@@ -2,6 +2,34 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.2.6] - 2026-09-14
+
+### Fixed
+
+- **WebUI 权限解析把含 "no"/"not" 子串的普通英文词误判为拒绝**
+  （`web/run_manager.py` `_parse_permission`）：`_DENY_MARKERS`/`_APPROVE_MARKERS`
+  原先对整个归一化文本做子串匹配，使 "note"、"notebook"、"another"、"nothing"
+  等普通词因为恰好包含 "no"/"not" 子串而被当成明确拒绝——即便前后还写着
+  "please proceed" / "approve"。现 ASCII 标记改为**整词边界匹配**
+  （`_has_ascii_marker`，正则 `\b…\b`），CJK 标记保持子串语义；中文否定前缀
+  逻辑同步收紧为「直接否定批准词才翻转」（"没问题" / "没关系" 不再被
+  "没" 前缀误翻成拒绝）。新增回归用例覆盖两类误判。
+- **工具产物目录无界增长**（`engine/query.py` `_offload_tool_output_if_needed`）：
+  超大工具输出落盘到 `~/.iterate-harness/data/tool_artifacts` 后永不清理，长会话
+  可能累积成 GB 级死文件。现每次写产物后按保留上限修剪（默认 200 个最近文件，
+  可用 `ITERATE_TOOL_ARTIFACT_MAX_FILES` 调整，下限 1），修剪为 best-effort、
+  绝不阻断查询循环，新增 services 层用例。
+- **`_clear_stopping_if_owned` 死代码收编**（`web/run_manager.py`）：`_run_loop`
+  finally 原先内联等价逻辑，方法只被测试直接调用。现 finally 放开 lock 后统一
+  调用该方法，消除重复并让所有权清理走同一处实现（既有测试保持不变）。
+
+### Verification
+
+- 全量 pytest **2082 passed, 6 skipped**；ruff clean；mypy strict clean（246 源文件）；
+  npm 包装器 **50 passed**。
+- 版本号在 `__init__.py` / `npm/package.json` / `frontend/web/package.json` /
+  `CHANGELOG.md` 同步至 2.2.6。
+
 ## [2.2.5] - 2026-09-10
 
 ### Fixed

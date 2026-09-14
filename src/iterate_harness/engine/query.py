@@ -45,7 +45,11 @@ from iterate_harness.engine.stream_events import (
 from iterate_harness.hooks import HookEvent, HookExecutor
 from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY, IterateLoopPolicy
 from iterate_harness.permissions.checker import PermissionChecker, PermissionDecision
-from iterate_harness.services.tool_outputs import tool_output_inline_chars, tool_output_preview_chars
+from iterate_harness.services.tool_outputs import (
+    tool_artifact_max_files,
+    tool_output_inline_chars,
+    tool_output_preview_chars,
+)
 from iterate_harness.tools.base import ToolExecutionContext
 from iterate_harness.tools.base import ToolRegistry
 from iterate_harness.tools.base import ToolResult
@@ -538,6 +542,31 @@ def _tool_artifact_dir() -> Path:
     return artifact_dir
 
 
+def _prune_tool_artifacts(artifact_dir: Path) -> None:
+    """Keep the tool-artifact dir bounded to the most-recent N files.
+
+    Offloaded tool outputs are never touched after they are written (they are
+    only ever read back if a session is resumed), so without this guard a
+    long-running traversal could pile up gigabytes of dead output. We prune
+    best-effort: any unreadable entry is skipped, and pruning errors are
+    logged and swallowed so the query loop is never blocked by cleanup.
+    """
+    try:
+        candidates = [p for p in artifact_dir.iterdir() if p.is_file()]
+    except OSError:
+        return
+    root_files = [p for p in candidates if p.suffix == ".txt" and "-" in p.name]
+    cutoff = tool_artifact_max_files()
+    if len(root_files) <= cutoff:
+        return
+    # Oldest first (the timestamp prefix sorts lexicographically).
+    for stale in sorted(root_files, key=lambda p: p.name)[: len(root_files) - cutoff]:
+        try:
+            stale.unlink()
+        except OSError:
+            log.debug("Could not prune tool artifact %s", stale)
+
+
 def _safe_tool_artifact_name(tool_name: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", tool_name.strip())
     return (normalized or "tool")[:80]
@@ -553,11 +582,13 @@ def _offload_tool_output_if_needed(
     if len(output) <= inline_limit:
         return output, None
 
+    artifact_dir = _tool_artifact_dir()
     artifact_path = (
-        _tool_artifact_dir()
+        artifact_dir
         / f"{time.strftime('%Y%m%d-%H%M%S')}-{_safe_tool_artifact_name(tool_name)}-{uuid4().hex[:12]}.txt"
     )
     artifact_path.write_text(output, encoding="utf-8", errors="replace")
+    _prune_tool_artifacts(artifact_dir)
     preview = output[:tool_output_preview_chars()]
     omitted = max(0, len(output) - len(preview))
     inline = (

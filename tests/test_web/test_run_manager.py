@@ -67,6 +67,30 @@ class TestParsePermission:
         assert mgr._parse_permission("not yet, please hold") is False
         assert mgr._parse_permission("不行") is False
 
+    def test_no_negation_words_do_not_trigger_deny(self):
+        # Ordinary words that merely *contain* "no"/"not" as substrings must
+        # not be misread as denials (regression: design §18.3 human channel).
+        mgr = RunManager()
+        assert mgr._parse_permission("note: please proceed, it is safe") is True
+        assert mgr._parse_permission("notebook changes look fine to me") is True
+        assert mgr._parse_permission("another approach looks better, approve") is True
+        assert mgr._parse_permission("nothing to worry, approve") is True
+        assert mgr._parse_permission("the total usage is fine, go ahead") is True
+
+    def test_idiomatic_chinese_approval_not_flipped(self):
+        # "没问题" / "没关系" mean "no problem" (approval) even though they
+        # start with the 没 negation character.
+        mgr = RunManager()
+        assert mgr._parse_permission("没问题，可以执行") is True
+        assert mgr._parse_permission("没关系，继续吧") is True
+
+    def test_standalone_negation_words_still_deny(self):
+        mgr = RunManager()
+        assert mgr._parse_permission("no more changes") is False
+        assert mgr._parse_permission("not this one") is False
+        assert mgr._parse_permission("不要执行") is False
+        assert mgr._parse_permission("不同意") is False
+
 
 # ---------------------------------------------------------------------------
 # Tool event stream (design §18: live tool-timeline cards)

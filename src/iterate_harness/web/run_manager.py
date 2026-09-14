@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -85,14 +86,34 @@ _DENY_MARKERS = frozenset(
 #: Substrings that signal approval inside a longer free-text answer.
 _APPROVE_MARKERS = frozenset(
     {
-        "approve", "allowed", "accepted", "confirm", "granted", "yes",
-        "please", "go ahead", "continue",
-        "好的", "同意", "批准", "确认", "允许", "可以", "好", "行", "对",
+        "approve", "approved", "allowed", "accepted", "confirm", "granted", "yes",
+        "please", "go ahead", "continue", "proceed", "fine", "good", "ok",
+        "好的", "同意", "批准", "确认", "允许", "可以", "没问题", "好", "行", "对", "行吧", "继续",
     }
 )
 
 #: Chinese negation prefixes that flip an approval-looking free-text answer.
 _NEGATION_PREFIXES = ("不", "别", "没", "无", "非", "未")
+
+#: Word-boundary matching regexes for the ASCII deny/approve markers. A marker
+#: like "no" must match as a standalone word ("no more changes") and not as a
+#: substring inside ordinary words ("notebook", "another", "nobody"). CJK
+#: markers always use plain substring matching since Chinese has no word
+#: boundaries to anchor on.
+
+
+def _has_ascii_marker(text: str, markers: frozenset[str]) -> bool:
+    """True if any ASCII marker appears as a standalone word in ``text``."""
+    ascii_markers = [m for m in markers if m.isascii()]
+    if not ascii_markers:
+        return False
+    needle = "|".join(re.escape(m) for m in ascii_markers)
+    return re.search(rf"\b(?:{needle})\b", text, re.IGNORECASE) is not None
+
+
+def _has_cjk_marker(text: str, markers: frozenset[str]) -> bool:
+    """True if any CJK marker appears as a substring in ``text``."""
+    return any(m in text for m in markers if not m.isascii())
 
 
 class RunManagerError(Exception):
@@ -369,12 +390,10 @@ class RunManager:
                     self._bundle = None
                 if self._task is task_handle:
                     self._task = None
-                # Only clear the stop request that this run placed itself, so
-                # a new run's stop request is never clobbered by an old run's
-                # cleanup racing in behind it.
-                if self._stopping_by == run_id:
-                    self._stopping = False
-                    self._stopping_by = ""
+            # Only clear the stop request that this run placed itself, so
+            # a new run's stop request is never clobbered by an old run's
+            # cleanup racing in behind it.
+            await self._clear_stopping_if_owned(run_id)
 
     async def _render_event(self, event: Any) -> None:
         """Translate engine stream events into chat/progress hub events."""
@@ -695,25 +714,36 @@ class RunManager:
             return False
 
         # 2. Check for denial markers first — a single explicit negation wins
-        # over any approval mention.
-        has_deny = any(marker in normalized for marker in _DENY_MARKERS)
-        if has_deny:
+        # over any approval mention. ASCII deny words ("no", "not", "never")
+        # must match as whole words so ordinary words like "notebook" or
+        # "another" are never misread as denials (design §18.3 UX).
+        if _has_ascii_marker(normalized, _DENY_MARKERS) or _has_cjk_marker(
+            normalized, _DENY_MARKERS
+        ):
             return False
 
-        # 3. Check for Chinese negation prefixes at word start.
-        # Cases like "不同意" → even though it contains "同意", the "不"
-        # at the start flips it to denial.
+        # 3. Check for Chinese negation prefixes directly negating an approval
+        # word. "不同意" / "不批准" → denial. But idiomatic approvals that
+        # merely contain a negation character ("没问题" / "没关系" = "no
+        # problem") must be left to the approval check below instead of being
+        # flipped into a denial.
         words = normalized.split()
         for word in words:
             for neg_prefix in _NEGATION_PREFIXES:
                 if word.startswith(neg_prefix):
-                    # If the remainder looks like approval, this is a negated
-                    # approval → still deny.
-                    return False
+                    remainder = word[len(neg_prefix) :]
+                    negated_approval = any(
+                        remainder.startswith(m)
+                        for m in _APPROVE_MARKERS | _APPROVE_WORDS
+                    )
+                    if negated_approval:
+                        return False
 
-        # 4. Check for any approval marker.
-        has_approve = any(marker in normalized for marker in _APPROVE_MARKERS)
-        if has_approve:
+        # 4. Check for any approval marker. ASCII approval words must match as
+        # whole words too, so e.g. "no approval" does not count as approval.
+        if _has_ascii_marker(normalized, _APPROVE_MARKERS) or _has_cjk_marker(
+            normalized, _APPROVE_MARKERS
+        ):
             return True
 
         # 5. Default: no clear signal → safer to deny.

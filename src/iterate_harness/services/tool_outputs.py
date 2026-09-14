@@ -10,6 +10,7 @@ log = logging.getLogger(__name__)
 DEFAULT_TOOL_OUTPUT_INLINE_CHARS = 16_000
 DEFAULT_TOOL_OUTPUT_PREVIEW_CHARS = 3_000
 DEFAULT_MICROCOMPACT_TOOL_RESULT_CHARS = 4_000
+DEFAULT_TOOL_ARTIFACT_MAX_FILES = 200
 
 
 def _read_positive_int_env(name: str, default: int, *, minimum: int = 1) -> int:
@@ -44,6 +45,20 @@ def microcompact_tool_result_chars() -> int:
         "ITERATE_MICROCOMPACT_TOOL_RESULT_CHARS",
         DEFAULT_MICROCOMPACT_TOOL_RESULT_CHARS,
         minimum=256,
+    )
+
+
+def tool_artifact_max_files() -> int:
+    """Upper bound on offloaded tool-output artifact files kept on disk.
+
+    Offloaded outputs under ``~/.iterate-harness/data/tool_artifacts`` are
+    pruned back to this many most-recent files whenever a new artifact is
+    written, so long-running sessions never accumulate unbounded disk usage.
+    """
+    return _read_positive_int_env(
+        "ITERATE_TOOL_ARTIFACT_MAX_FILES",
+        DEFAULT_TOOL_ARTIFACT_MAX_FILES,
+        minimum=1,
     )
 
 
