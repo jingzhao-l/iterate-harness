@@ -324,6 +324,11 @@ class IterateLoopPolicy:
             # Record the request at its actual issue time so a throttled request
             # counts toward the cap from when it is finally sent.
             self._turn_timestamps.append(timestamp + delay)
+            # Bound the window: drop timestamps that can no longer count toward
+            # the cap so a long loop never grows the list unbounded (also keeps
+            # ``_throttle_delay`` cheap).
+            window_start = timestamp + delay - RATE_LIMIT_WINDOW_SECONDS
+            self._turn_timestamps = [t for t in self._turn_timestamps if t >= window_start]
         return delay
 
     def rate_limit_engaged(self, now: float | None = None) -> bool:

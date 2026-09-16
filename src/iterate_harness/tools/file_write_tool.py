@@ -42,7 +42,14 @@ class FileWriteTool(BaseTool[FileWriteToolInput]):
 
         if arguments.create_directories:
             path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(arguments.content, encoding="utf-8")
+        # Atomic temp-file + os.replace write: a crash mid-write can never leave
+        # a truncated file, and concurrent write/edit tools serialize on the
+        # lock so read-modify-write races can't corrupt shared files.
+        from iterate_harness.utils.file_lock import exclusive_file_lock
+        from iterate_harness.utils.fs import atomic_write_text
+
+        with exclusive_file_lock(path.with_name(path.name + ".lock")):
+            atomic_write_text(path, arguments.content, encoding="utf-8")
         return ToolResult(output=f"Wrote {path}")
 
 

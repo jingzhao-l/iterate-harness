@@ -68,8 +68,13 @@ def _restore_redacted(
             else:
                 out[key] = value
         elif isinstance(value, str) and value.startswith(REDACTION_PREFIX):
-            prior = existing.get(key)
-            out[key] = prior if isinstance(prior, str) else value
+            # The value is a redaction marker the editor received from GET.
+            # Restore the prior on-disk secret; when the key is entirely new
+            # (not present in the existing config) or the existing value is not
+            # a string, discard the marker — leaving it in would write a
+            # "<redacted:...>" literal back to disk.
+            prior_value = existing.get(key)
+            out[key] = prior_value if isinstance(prior_value, str) else ""
         else:
             out[key] = value
     return out

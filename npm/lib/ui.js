@@ -87,7 +87,7 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 120000;
 
 function askYesNo(question, defaultNo = false, options = {}) {
   const input = options.input || process.stdin;
-  const output = options.output || process.stdout;
+  const output = options.output || process.stderr;
   const timeoutMs =
     options.timeoutMs === undefined ? DEFAULT_PROMPT_TIMEOUT_MS : options.timeoutMs;
   return new Promise((resolve) => {

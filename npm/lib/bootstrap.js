@@ -31,6 +31,7 @@
 "use strict";
 
 const { spawn, spawnSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
 const https = require("https");
@@ -51,6 +52,12 @@ const TARBALL_CACHE_DIR_NAME = "cache";
 const MAX_DOWNLOAD_REDIRECTS = 5;
 const DOWNLOAD_TIMEOUT_MS = 120000;
 const CURL_MAX_TIME_SECONDS = 240;
+
+// Integrity: every release publishes a `<artifact>.sha256` sidecar next to the
+// artifact. Any bytes this wrapper downloads itself are hashed and compared
+// against that sidecar before pip is allowed to install them.
+const CHECKSUM_ASSET_SUFFIX = ".sha256";
+const MAX_CHECKSUM_BYTES = 4096;
 
 const PYTHON_ENV_VAR = "ITERATE_HARNESS_PYTHON";
 const HOME_ENV_VAR = "ITERATE_HARNESS_NPM_HOME";
@@ -165,6 +172,103 @@ function needsBootstrap(stampContent, expectedVersion) {
 
 function isRemoteHttpUrl(target) {
   return /^https?:\/\//i.test(String(target || ""));
+}
+
+function checksumAssetUrl(url) {
+  return `${url}${CHECKSUM_ASSET_SUFFIX}`;
+}
+
+// A `.sha256` sidecar is either a bare 64-char hex digest or the common
+// `<hex>  <filename>` line emitted by `sha256sum` / `shasum -a 256`.
+function parseChecksum(content) {
+  const match = /([0-9a-fA-F]{64})/.exec(String(content || ""));
+  return match ? match[1].toLowerCase() : null;
+}
+
+function sha256File(filePath) {
+  const hash = crypto.createHash("sha256");
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest("hex");
+}
+
+// Small text fetch with the same redirect/timeout discipline as downloadFile.
+function fetchChecksumText(url, redirectBudget) {
+  const budget = redirectBudget === undefined ? MAX_DOWNLOAD_REDIRECTS : redirectBudget;
+  return new Promise((resolve, reject) => {
+    if (budget < 0) {
+      reject(new BootstrapError(`too many redirects while fetching ${url}`));
+      return;
+    }
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (error) {
+      reject(new BootstrapError(`invalid checksum URL ${url}: ${error.message}`));
+      return;
+    }
+    const client = parsed.protocol === "http:" ? http : https;
+    const request = client.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (response) => {
+      const status = response.statusCode || 0;
+      if (status >= 300 && status < 400 && response.headers.location) {
+        response.resume();
+        resolve(fetchChecksumText(new URL(response.headers.location, url).toString(), budget - 1));
+        return;
+      }
+      if (status < 200 || status >= 300) {
+        response.resume();
+        reject(new BootstrapError(`fetching ${url} failed with HTTP ${status}`));
+        return;
+      }
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > MAX_CHECKSUM_BYTES) {
+          request.destroy(new BootstrapError(`checksum file ${url} is unexpectedly large`));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      response.on("error", (responseError) => reject(responseError));
+    });
+    request.on("timeout", () => {
+      request.destroy(new BootstrapError(`fetching ${url} timed out`));
+    });
+    request.on("error", (requestError) => reject(requestError));
+  });
+}
+
+// Verify a self-downloaded artifact against its published `.sha256` sidecar.
+// Returns true when a checksum was present and matched, false when none is
+// published (pre-2.2.7 releases predate the sidecar), and throws on mismatch:
+// corrupted or tampered bytes must never reach pip.
+async function verifyDownloadedArtifact(url, filePath, fetchChecksum) {
+  let content;
+  try {
+    content = await fetchChecksum(checksumAssetUrl(url));
+  } catch (error) {
+    process.stderr.write(
+      `[iterate-harness] warning: no SHA256 checksum published for ${url} ` +
+        `(${error.message}); skipping integrity check\n`
+    );
+    return false;
+  }
+  const expected = parseChecksum(content);
+  if (!expected) {
+    process.stderr.write(
+      `[iterate-harness] warning: unreadable SHA256 checksum for ${url}; skipping integrity check\n`
+    );
+    return false;
+  }
+  const actual = sha256File(filePath);
+  if (actual !== expected) {
+    fs.rmSync(filePath, { force: true });
+    throw new BootstrapError(
+      `SHA256 mismatch for ${url}: expected ${expected}, got ${actual}; refusing to install`
+    );
+  }
+  return true;
 }
 
 // Infer the on-disk extension (for the cache file) from a download URL so
@@ -442,6 +546,7 @@ async function installHarness(options) {
   const candidates = options.candidates;
   const runStepFn = options.runStepFn || runStep;
   const downloader = options.downloader || downloadTarballTo;
+  const checksumFetcher = options.checksumFetcher || fetchChecksumText;
 
   if (!candidates || candidates.length === 0) {
     throw new BootstrapError("no install candidate URLs were provided");
@@ -453,7 +558,15 @@ async function installHarness(options) {
       if (isRemoteHttpUrl(candidate)) {
         // HTTP(S) candidate: `pip` first, then node/curl download + local pip
         // (survives broken Python TLS trust stores on macOS python.org builds).
-        await installRemoteArtifact(python, candidate, homeDir, version, runStepFn, downloader);
+        await installRemoteArtifact(
+          python,
+          candidate,
+          homeDir,
+          version,
+          runStepFn,
+          downloader,
+          checksumFetcher
+        );
       } else {
         // Non-URL candidate (e.g. `iterate-harness==1.12.9` resolved by pip
         // against the user's mirror): no artifact to download, just pip it.
@@ -474,7 +587,15 @@ async function installHarness(options) {
 
 // pip-install a downloadable HTTP artifact, retrying with a node/curl download
 // of the raw file + local pip install when pip's TLS trust store is broken.
-async function installRemoteArtifact(python, url, homeDir, version, runStepFn, downloader) {
+async function installRemoteArtifact(
+  python,
+  url,
+  homeDir,
+  version,
+  runStepFn,
+  downloader,
+  checksumFetcher
+) {
   try {
     runStepFn(python, pipInstallArgs(url));
     return;
@@ -485,6 +606,9 @@ async function installRemoteArtifact(python, url, homeDir, version, runStepFn, d
   }
   const cachePath = downloadCachePath(homeDir, version, artifactExtensionFor(url));
   await downloader(url, cachePath);
+  // These are bytes we fetched ourselves, so we own their integrity: check the
+  // published SHA256 sidecar before handing the file to pip.
+  await verifyDownloadedArtifact(url, cachePath, checksumFetcher);
   runStepFn(python, pipInstallArgs(cachePath));
 }
 
@@ -655,12 +779,18 @@ module.exports = {
   INSTALL_URL_ENV_VAR,
   SKIP_INSTALL_ENV_VAR,
   WHEEL_ASSET_SUFFIX,
+  CHECKSUM_ASSET_SUFFIX,
   artifactExtensionFor,
+  checksumAssetUrl,
   detectPython,
   curlDownload,
   downloadCachePath,
   downloadFile,
   downloadTarballTo,
+  fetchChecksumText,
+  parseChecksum,
+  sha256File,
+  verifyDownloadedArtifact,
   ensureRuntime,
   installCandidates,
   installHarness,

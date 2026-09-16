@@ -106,14 +106,22 @@ async def _terminate_process(process: asyncio.subprocess.Process, *, force: bool
         return
     if force:
         process.kill()
-        await process.wait()
+        try:
+            await process.wait()
+        except ProcessLookupError:
+            return
         return
     process.terminate()
     try:
         await asyncio.wait_for(process.wait(), timeout=2.0)
     except asyncio.TimeoutError:
         process.kill()
-        await process.wait()
+        try:
+            await process.wait()
+        except ProcessLookupError:
+            return
+    except ProcessLookupError:
+        return
 
 
 async def _read_remaining_output(process: asyncio.subprocess.Process) -> bytearray:

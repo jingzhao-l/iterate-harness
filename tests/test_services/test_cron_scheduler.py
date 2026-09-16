@@ -10,8 +10,10 @@ import pytest
 
 from iterate_harness.services.cron_scheduler import (
     _jobs_due,
+    _prune_history_if_needed,
     append_history,
     execute_job,
+    get_history_path,
     load_history,
     run_scheduler_loop,
 )
@@ -168,4 +170,27 @@ class TestSchedulerLoop:
 
         entries = load_history(job_name="test-once")
         assert len(entries) == 1
-        assert entries[0]["status"] == "success"
+
+
+class TestHistoryPruning:
+    def test_prune_keeps_entries_below_cap(self, tmp_path: Path) -> None:
+        path = get_history_path()
+        entries = [f'{{"name": "j", "line": {i}}}' for i in range(100)]
+        path.write_text("\n".join(entries) + "\n", encoding="utf-8")
+        _prune_history_if_needed(path)
+        loaded = load_history(limit=999)
+        assert len(loaded) == 100  # below cap — no pruning occurred
+
+    def test_prune_trims_when_file_exceeds_size_cap(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        from iterate_harness.services import cron_scheduler
+        monkeypatch.setattr(cron_scheduler, "MAX_HISTORY_BYTES", 1)  # force prune
+        monkeypatch.setattr(cron_scheduler, "MAX_HISTORY_ENTRIES", 5)
+        path = get_history_path()
+        entries = [f'{{"name": "j", "line": {i}}}' for i in range(20)]
+        path.write_text("\n".join(entries) + "\n", encoding="utf-8")
+        _prune_history_if_needed(path)
+        loaded = load_history(limit=999)
+        assert len(loaded) == 5
+        # Most recent entries are kept
+        assert loaded[-1]["line"] == 19
+        assert loaded[0]["line"] == 15

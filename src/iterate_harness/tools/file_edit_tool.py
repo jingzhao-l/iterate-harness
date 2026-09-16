@@ -44,16 +44,22 @@ class FileEditTool(BaseTool[FileEditToolInput]):
         if not path.exists():
             return ToolResult(output=f"File not found: {path}", is_error=True)
 
-        original = path.read_text(encoding="utf-8")
-        if arguments.old_str not in original:
-            return ToolResult(output="old_str was not found in the file", is_error=True)
+        # Serialize with other write/edit tools on the same file and swap the
+        # update in atomically so a crash mid-write can't truncate the file.
+        from iterate_harness.utils.file_lock import exclusive_file_lock
+        from iterate_harness.utils.fs import atomic_write_text
 
-        if arguments.replace_all:
-            updated = original.replace(arguments.old_str, arguments.new_str)
-        else:
-            updated = original.replace(arguments.old_str, arguments.new_str, 1)
+        with exclusive_file_lock(path.with_name(path.name + ".lock")):
+            original = path.read_text(encoding="utf-8")
+            if arguments.old_str not in original:
+                return ToolResult(output="old_str was not found in the file", is_error=True)
 
-        path.write_text(updated, encoding="utf-8")
+            if arguments.replace_all:
+                updated = original.replace(arguments.old_str, arguments.new_str)
+            else:
+                updated = original.replace(arguments.old_str, arguments.new_str, 1)
+
+            atomic_write_text(path, updated, encoding="utf-8")
         return ToolResult(output=f"Updated {path}")
 
 

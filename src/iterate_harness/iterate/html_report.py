@@ -442,7 +442,7 @@ def build_replay_page(entries: list[DecisionLogEntry]) -> str | None:
     ]
     report = latest_report_entry(entries)
     if report is not None:
-        panels.append(_render_replay_report_panel(report))
+        panels.append(_render_replay_report_panel(report, entries))
     if not panels:
         return None
     first = entries[0]
@@ -657,10 +657,15 @@ def _replay_validation_card(data: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def _render_replay_report_panel(report: DecisionLogEntry) -> str:
-    """Final panel: the full report rendered from the latest report entry."""
+def _render_replay_report_panel(report: DecisionLogEntry, entries: list[DecisionLogEntry]) -> str:
+    """Final panel: the full report rendered from the latest report entry.
+
+    ``entries`` is the full decision log so the fix timeline renders the real
+    ``atomic_fix`` / ``revert`` / ``validation`` events that preceded the
+    final report instead of a placeholder.
+    """
     data = report.data if isinstance(report.data, dict) else {}
-    timeline = _collect_timeline(decision_log_entries_sentinel(report), report)
+    timeline = _collect_timeline(entries, report)
     body = (
         _render_header(data, report)
         + _render_summary_cards(data)
@@ -670,17 +675,6 @@ def _render_replay_report_panel(report: DecisionLogEntry) -> str:
         + _render_fix_timeline(timeline)
     )
     return f"<section class=\"rp-panel\"><h2>Final report</h2>{body}</section>"
-
-
-def decision_log_entries_sentinel(report: DecisionLogEntry) -> list[DecisionLogEntry]:
-    """Placeholder for report-only rendering; see _render_replay_report_panel.
-
-    The timeline for the replay page is intentionally minimal (the full
-    report panel reuses the single-file renderers which need the log tail);
-    callers pass the report entry alone so the timeline section shows the
-    placeholder message instead of duplicating every round.
-    """
-    return [report]
 
 
 __all__ = [

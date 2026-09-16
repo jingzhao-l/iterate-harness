@@ -114,8 +114,33 @@ def get_team_dir(team_name: str) -> Path:
     return base
 
 
+def validate_agent_id(agent_id: str) -> str:
+    """Validate an agent id for use as a path component.
+
+    Agent ids (``<name>@<team>``) originate from the model or teammate
+    config and must never escape ``<team_dir>/agents`` — a ``../`` id would
+    read/write mailbox files outside the team directory.  Unlike team names,
+    ``@`` is a legitimate separator between the agent name and team, so it is
+    allowed (a lone ``@`` or ``@``-only name is still rejected via the general
+    checks below).
+
+    Returns the validated id.
+
+    Raises:
+        ValueError: if *agent_id* cannot be safely used as a path component.
+    """
+    if not agent_id:
+        raise ValueError("agent id must not be empty")
+    if "\x00" in agent_id or "/" in agent_id or "\\" in agent_id:
+        raise ValueError(f"agent id is not path-safe: {agent_id!r}")
+    if agent_id in {".", ".."}:
+        raise ValueError(f"agent id is not path-safe: {agent_id!r}")
+    return agent_id
+
+
 def get_agent_mailbox_dir(team_name: str, agent_id: str) -> Path:
     """Return ~/.iterate-harness/teams/<team_name>/agents/<agent_id>/inbox/"""
+    validate_agent_id(agent_id)
     inbox = get_team_dir(team_name) / "agents" / agent_id / "inbox"
     inbox.mkdir(parents=True, exist_ok=True)
     return inbox

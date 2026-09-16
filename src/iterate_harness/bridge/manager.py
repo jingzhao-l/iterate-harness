@@ -36,6 +36,11 @@ class BridgeSessionManager:
         self._copy_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def spawn(self, *, session_id: str, command: str, cwd: str | Path) -> SessionHandle:
+        if not session_id or session_id in self._sessions:
+            raise ValueError(
+                f"Duplicate or empty bridge session_id: {session_id!r} — "
+                "generate a unique id (see BridgeSessionManager.spawn)."
+            )
         handle = await spawn_session(session_id=session_id, command=command, cwd=cwd)
         self._sessions[session_id] = handle
         self._commands[session_id] = command

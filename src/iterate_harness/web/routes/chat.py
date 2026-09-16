@@ -80,7 +80,15 @@ async def chat_status() -> ChatRunStatus:
 async def chat_history() -> list[ChatMessage]:
     """Persisted human-interaction transcript (oldest first, capped)."""
     entries = run_manager.history()
-    return [ChatMessage(**entry) for entry in entries if isinstance(entry, dict)]
+    messages: list[ChatMessage] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            messages.append(ChatMessage(**entry))
+        except (TypeError, ValueError):
+            continue
+    return messages
 
 
 @router.post("/chat/message", response_model=dict[str, Any])

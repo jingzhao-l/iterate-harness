@@ -10,7 +10,7 @@ from iterate_harness.api.client import ApiMessageCompleteEvent
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.engine.messages import ConversationMessage, TextBlock
 from iterate_harness.hooks import HookEvent, HookExecutionContext, HookExecutor
-from iterate_harness.hooks.executor import _inject_arguments
+from iterate_harness.hooks.executor import _inject_arguments, _parse_hook_json, _strip_code_fences
 from iterate_harness.hooks.loader import HookRegistry
 from iterate_harness.hooks.schemas import CommandHookDefinition, PromptHookDefinition
 
@@ -119,3 +119,27 @@ async def test_command_hook_escapes_shell_metacharacters(tmp_path: Path):
     # With proper escaping, the literal $(echo INJECTED) must survive.
     # Without escaping, bash expands the subshell and the $() wrapper is gone.
     assert "$(echo INJECTED)" in output
+
+
+def test_strip_code_fences_removes_surrounding_json_block():
+    assert _strip_code_fences('```json\n{"ok": true}\n```') == '{"ok": true}'
+    assert _strip_code_fences('```\n{"ok": false, "reason": "x"}\n```') == '{"ok": false, "reason": "x"}'
+
+
+def test_strip_code_fences_leaves_bare_or_embedded_json_untouched():
+    assert _strip_code_fences('{"ok": true}') == '{"ok": true}'
+    assert _strip_code_fences('text\n```json\n{"ok": true}\n```') == 'text\n```json\n{"ok": true}\n```'
+
+
+def test_parse_hook_json_accepts_bare_and_fenced_json():
+    assert _parse_hook_json('{"ok": true}') == {"ok": True}
+    assert _parse_hook_json('```json\n{"ok": true}\n```') == {"ok": True}
+    assert _parse_hook_json('```\n{"ok": false, "reason": "nope"}\n```') == {"ok": False, "reason": "nope"}
+
+
+def test_parse_hook_json_text_fallbacks_still_work():
+    assert _parse_hook_json("ok") == {"ok": True}
+    assert _parse_hook_json("yes") == {"ok": True}
+    result = _parse_hook_json("cannot decide")
+    assert result["ok"] is False
+    assert "cannot decide" in result["reason"]

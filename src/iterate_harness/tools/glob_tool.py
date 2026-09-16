@@ -166,13 +166,25 @@ async def _glob(root: Path, pattern: str, *, limit: int, project_root: Path) -> 
                         process.kill()
                     except ProcessLookupError:
                         pass
-                    await process.wait()
+                    try:
+                        await process.wait()
+                    except ProcessLookupError:
+                        pass
 
         # Sorting keeps unit tests and user output deterministic for small results.
         lines.sort()
         return lines
 
     # Fallback: non-recursive patterns are usually cheap; keep Python semantics.
+    from iterate_harness.sandbox.session import is_docker_sandbox_active
+
+    if is_docker_sandbox_active():
+        from iterate_harness.sandbox.path_validator import validate_sandbox_path
+
+        allowed, reason = validate_sandbox_path(root, project_root)
+        if not allowed:
+            return [f"(error: search root '{root}' is outside the sandbox boundary: {reason})"]
+
     return sorted(
         str(path.relative_to(root))
         for path in root.glob(pattern)

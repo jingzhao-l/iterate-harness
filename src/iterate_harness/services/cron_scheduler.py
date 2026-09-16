@@ -25,6 +25,8 @@ from iterate_harness.services.cron import (
     validate_cron_expression,
 )
 from iterate_harness.sandbox import SandboxUnavailableError
+from iterate_harness.utils.file_lock import exclusive_file_lock
+from iterate_harness.utils.fs import atomic_write_text
 from iterate_harness.utils.shell import create_shell_subprocess
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,12 @@ DEFAULT_JOB_TIMEOUT_SECONDS = 300
 
 MAX_JOB_TIMEOUT_SECONDS = 7200
 """Upper bound for a per-job ``timeout`` override (guards typos)."""
+
+MAX_HISTORY_ENTRIES = 5000
+"""Global cap on execution-history lines kept in ``cron_history.jsonl``."""
+
+MAX_HISTORY_BYTES = 5 * 1024 * 1024
+"""Approximate size threshold at which ``cron_history.jsonl`` is pruned."""
 
 
 def _job_timeout(job: dict[str, Any]) -> int:
@@ -64,6 +72,33 @@ def append_history(entry: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry) + "\n")
+    _prune_history_if_needed(path)
+
+
+def _prune_history_if_needed(path: Path) -> None:
+    """Truncate ``cron_history.jsonl`` when it grows beyond the entry/byte cap.
+
+    Pruning is done under an exclusive file lock so concurrent daemon restarts
+    or overlapping scheduler processes do not corrupt the file.  The lock is
+    acquired only when the file exists and exceeds the byte threshold — no I/O
+    on the common append path.
+    """
+    try:
+        if not path.exists() or path.stat().st_size < MAX_HISTORY_BYTES:
+            return
+    except OSError:
+        return
+    with exclusive_file_lock(path.parent / ".history_prune.lock"):
+        # Re-check under the lock — another process may have already pruned.
+        try:
+            if not path.exists() or path.stat().st_size < MAX_HISTORY_BYTES:
+                return
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        tail = [line for line in lines if line.strip()][-MAX_HISTORY_ENTRIES:]
+        atomic_write_text(path, "\n".join(tail) + "\n")
+        logger.info("Pruned cron_history.jsonl to %d entries", len(tail))
 
 
 def load_history(*, limit: int = 50, job_name: str | None = None) -> list[dict[str, Any]]:
@@ -141,15 +176,17 @@ def stop_scheduler() -> bool:
     except OSError:
         remove_pid()
         return False
-    # Wait briefly for process to exit
-    for _ in range(10):
+    # The scheduler's own signal handler cancels in-flight jobs with a 10 s
+    # timeout, so we must wait at least that long before SIGKILL to avoid
+    # orphaning child processes.
+    for _ in range(60):
         try:
             os.kill(pid, 0)
         except OSError:
             remove_pid()
             return True
         time.sleep(0.2)
-    # Force kill
+    # Force kill after the scheduler had ample time to shut down cleanly.
     try:
         os.kill(pid, signal.SIGKILL)
     except OSError as exc:
@@ -275,8 +312,16 @@ def _jobs_due(jobs: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]
 
 
 async def run_scheduler_loop(*, once: bool = False) -> None:
-    """Main scheduler loop.  Runs until SIGTERM or *once* is True (test mode)."""
+    """Main scheduler loop.  Runs until SIGTERM or *once* is True (test mode).
+
+    In-flight jobs are cancelled on shutdown so child processes are not left
+    orphaned by a force-kill.  A bounded wait (``_SHUTDOWN_TIMEOUT_SECONDS``)
+    gives the loop a chance to tear down cleanly before the outer
+    ``stop_scheduler`` SIGKILL arrives.
+    """
+    _SHUTDOWN_TIMEOUT_SECONDS = 10
     shutdown = asyncio.Event()
+    in_flight: set[asyncio.Task[dict[str, Any]]] = set()
 
     def _on_signal() -> None:
         logger.info("Received shutdown signal")
@@ -297,10 +342,13 @@ async def run_scheduler_loop(*, once: bool = False) -> None:
 
             if due:
                 logger.info("Tick: %d job(s) due", len(due))
-                # Execute due jobs concurrently
-                results = await asyncio.gather(
-                    *(execute_job(job) for job in due), return_exceptions=True
-                )
+                # Track in-flight tasks so they can be cancelled on shutdown
+                tasks = {asyncio.create_task(execute_job(job)) for job in due}
+                in_flight.update(tasks)
+                try:
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                finally:
+                    in_flight.difference_update(tasks)
                 for result in results:
                     if isinstance(result, BaseException):
                         logger.error("Unexpected error executing cron job: %s", result)
@@ -311,9 +359,18 @@ async def run_scheduler_loop(*, once: bool = False) -> None:
             try:
                 await asyncio.wait_for(shutdown.wait(), timeout=TICK_INTERVAL_SECONDS)
             except asyncio.TimeoutError:
-                # Expected: wake every tick to re-check jobs and shutdown flag.
                 pass
     finally:
+        # Cancel any straggling in-flight tasks so child processes are reaped
+        # rather than left orphaned.
+        if in_flight:
+            logger.info("Cancelling %d in-flight job(s)", len(in_flight))
+            for task in in_flight:
+                task.cancel()
+            await asyncio.wait_for(
+                asyncio.gather(*in_flight, return_exceptions=True),
+                timeout=_SHUTDOWN_TIMEOUT_SECONDS,
+            )
         remove_pid()
         logger.info("Cron scheduler stopped")
 

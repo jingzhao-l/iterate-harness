@@ -25,7 +25,6 @@ def test_build_backend_command_includes_flags():
         model="kimi-k2.5",
         base_url="https://api.moonshot.cn/anthropic",
         system_prompt="system",
-        api_key="secret",
     )
     assert command[:3] == [command[0], "-m", "iterate_harness"]
     assert "--backend-only" in command
@@ -33,7 +32,30 @@ def test_build_backend_command_includes_flags():
     assert "--model" in command
     assert "--base-url" in command
     assert "--system-prompt" in command
-    assert "--api-key" in command
+    # Credentials must never surface in the child argv (process listings).
+    assert "--api-key" not in command
+
+
+def test_build_backend_command_forwards_settings_and_permission_flags():
+    command = build_backend_command(
+        cwd="/tmp/demo",
+        model="kimi-k2.5",
+        permission_mode="full_auto",
+        config_path="/tmp/custom-settings.json",
+        effort="high",
+        verbose=True,
+        allowed_tools=["bash", "read_file"],
+        disallowed_tools=["write_file"],
+    )
+    assert command[command.index("--permission-mode") + 1] == "full_auto"
+    assert command[command.index("--settings") + 1] == "/tmp/custom-settings.json"
+    assert command[command.index("--effort") + 1] == "high"
+    assert "--verbose" in command
+    allowed_idx = command.index("--allowed-tools")
+    assert command[allowed_idx : allowed_idx + 3] == ["--allowed-tools", "bash", "--allowed-tools"]
+    assert command[command.index("--allowed-tools", allowed_idx + 2) + 1] == "read_file"
+    denied_idx = command.index("--disallowed-tools")
+    assert command[denied_idx + 1] == "write_file"
 
 
 @pytest.mark.asyncio
@@ -50,6 +72,34 @@ async def test_run_repl_uses_react_launcher_by_default(monkeypatch):
     assert seen["prompt"] == "hi"
     assert seen["cwd"] == "/tmp/demo"
     assert seen["model"] == "kimi-k2.5"
+
+
+@pytest.mark.asyncio
+async def test_run_repl_forwards_settings_and_permission_params(monkeypatch):
+    seen = {}
+
+    async def _launch(**kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iterate_harness.ui.app.launch_react_tui", _launch)
+    await run_repl(
+        prompt="hi",
+        cwd="/tmp/demo",
+        permission_mode="full_auto",
+        config_path="/tmp/custom-settings.json",
+        effort="high",
+        verbose=True,
+        allowed_tools=["bash"],
+        disallowed_tools=["write_file"],
+    )
+
+    assert seen["permission_mode"] == "full_auto"
+    assert seen["config_path"] == "/tmp/custom-settings.json"
+    assert seen["effort"] == "high"
+    assert seen["verbose"] is True
+    assert seen["allowed_tools"] == ["bash"]
+    assert seen["disallowed_tools"] == ["write_file"]
 
 
 @pytest.mark.asyncio

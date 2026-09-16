@@ -11,6 +11,7 @@ from iterate_harness.services.session_storage import (
     export_session_markdown,
     get_project_session_dir,
     list_session_snapshots,
+    load_session_by_id,
     load_session_snapshot,
     save_session_snapshot,
 )
@@ -131,3 +132,22 @@ def test_list_session_snapshots_tolerates_corrupt_created_at(tmp_path: Path, mon
     # Descending by created_at.
     timestamps = [session["created_at"] for session in sessions]
     assert timestamps == sorted(timestamps, reverse=True)
+
+
+def test_load_session_snapshot_returns_none_when_file_missing(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    project = tmp_path / "empty-repo"
+    project.mkdir()
+    # No save has been done; latest.json does not exist.  Before the TOCTOU
+    # fix, this path had an exists()-then-read race that could raise or
+    # follow a symlink.  After the fix, a non-existent file simply returns
+    # None.
+    assert load_session_snapshot(project) is None
+
+
+def test_load_session_by_id_returns_none_for_missing_session(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    project = tmp_path / "empty-repo"
+    project.mkdir()
+    assert load_session_by_id(project, "nonexistent") is None
+    assert load_session_by_id(project, "latest") is None

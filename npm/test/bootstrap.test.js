@@ -14,24 +14,36 @@ const {
   MAX_DOWNLOAD_REDIRECTS,
   PYTHON_ENV_VAR,
   artifactExtensionFor,
+  checksumAssetUrl,
   curlDownload,
   downloadCachePath,
   downloadFile,
   downloadTarballTo,
   installCandidates,
   installHarness,
+  installRemoteArtifact,
   isRemoteHttpUrl,
   isSupportedPython,
   needsBootstrap,
+  parseChecksum,
   parsePythonVersion,
   pipInstallArgs,
   pypiInstallSpec,
   pythonCandidates,
   releaseTarballUrl,
+  sha256File,
   venvExecutablePaths,
+  verifyDownloadedArtifact,
   wheelAssetName,
   wheelAssetUrl,
 } = require("../lib/bootstrap");
+
+// The checksum sidecar fetch is normally a network call. Tests exercising the
+// download path stub it so installs stay hermetic and fast (mimics a release
+// that predates sidecars: verify skips, install proceeds).
+const noChecksumStub = async () => {
+  throw new BootstrapError("no sidecar (test stub)");
+};
 
 test("parsePythonVersion extracts major/minor/patch from mixed output", () => {
   assert.deepEqual(parsePythonVersion("Python 3.12.4"), {
@@ -205,6 +217,7 @@ test("installHarness succeeds on the first pip attempt without downloading", asy
     version: "1.9.1",
     runStepFn: (command, args) => pipCalls.push([command, args]),
     downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
+    checksumFetcher: noChecksumStub,
   });
   assert.equal(pipCalls.length, 1);
   assert.deepEqual(
@@ -232,6 +245,7 @@ test("installHarness falls back to a local pip install after a TLS failure", asy
     version: "1.9.1",
     runStepFn,
     downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
+    checksumFetcher: noChecksumStub,
   });
   assert.equal(pipCalls.length, 2);
   assert.deepEqual(pipCalls[1][1], pipInstallArgs(cache));
@@ -254,6 +268,7 @@ test("installHarness wraps both failures when the download fallback dies too", a
       downloader: async () => {
         throw new Error("socket hang up");
       },
+      checksumFetcher: noChecksumStub,
     }),
     (error) =>
       error instanceof BootstrapError &&
@@ -277,6 +292,7 @@ test("installHarness rethrows the primary error verbatim for a single non-http t
       downloader: async () => {
         throw new Error("should not download");
       },
+      checksumFetcher: noChecksumStub,
     }),
     (error) => error instanceof BootstrapError && error.message.includes("build failed")
   );
@@ -298,6 +314,7 @@ test("installHarness tries the next candidate when the previous one fails", asyn
       }
     },
     downloader: async (downloadUrl, dest) => undefined,
+    checksumFetcher: noChecksumStub,
   });
   assert.equal(pipCalls.length, 2);
   assert.deepEqual(
@@ -323,6 +340,7 @@ test("installHarness propagates the second pip failure untouched", async () => {
         throw cacheFailure;
       },
       downloader: async () => undefined,
+      checksumFetcher: noChecksumStub,
     }),
     (error) =>
       error instanceof BootstrapError &&
@@ -353,6 +371,7 @@ test("installHarness downloads a wheel to a .whl cache file on a TLS failure", a
       }
     },
     downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
+    checksumFetcher: noChecksumStub,
   });
   assert.equal(pipCalls.length, 2);
   assert.deepEqual(pipCalls[1][1], pipInstallArgs(cache));
@@ -376,6 +395,7 @@ test("installHarness walks PyPI → wheel → archive across the fallback chain"
       throw new BootstrapError("pip exited with code 1: CERTIFICATE_VERIFY_FAILED");
     },
     downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
+    checksumFetcher: noChecksumStub,
   }).catch(() => undefined);
   // The PyPI spec is non-URL: one pip attempt, no download.
   // The wheel (HTTP) and archive (HTTP) each do: pip → download → local pip.
@@ -408,6 +428,7 @@ test("installHarness surfaces the combined error when every candidate fails", as
       downloader: async () => {
         throw new BootstrapError("wheel unreachable");
       },
+      checksumFetcher: noChecksumStub,
     }),
     (error) =>
       error instanceof BootstrapError && error.message.includes("all install candidates failed")
@@ -423,10 +444,11 @@ test("installHarness installs a single explicit override directly", async () => 
     homeDir: path.join("home", "npm"),
     version: "1.9.1",
     runStepFn: (command, args) => pipCalls.push([command, args]),
-    downloader: async () => {
-      throw new Error("should not download for a non-http url");
-    },
-  });
+downloader: async () => {
+        throw new Error("should not download for a non-http url");
+      },
+      checksumFetcher: noChecksumStub,
+    });
   assert.equal(pipCalls.length, 1);
   assert.deepEqual(pipCalls[0][1], pipInstallArgs(url));
 });
@@ -439,6 +461,7 @@ test("installHarness rejects when no candidates are provided", async () => {
       homeDir: path.join("home", "npm"),
       version: "1.9.1",
       runStepFn: () => undefined,
+      checksumFetcher: noChecksumStub,
     }),
     (error) =>
       error instanceof BootstrapError && error.message.includes("no install candidate")
@@ -538,5 +561,108 @@ test("downloadTarballTo aggregates both download failures", async () => {
       error instanceof BootstrapError &&
       error.message.includes("node-https: node TLS broke") &&
       error.message.includes("curl: curl download of https://x/y.tar.gz failed: exit code 6")
+  );
+});
+
+test("checksumAssetUrl appends the .sha256 sidecar suffix", () => {
+  assert.equal(checksumAssetUrl("https://x/y.whl"), "https://x/y.whl.sha256");
+});
+
+test("parseChecksum accepts bare hex and sha256sum output", () => {
+  const digest = "a".repeat(64);
+  assert.equal(parseChecksum(digest), digest);
+  assert.equal(parseChecksum(`${digest}  iterate_harness-1.0.0-py3-none-any.whl`), digest);
+  assert.equal(parseChecksum(`${"B".repeat(64)}\n`), "b".repeat(64));
+  assert.equal(parseChecksum("not a digest"), null);
+  assert.equal(parseChecksum(""), null);
+});
+
+test("verifyDownloadedArtifact accepts a matching published checksum", async (t) => {
+  const os = require("os");
+  const fs = require("fs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ih-verify-"));
+  const file = path.join(dir, "artifact.whl");
+  fs.writeFileSync(file, "wheel bytes");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const ok = await verifyDownloadedArtifact("https://x/y.whl", file, async (url) => {
+    assert.equal(url, "https://x/y.whl.sha256");
+    return `${sha256File(file)}  y.whl\n`;
+  });
+  assert.equal(ok, true);
+  assert.equal(fs.existsSync(file), true);
+});
+
+test("verifyDownloadedArtifact deletes and rejects a mismatched artifact", async (t) => {
+  const os = require("os");
+  const fs = require("fs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ih-verify-"));
+  const file = path.join(dir, "artifact.whl");
+  fs.writeFileSync(file, "tampered bytes");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  await assert.rejects(
+    verifyDownloadedArtifact("https://x/y.whl", file, async () => `${"0".repeat(64)}  y.whl\n`),
+    (error) => error instanceof BootstrapError && error.message.includes("SHA256 mismatch")
+  );
+  assert.equal(fs.existsSync(file), false);
+});
+
+test("verifyDownloadedArtifact warns and skips when no sidecar is published", async (t) => {
+  const os = require("os");
+  const fs = require("fs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ih-verify-"));
+  const file = path.join(dir, "artifact.tar.gz");
+  fs.writeFileSync(file, "archive bytes");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const ok = await verifyDownloadedArtifact("https://x/y.tar.gz", file, async () => {
+    throw new BootstrapError("HTTP 404");
+  });
+  assert.equal(ok, false);
+  assert.equal(fs.existsSync(file), true);
+});
+
+test("installRemoteArtifact verifies downloaded bytes before pip installs them", async (t) => {
+  const os = require("os");
+  const fs = require("fs");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ih-install-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  const calls = [];
+  const downloader = async (url, dest) => {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, "downloaded wheel");
+    calls.push(["downloaded", url]);
+  };
+
+  // First pip attempt (from URL) fails to force the download path.
+  let firstPip = true;
+  const runner = (python, args) => {
+    if (firstPip && args[args.length - 1].startsWith("https://")) {
+      firstPip = false;
+      throw new BootstrapError("pip TLS broke");
+    }
+    calls.push(args);
+  };
+
+  await installRemoteArtifact(
+    "python",
+    "https://x/y.whl",
+    home,
+    "1.0.0",
+    runner,
+    downloader,
+    async (url) => {
+      assert.ok(url.endsWith(".sha256"));
+      return null;
+    }
+  );
+
+  const localInstall = calls.find((c) => Array.isArray(c) && c.includes("-m") && c.includes("pip"));
+  assert.ok(localInstall, "expected a local pip install after download");
+  assert.ok(
+    calls.some((c) => c[0] === "downloaded"),
+    "expected the artifact to be downloaded before the local pip install"
   );
 });

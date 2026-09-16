@@ -37,7 +37,10 @@ delegation logic used at install time and at runtime is the same:
    unreachable or its TLS cert fails to verify. If PyPI is unavailable, the
    wrapper falls back to the pre-built **wheel** on the GitHub release
    (frontend assets baked in, like iterate-skill-installer ships pre-wrapped
-   assets), then the pinned **source archive** as a final resort.
+   assets), then the pinned **source archive** as a final resort. Every artifact
+   the wrapper downloads itself is hashed with SHA256 and verified against the
+   release's `.sha256` sidecar before pip installs it — a tampered or
+   corrupted download is refused, never installed.
 4. Delegates to the venv's real `ih` executable with argv, stdio, signals and
    exit codes forwarded.
 

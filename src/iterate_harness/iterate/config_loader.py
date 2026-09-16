@@ -159,9 +159,15 @@ def parse_dimension_resources(
                 errors.append(f"dimension_resources.{dim}.concurrency must be an integer")
                 concurrency = None
             else:
-                concurrency = max(
+                clamped = max(
                     MIN_DIMENSION_CONCURRENCY, min(MAX_DIMENSION_CONCURRENCY, concurrency)
                 )
+                if clamped != concurrency:
+                    errors.append(
+                        f"dimension_resources.{dim}.concurrency {concurrency} clamped "
+                        f"to [{MIN_DIMENSION_CONCURRENCY}, {MAX_DIMENSION_CONCURRENCY}]"
+                    )
+                    concurrency = clamped
         token_budget = value.get("token_budget")
         if token_budget is not None and (
             not isinstance(token_budget, int)
@@ -489,11 +495,16 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     language_raw = data.get("language", defaults.language)
     language = language_raw if language_raw in ("zh", "en") else defaults.language
     max_rounds_raw = data.get("max_rounds", defaults.max_rounds)
-    max_rounds = (
-        max_rounds_raw
-        if isinstance(max_rounds_raw, int) and not isinstance(max_rounds_raw, bool)
-        else defaults.max_rounds
-    )
+    if isinstance(max_rounds_raw, int) and not isinstance(max_rounds_raw, bool):
+        max_rounds = max_rounds_raw
+        if max_rounds <= 0:
+            log.warning(
+                "iterate config.max_rounds: %r must be >= 1, using default",
+                max_rounds_raw,
+            )
+            max_rounds = defaults.max_rounds
+    else:
+        max_rounds = defaults.max_rounds
 
     return IterateConfig(
         goal=str(data.get("goal", defaults.goal)),

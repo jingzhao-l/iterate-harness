@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import difflib
 import logging
 import re
@@ -59,6 +60,10 @@ REACTIVE_COMPACT_STATUS_MESSAGE = "Prompt too long; compacting conversation memo
 MAX_SAFE_COMPLETION_TOKENS = 128_000
 
 log = logging.getLogger(__name__)
+
+# Sentinel distinguishing "key was absent before this tool ran" from a
+# pre-existing key whose value happens to be ``None``.
+_NOT_PRESENT = object()
 
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
@@ -648,7 +653,9 @@ async def _preprocess_images_in_messages(
 
     yield StatusEvent(message=_IMAGE_PREPROCESS_STATUS)
 
-    # Process images in parallel
+    # Process images in parallel. A tool that *raises* must degrade to a
+    # descriptive text block instead of cancelling its siblings and aborting
+    # the whole query (mirrors the single-tool containment semantics).
     async def _describe(msg_idx: int, blk_idx: int, block: ImageBlock) -> tuple[int, int, str]:
         tool = context.tool_registry.get("image_to_text")
         if tool is None:
@@ -679,7 +686,23 @@ async def _preprocess_images_in_messages(
             return msg_idx, blk_idx, f"[Image description failed: {result.output}]"
         return msg_idx, blk_idx, result.output
 
-    results = await asyncio.gather(*[_describe(mi, bi, blk) for mi, bi, blk in pending])
+    async def _describe_guarded(msg_idx: int, blk_idx: int, block: ImageBlock) -> tuple[int, int, str]:
+        try:
+            return await _describe(msg_idx, blk_idx, block)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            log.exception(
+                "image preprocessing failed: %s/%s", msg_idx, blk_idx, exc_info=True
+            )
+            return msg_idx, blk_idx, f"[Image description error: {type(exc).__name__}: {exc}]"
+
+    # No ``return_exceptions``: ``_describe_guarded`` already converts every
+    # non-cancellation failure into a fallback text block, and cancellation
+    # must propagate (shutdown, Esc).
+    results = await asyncio.gather(
+        *[_describe_guarded(mi, bi, blk) for mi, bi, blk in pending]
+    )
 
     # Replace ImageBlocks with TextBlocks in-place
     for msg_idx, blk_idx, description in results:
@@ -740,17 +763,37 @@ async def run_query(
                 auto_compact_threshold_tokens=context.auto_compact_threshold_tokens,
             )
         )
-        while True:
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(progress_queue.get(), timeout=0.05)
+                    yield event, None
+                except asyncio.TimeoutError:
+                    if task.done():
+                        break
+                    continue
+            while not progress_queue.empty():
+                yield progress_queue.get_nowait(), None
+            last_compaction_result = await task
+        finally:
+            # The consumer can stop early (cancellation, an unmetablock
+            # error, an escape). In that case the compaction task must never
+            # keep running in the background: it holds the shared session
+            # ``messages`` list and would keep rewriting it — and mutating
+            # ``context.tool_metadata`` — after we have yielded control,
+            # tearing state the next turn reads.
+            if task.done():
+                if not task.cancelled():
+                    exc = task.exception()
+                    if exc is not None:
+                        log.error("compaction task failed: %s", exc)
+                return
+            task.cancel()
             try:
-                event = await asyncio.wait_for(progress_queue.get(), timeout=0.05)
-                yield event, None
-            except asyncio.TimeoutError:
-                if task.done():
-                    break
-                continue
-        while not progress_queue.empty():
-            yield progress_queue.get_nowait(), None
-        last_compaction_result = await task
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            except BaseException:
+                log.exception("compaction task did not finish cleanly")
         return
 
     turn_count = 0
@@ -1234,10 +1277,17 @@ async def _execute_tool_call(
 
     log.debug("executing %s ...", tool_name)
     t0 = time.monotonic()
+    # Capture the pre-execution metadata (shallow): lets the merge-back below
+    # only persist keys this tool actually introduced or replaced, so a
+    # concurrent sibling's write to the same key is never clobbered with a
+    # stale copy of the shared metadata dict.
+    prior_metadata: dict[str, object] = {}
+    if context.tool_metadata is not None:
+        prior_metadata = dict(context.tool_metadata)
     exec_metadata = {
         "tool_registry": context.tool_registry,
         "ask_user_prompt": context.ask_user_prompt,
-        **(context.tool_metadata or {}),
+        **prior_metadata,
     }
     # Defensive kernel (design §20.3.2): expose the per-query kernel to tools
     # so they can record assumptions; it is per-query and never persisted.
@@ -1295,12 +1345,18 @@ async def _execute_tool_call(
             result = ToolResult(output=defensive_failure, is_error=True)
     # Carry tool metadata writes back into the durable per-session state so
     # cross-turn consumers (e.g. the iterate loop policy reading
-    # "iterate_state") observe them.
+    # "iterate_state") observe them. Only keys the tool introduced or replaced
+    # (by identity) are merged: in-place edits already propagated through the
+    # shared object reference, and untouched pre-existing keys are never
+    # copied back (their stale shallow copies would clobber a concurrent
+    # sibling's write to the same key).
     if context.tool_metadata is not None:
         for key, value in exec_metadata.items():
             if key in ("tool_registry", "ask_user_prompt", DEFENSIVE_KERNEL_KEY):
                 continue
-            context.tool_metadata[key] = value
+            prior_ref = prior_metadata.get(key, _NOT_PRESENT)
+            if prior_ref is _NOT_PRESENT or value is not prior_ref:
+                context.tool_metadata[key] = value
     elapsed = time.monotonic() - t0
     log.debug("executed %s in %.2fs err=%s output_len=%d",
               tool_name, elapsed, result.is_error, len(result.output or ""))
@@ -1614,7 +1670,11 @@ async def _handle_iterate_pause_text(
     """Pause menu over the free-text question channel (fallback UIs)."""
     from iterate_harness.iterate import prompts
 
-    assert prompt_cb is not None  # guarded by the caller
+    if prompt_cb is None:
+        # No free-text prompt channel available (assert-removal-safe guard):
+        # fail closed by stopping the loop instead of crashing the query.
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "pause prompt unavailable")
+        return PAUSE_ACTION_STOP, None
     try:
         answer = (
             await prompt_cb(prompts.pause_menu_question(round_number, new_findings, pause_reason))

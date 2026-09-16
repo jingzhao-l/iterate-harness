@@ -20,5 +20,10 @@ class CostTracker:
 
     @property
     def total(self) -> UsageSnapshot:
-        """Return the aggregated usage."""
-        return self._usage
+        """Return a copy of the aggregated usage.
+
+        A copy (rather than the internal instance) keeps callers — e.g. the
+        web backend dumping ``total`` into SSE payloads — from mutating the
+        accumulator through the returned reference.
+        """
+        return self._usage.model_copy(deep=True)

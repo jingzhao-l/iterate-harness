@@ -2,6 +2,75 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.2.7] - 2026-09-15
+
+### Fixed
+
+- **CLI `--permission-mode` / `--allowed-tools` / `--disallowed-tools` 无效**
+  （`config/settings.py` `merge_cli_overrides`，`cli.py`，`ui/runtime.py` 等）：
+  三个权限 CLI 标志仅写入 `Settings` 顶层的同名属性，未路由到实际使用的
+  `Settings.permission` 子模型，导致命令行传入的权限模式/工具限制永远不会生效。
+  现这三个参数从 `merge_cli_overrides` 中弹出后写入 `permission` 子模型；
+  非法 `--permission-mode` 会降级为 `default` 并记录日志警告。
+- **`--settings` 文件不存在时静默回退到默认配置**
+  （`cli.py`）：`--settings` 指向不存在的路径时，`load_settings` 会忽略它
+  并使用 `~/.iterate-harness/settings.json`，用户不知情。现 `main()` 在
+  分发前校验文件是否存在，不存在则报错退出。
+- **`merge_cli_overrides` 在 Settings 上产生残留属性**
+  （`config/settings.py`）：`permission_mode`/`allowed_tools`/`disallowed_tools`
+  被 `model_copy(update=updates)` 写入顶层实例，导致 `s.permission_mode` 永远
+  存在但无人读取。现这三个 key 在 `model_copy` 前弹出。
+- **`--name` / `--bare` / `--mcp-config` 死选项已移除**
+  （`cli.py`）：三个选项无后端实现，误导用户。现已删除，同步更新 README。
+- **npm 包装器下载产物无完整性校验**
+  （`npm/lib/bootstrap.js`，`.github/workflows/release.yml`）：npm wrapper
+  下载 wheel/tarball 后直接 pip install，无 SHA256 校验，受中间人/缓存投毒
+  时可安装篡改产物。release.yml 现在在上传 wheel 时同步上传 `.sha256`
+  sidecar；bootstrap.js 在 fallback 下载路径中先用 Node fetch 获取 sidecar、
+  校验 sha256 后再 pip install；sidecar 不存在（旧版本）时降级为 warning。
+- **插件命令 YAML 布尔值 `bool("false")` 为 True**
+  （`plugins/loader.py` `_coerce_bool`）：`disable-model-invocation` /
+  `user-invocable` 从 YAML frontmatter 读取后直接 `bool()` 转换，引号
+  包裹的 `"false"` 字符串会使 `bool("false")` → `True`，静默违反作者意图。
+  新增 `_coerce_bool`：对 `"false"/"no"/"off"/"0"/"none"` 返回 `False`，
+  `"true"/"yes"/"on"/"1"` 返回 `True`，其余回退到 `bool()`。
+- **swarm 邮箱路径穿越**
+  （`swarm/mailbox.py` `validate_agent_id`，`get_agent_mailbox_dir`）：
+  `get_agent_mailbox_dir` 的 `agent_id` 参数未做路径安全校验，包含
+  `../` 的 agent_id 可逃出 `~/.iterate-harness/teams` 目录读写任意文件。
+  新增 `validate_agent_id`（拒绝空字符串、NUL、`/`、`\`、`.`、`..`）并在
+  `get_agent_mailbox_dir` 入口处强制调用。
+- **bridge session_id 秒级时钟碰撞静默覆盖**
+  （`bridge/manager.py`，`commands/registry.py`）：`/bridge spawn` 使用
+  `bridge-%H%M%S` 格式，同一秒内多次 spawn 产生相同 ID，manager 的
+  `_sessions` 字典被静默覆盖（旧进程句柄和 copy task 泄漏）。
+  registry 现追加 6 位随机十六进制后缀；`BridgeSessionManager.spawn` 拒绝
+  空或已存在的 session_id（抛 ValueError）。
+- **hooks JSON 被 markdown 围栏包裹时静默阻塞事件**
+  （`hooks/executor.py` `_strip_code_fences`，`_parse_hook_json`）：
+  prompt/agent hook 返回的 JSON 常被模型包裹在 ````json ... ```` 中，
+  `json.loads` 失败后降级为文本匹配，包含 `{"ok": true}` 的围栏输出
+  被误判为失败。新增 `_strip_code_fences`，在 `json.loads` 前剥离围栏。
+- **session_storage TOCTOU 与并发写无锁**
+  （`services/session_storage.py`）：`load_session_snapshot`/`load_session_by_id`
+  使用 `exists()` 后再 `read_text()` 的两步检查，竞态窗口内文件被删除或
+  替换为 symlink 时会 raise 或读取攻击者数据；`save_session_snapshot`
+  两步写入（latest.json + session-{sid}.json）无锁，并发保存导致读取者
+  见到不一致的一对文件。现读路径改为 `try: read_text() except
+  FileNotFoundError: return None`；写路径用 `exclusive_file_lock` 包裹。
+- **cron 历史文件无界增长 + 关机时 in-flight 任务不取消**
+  （`services/cron_scheduler.py`）：`cron_history.jsonl` append-only，永不
+  裁剪；`ih cron stop` 发 SIGTERM 后等待仅 2s，超时 SIGKILL，in-flight
+  任务的子进程被孤儿。现 `append_history` 在文件超过 5MB 时 under exclusive
+  file lock 保留最近 5000 条；scheduler loop 追踪 in-flight tasks 并在
+  shutdown 时 cancel + 等待 10s；`stop_scheduler` 等待 12s 后才 SIGKILL。
+
+### Verification
+
+- 全量 pytest **2098 passed, 6 skipped**；ruff clean；mypy clean（13 源文件
+  专项检查 + 246 源文件全量）；npm 包装器 **56 passed**。
+- 版本号在 `__init__.py` / `npm/package.json` 同步至 2.2.7。
+
 ## [2.2.6] - 2026-09-14
 
 ### Fixed

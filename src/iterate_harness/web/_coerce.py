@@ -9,6 +9,7 @@ API.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -40,6 +41,16 @@ def as_float(value: object, fallback: float = 0.0) -> float:
         except ValueError:
             return fallback
     return fallback
+
+
+def as_finite(value: float) -> float:
+    """Replace non-finite floats (NaN / ±Infinity) with ``0.0``.
+
+    JSON persisted by a cost meter can carry ``NaN``; serializing it back
+    produces a bare ``NaN`` / ``Infinity`` token that ``JSON.parse`` in the
+    browser (and SSE ``EventSource``) rejects, silently breaking the payload.
+    """
+    return value if math.isfinite(value) else 0.0
 
 
 def as_list(value: object) -> list[Any]:

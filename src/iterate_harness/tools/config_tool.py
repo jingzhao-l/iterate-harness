@@ -64,6 +64,26 @@ def _coerce_value(key: str, value: str) -> object:
     return value
 
 
+#: Substrings that mark a key as carrying a credential. Applied case-insensitively
+#: so nested secret fields (provider api_key / secret_key / password, etc.) are
+#: never echoed into the model context by :meth:`ConfigTool.execute`.
+_SECRET_SUFFIXES = ("key", "token", "secret", "password", "credential")
+
+
+def _redact(value: object, key: str = "") -> object:
+    """Deep-redact credential-like values for safe model-context output."""
+    if isinstance(value, dict):
+        return {k: _redact(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    lowered = key.lower()
+    if any(suffix in lowered for suffix in _SECRET_SUFFIXES) and isinstance(value, str):
+        if not value:
+            return ""
+        return "<redacted>"
+    return value
+
+
 class ConfigToolInput(BaseModel):
     """Arguments for config access."""
 
@@ -83,11 +103,10 @@ class ConfigTool(BaseTool[ConfigToolInput]):
         del context
         settings = load_settings()
         if arguments.action == "show":
-            # Never echo credentials into the model context — the plain dump
-            # leaks api_key (and other secrets) to the LLM and into the
-            # conversation transcript.
-            redacted = settings.model_dump()
-            redacted["api_key"] = "<redacted>"
+            # Never echo credentials into the model context — a plain dump
+            # leaks api_key (and nested provider/secret fields) to the LLM and
+            # into the conversation transcript.
+            redacted = _redact(settings.model_dump())
             return ToolResult(output=json.dumps(redacted, indent=2, ensure_ascii=False))
         if arguments.action == "set" and arguments.key and arguments.value is not None:
             if arguments.key not in _ALLOWED_CONFIG_KEYS:

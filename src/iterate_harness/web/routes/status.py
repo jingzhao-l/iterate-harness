@@ -17,7 +17,7 @@ from ...iterate.ci_report import latest_report_entry
 from ...iterate.config_loader import load_effective_config
 from ...iterate.decision_log import DecisionLogEntry, read_entries
 from ...iterate.last_state import summarize_last_run
-from .._coerce import as_float, as_int, as_list
+from .._coerce import as_finite, as_float, as_int, as_list
 from ..security import read_audit_entries
 from ..schemas import StatusResponse
 
@@ -74,13 +74,23 @@ def _budget_view(project_root: Path) -> dict[str, Any]:
     report_data = report.data if report is not None and isinstance(report.data, dict) else {}
     checkpoint = load_checkpoint(project_root) or {}
 
-    used_tokens = as_int(report_data.get("totalTokens")) or as_int(checkpoint.get("input_tokens", 0))
-    used_usd = as_float(report_data.get("totalCostUsd")) or as_float(checkpoint.get("cost_usd", 0.0))
-    # input/output tokens from the checkpoint when a report is missing.
-    if not report_data.get("totalTokens"):
+    # Token/cost figures: the report is authoritative when present; the
+    # checkpoint is only a fallback for an interrupted run. Distinguish
+    # "report missing" from "report present with a 0 value" — a run that
+    # genuinely consumed 0 tokens must not be overlaid with pre-run
+    # checkpoint usage.
+    report_has_tokens = "totalTokens" in report_data
+    report_has_cost = "totalCostUsd" in report_data
+    if report_has_tokens:
+        used_tokens = as_int(report_data.get("totalTokens"))
+    else:
         used_tokens = as_int(checkpoint.get("input_tokens", 0)) + as_int(
             checkpoint.get("output_tokens", 0)
         )
+    if report_has_cost:
+        used_usd = as_finite(as_float(report_data.get("totalCostUsd")))
+    else:
+        used_usd = as_finite(as_float(checkpoint.get("cost_usd", 0.0)))
     return {
         "usedTokens": used_tokens,
         "usedUsd": round(used_usd, 6),

@@ -421,7 +421,7 @@ def test_build_dry_run_preview_classifies_slash_command_and_flags_bad_mcp(monkey
         def list_skills(self):
             return []
 
-    monkeypatch.setattr("iterate_harness.config.load_settings", lambda: settings)
+    monkeypatch.setattr("iterate_harness.config.load_settings", lambda _config_path=None: settings)
     monkeypatch.setattr(
         "iterate_harness.api.provider.detect_provider",
         lambda settings: types.SimpleNamespace(name="anthropic"),
@@ -462,7 +462,7 @@ def test_build_dry_run_preview_sets_blocked_when_model_prompt_lacks_auth(monkeyp
         def list_skills(self):
             return []
 
-    monkeypatch.setattr("iterate_harness.config.load_settings", lambda: settings)
+    monkeypatch.setattr("iterate_harness.config.load_settings", lambda _config_path=None: settings)
     monkeypatch.setattr(
         "iterate_harness.api.provider.detect_provider",
         lambda settings: types.SimpleNamespace(name="anthropic"),
@@ -531,7 +531,7 @@ def test_build_dry_run_preview_recommends_matching_skills_and_tools(monkeypatch,
                 },
             ]
 
-    monkeypatch.setattr("iterate_harness.config.load_settings", lambda: settings)
+    monkeypatch.setattr("iterate_harness.config.load_settings", lambda _config_path=None: settings)
     monkeypatch.setattr(
         "iterate_harness.api.provider.detect_provider",
         lambda settings: types.SimpleNamespace(name="anthropic"),

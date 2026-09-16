@@ -824,8 +824,15 @@ def _parse_finding(raw: object, errors: list[str], index: int) -> ReviewFinding 
         errors.append(f"findings[{index}] severity must be one of {sorted(SEVERITY_RANK)}")
         return None
     line = raw.get("line")
-    if line is not None and not isinstance(line, int):
+    # ``bool`` is a subclass of ``int`` in Python: accept only true integers
+    # (``True`` as a line number would silently coerce to ``1``).
+    if line is not None and (isinstance(line, bool) or not isinstance(line, int)):
         errors.append(f"findings[{index}] line must be an integer or null")
+        return None
+    is_atomic = raw["is_atomic"]
+    is_atomic_value = _coerce_flag(is_atomic)
+    if is_atomic_value is None:
+        errors.append(f"findings[{index}] is_atomic must be a boolean (true/false)")
         return None
     return ReviewFinding(
         dimension=str(raw["dimension"]),
@@ -834,9 +841,30 @@ def _parse_finding(raw: object, errors: list[str], index: int) -> ReviewFinding 
         summary=str(raw["summary"]),
         failure_scenario=str(raw["failure_scenario"]),
         suggested_fix=str(raw["suggested_fix"]),
-        is_atomic=bool(raw["is_atomic"]),
+        is_atomic=is_atomic_value,
         line=line,
     )
+
+
+def _coerce_flag(value: object) -> bool | None:
+    """Coerce a boolean-like slot strictly (accepting strings a jittery LLM
+    may emit) without ever trusting truthiness of arbitrary strings."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    return None
+
+
+def _coerce_int(value: object) -> int | None:
+    """Coerce an integer-like slot strictly (no bool/float/None acceptance)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+        return None
+    return value
 
 
 def report_from_dict(data: object) -> ReviewReport:
@@ -889,10 +917,16 @@ def report_from_dict(data: object) -> ReviewReport:
     if errors:
         raise ValueError("invalid report: " + "; ".join(errors))
 
+    max_review_rounds = _coerce_int(data.get("maxReviewRounds", len(rounds) or 1))
+    if max_review_rounds is None:
+        raise ValueError(
+            "invalid report: maxReviewRounds must be an integer"
+        )
+
     return build_review_report(
         mode=mode,
         goal=str(data.get("goal", "")),
         dimensions=dimensions,
-        max_review_rounds=int(data.get("maxReviewRounds", len(rounds) or 1)),
+        max_review_rounds=max_review_rounds,
         rounds=rounds,
     )

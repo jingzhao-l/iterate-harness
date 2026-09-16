@@ -101,6 +101,7 @@ class RuntimeBundle:
     extra_plugin_roots: tuple[str, ...] = ()
     memory_backend: MemoryCommandBackend | None = None
     include_project_memory: bool = True
+    config_path: str | None = None
 
     def current_settings(self) -> Settings:
         """Return the effective settings for this session.
@@ -111,7 +112,9 @@ class RuntimeBundle:
         slash command (e.g. ``/fast``) would refresh UI state from disk and
         "snap back" the model/provider to whatever is stored in the config file.
         """
-        return load_settings().merge_cli_overrides(**self.settings_overrides)
+        return load_settings(
+            Path(self.config_path).expanduser().resolve() if self.config_path else None
+        ).merge_cli_overrides(**self.settings_overrides)
 
     def current_plugins(self) -> list[LoadedPlugin]:
         """Return currently visible plugins for the working tree."""
@@ -208,6 +211,11 @@ async def build_runtime(
     memory_backend: MemoryCommandBackend | None = None,
     include_project_memory: bool = True,
     task_mode: str | None = None,
+    config_path: str | Path | None = None,
+    effort: str | None = None,
+    verbose: bool | None = None,
+    allowed_tools: Iterable[str] | None = None,
+    disallowed_tools: Iterable[str] | None = None,
 ) -> RuntimeBundle:
     """Build the shared runtime for an IterateHarness session."""
     settings_overrides: dict[str, Any] = {
@@ -219,8 +227,15 @@ async def build_runtime(
         "api_format": api_format,
         "active_profile": active_profile,
         "permission_mode": permission_mode,
+        "effort": effort,
+        "verbose": verbose,
+        "allowed_tools": list(allowed_tools) if allowed_tools else None,
+        "disallowed_tools": list(disallowed_tools) if disallowed_tools else None,
     }
-    settings = load_settings().merge_cli_overrides(**settings_overrides)
+    resolved_config_path = str(Path(config_path).expanduser().resolve()) if config_path else None
+    settings = load_settings(Path(resolved_config_path) if resolved_config_path else None).merge_cli_overrides(
+        **settings_overrides
+    )
     cwd = str(Path(cwd).expanduser().resolve()) if cwd else str(Path.cwd())
     normalized_skill_dirs = tuple(str(Path(path).expanduser().resolve()) for path in (extra_skill_dirs or ()))
     normalized_plugin_roots = tuple(str(Path(path).expanduser().resolve()) for path in (extra_plugin_roots or ()))
@@ -379,6 +394,7 @@ async def build_runtime(
         extra_plugin_roots=normalized_plugin_roots,
         memory_backend=memory_backend,
         include_project_memory=include_project_memory,
+        config_path=resolved_config_path,
     )
 
 

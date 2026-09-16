@@ -16,6 +16,25 @@ from iterate_harness.sandbox.adapter import SandboxAvailability, SandboxUnavaila
 logger = logging.getLogger(__name__)
 
 
+def _redact_argv_for_log(argv: list[str]) -> str:
+    """Render a docker argv for logging with ``-e KEY=value`` env values masked.
+
+    Environment variables passed to the sandbox container can hold credentials
+    (API keys, auth tokens); dumping the raw argv into the log would leak them.
+    """
+    parts: list[str] = []
+    redacting_value = False
+    for token in argv:
+        if redacting_value:
+            parts.append("***")
+            redacting_value = False
+            continue
+        parts.append(token)
+        if token == "-e":
+            redacting_value = True
+    return " ".join(parts)
+
+
 def get_docker_availability(settings: Settings) -> SandboxAvailability:
     """Check whether Docker can be used as a sandbox backend."""
     if not settings.sandbox.enabled or settings.sandbox.backend != "docker":
@@ -142,7 +161,7 @@ class DockerSandboxSession:
             )
 
         argv = self._build_run_argv()
-        logger.info("Starting Docker sandbox: %s", " ".join(argv))
+        logger.info("Starting Docker sandbox: %s", _redact_argv_for_log(argv))
 
         process = await asyncio.create_subprocess_exec(
             *argv,

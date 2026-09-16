@@ -320,6 +320,26 @@ def _coerce_path_list(raw: Any) -> list[str]:
     return []
 
 
+def _coerce_bool(value: Any) -> bool:
+    """Coerce a YAML/frontmatter value into a strict boolean.
+
+    YAML parses unquoted ``false`` into Python ``False``, but authors commonly
+    write quoted ``"false"`` / ``"true"`` strings; ``bool("false")`` is ``True``,
+    silently disabling the author's intent.  Accept only obvious booleans.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"false", "no", "off", "0", "none"}:
+            return False
+        if lowered in {"true", "yes", "on", "1"}:
+            return True
+    return bool(value)
+
+
 def _load_plugin_commands(path: Path, manifest: PluginManifest) -> list[PluginCommandDefinition]:
     commands: list[PluginCommandDefinition] = []
     seen: set[Path] = set()
@@ -457,9 +477,9 @@ def _load_single_command_file(
     version = frontmatter.get("version")
     model = frontmatter.get("model")
     effort = frontmatter.get("effort")
-    disable_model_invocation = bool(frontmatter.get("disable-model-invocation", False))
+    disable_model_invocation = _coerce_bool(frontmatter.get("disable-model-invocation", False))
     user_invocable_raw = frontmatter.get("user-invocable")
-    user_invocable = True if user_invocable_raw is None else bool(user_invocable_raw)
+    user_invocable = True if user_invocable_raw is None else _coerce_bool(user_invocable_raw)
     return PluginCommandDefinition(
         name=command_name,
         description=description,

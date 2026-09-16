@@ -18,6 +18,7 @@ from iterate_harness.engine.messages import (
     sanitize_conversation_messages,
 )
 from iterate_harness.utils.fs import atomic_write_text
+from iterate_harness.utils.file_lock import exclusive_file_lock
 
 log = logging.getLogger(__name__)
 
@@ -106,13 +107,18 @@ def save_session_snapshot(
     }
     data = json.dumps(payload, indent=2) + "\n"
 
-    # Save as latest
-    latest_path = session_dir / "latest.json"
-    atomic_write_text(latest_path, data)
+    # Both the latest.json and session-{sid}.json writes must be consistent
+    # for concurrent readers; holding a per-project lock keeps the pair
+    # in sync when two processes save at the same instant.
+    lock_path = session_dir / ".session_write.lock"
+    with exclusive_file_lock(lock_path):
+        # Save as latest
+        latest_path = session_dir / "latest.json"
+        atomic_write_text(latest_path, data)
 
-    # Save by session ID
-    session_path = session_dir / f"session-{sid}.json"
-    atomic_write_text(session_path, data)
+        # Save by session ID
+        session_path = session_dir / f"session-{sid}.json"
+        atomic_write_text(session_path, data)
 
     return latest_path
 
@@ -133,9 +139,15 @@ def _sanitize_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def load_session_snapshot(cwd: str | Path) -> dict[str, Any] | None:
     """Load the most recent session snapshot for the project."""
     path = get_project_session_dir(cwd) / "latest.json"
-    if not path.exists():
+    # Avoid a exists()-then-read TOCTOU race: if the file is deleted or
+    # replaced by a symlink between the check and the read we would either
+    # raise FileNotFoundError or read attacker-controlled data.  Catch the
+    # race at the read boundary instead.
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
         return None
-    return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
+    return _sanitize_snapshot_payload(json.loads(raw))
 
 
 def _coerce_mtime(value: object, fallback: float) -> float:
@@ -223,16 +235,24 @@ def load_session_by_id(cwd: str | Path, session_id: str) -> dict[str, Any] | Non
         log.warning("Invalid session_id format: %r", session_id)
         return None
     session_dir = get_project_session_dir(cwd)
-    # Try named session first
+    # Try named session first — read directly; handle the race at the
+    # read boundary rather than checking exists() first.
     path = session_dir / f"session-{session_id}.json"
-    if path.exists():
-        return _sanitize_snapshot_payload(json.loads(path.read_text(encoding="utf-8")))
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        raw = None
+    if raw is not None:
+        return _sanitize_snapshot_payload(json.loads(raw))
     # Fallback to latest.json if session_id matches
     latest = session_dir / "latest.json"
-    if latest.exists():
-        data = _sanitize_snapshot_payload(json.loads(latest.read_text(encoding="utf-8")))
-        if data.get("session_id") == session_id or session_id == "latest":
-            return data
+    try:
+        raw = latest.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return None
+    data = _sanitize_snapshot_payload(json.loads(raw))
+    if data.get("session_id") == session_id or session_id == "latest":
+        return data
     return None
 
 

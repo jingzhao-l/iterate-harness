@@ -81,10 +81,24 @@ jobs:
           echo "---"
           python -m zipfile -l dist/*.whl | { grep -E "_frontend_web/|_frontend/" | head -20 || true; }
 
-      - name: Upload wheel to release
+      - name: Generate SHA256 checksums
+        # The npm wrapper hashes any artifact it downloads itself and compares
+        # it against a `<artifact>.sha256` sidecar published next to the wheel.
+        # Keep this step BEFORE the upload so the sidecar ships atomically.
+        run: |
+          cd dist
+          shasum -a 256 *.whl > /tmp/checksums.txt
+          while read -r digest name; do
+            printf '%s  %s\n' "$digest" "$name" > "${name}.sha256"
+          done < /tmp/checksums.txt
+          cat *.sha256
+
+      - name: Upload wheel and checksum to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.whl
+          files: |
+            dist/*.whl
+            dist/*.whl.sha256
 
       - name: Publish wheel to PyPI (iff token configured)
         # Primary install channel for the npm wrapper is the official PyPI

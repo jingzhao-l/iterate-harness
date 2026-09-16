@@ -36,24 +36,30 @@ class TodoWriteTool(BaseTool[TodoWriteToolInput]):
             if not allowed:
                 return ToolResult(output=f"Sandbox: {reason}", is_error=True)
 
-        existing = path.read_text(encoding="utf-8") if path.exists() else "# TODO\n"
-
-        unchecked_line = f"- [ ] {arguments.item}"
-        checked_line = f"- [x] {arguments.item}"
-        target_line = checked_line if arguments.checked else unchecked_line
-
-        if unchecked_line in existing and arguments.checked:
-            # Mark existing unchecked item as done (in-place update)
-            updated = existing.replace(unchecked_line, checked_line, 1)
-        elif target_line in existing:
-            # Item already in desired state — no-op
-            return ToolResult(output=f"No change needed in {path}")
-        else:
-            # New item — append
-            updated = existing.rstrip() + f"\n{target_line}\n"
+        # Serialize read-modify-write with concurrent TODO writers and swap
+        # the result in atomically (never a truncated checklist).
+        from iterate_harness.utils.file_lock import exclusive_file_lock
+        from iterate_harness.utils.fs import atomic_write_text
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(updated, encoding="utf-8")
+        with exclusive_file_lock(path.with_name(path.name + ".lock")):
+            existing = path.read_text(encoding="utf-8") if path.exists() else "# TODO\n"
+
+            unchecked_line = f"- [ ] {arguments.item}"
+            checked_line = f"- [x] {arguments.item}"
+            target_line = checked_line if arguments.checked else unchecked_line
+
+            if unchecked_line in existing and arguments.checked:
+                # Mark existing unchecked item as done (in-place update)
+                updated = existing.replace(unchecked_line, checked_line, 1)
+            elif target_line in existing:
+                # Item already in desired state — no-op
+                return ToolResult(output=f"No change needed in {path}")
+            else:
+                # New item — append
+                updated = existing.rstrip() + f"\n{target_line}\n"
+
+            atomic_write_text(path, updated, encoding="utf-8")
         return ToolResult(output=f"Updated {path}")
 
 

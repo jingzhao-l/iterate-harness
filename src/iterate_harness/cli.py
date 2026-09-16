@@ -424,6 +424,11 @@ def _build_dry_run_preview(
     api_key: str | None,
     api_format: str | None,
     permission_mode: str | None,
+    config_path: str | None = None,
+    effort: str | None = None,
+    verbose: bool | None = False,
+    allowed_tools: list[str] | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> dict[str, object]:
     from iterate_harness.api.provider import auth_status, detect_provider
     from iterate_harness.commands import create_default_command_registry
@@ -436,7 +441,8 @@ def _build_dry_run_preview(
     from iterate_harness.ui.runtime import _resolve_api_client_from_settings
 
     resolved_cwd = str(Path(cwd).expanduser().resolve())
-    settings = load_settings().merge_cli_overrides(
+    resolved_config = Path(config_path).expanduser().resolve() if config_path else None
+    settings = load_settings(resolved_config).merge_cli_overrides(
         model=model,
         max_turns=max_turns,
         base_url=base_url,
@@ -444,6 +450,10 @@ def _build_dry_run_preview(
         api_key=api_key,
         api_format=api_format,
         permission_mode=permission_mode,
+        effort=effort,
+        verbose=verbose,
+        allowed_tools=allowed_tools,
+        disallowed_tools=disallowed_tools,
     )
     provider = detect_provider(settings)
     auth = auth_status(settings)
@@ -554,7 +564,7 @@ def _build_dry_run_preview(
     preview: dict[str, object] = {
         "mode": "dry-run",
         "cwd": resolved_cwd,
-        "config_path": str(get_config_file_path()),
+        "config_path": str(resolved_config) if resolved_config else str(get_config_file_path()),
         "prompt": preview_prompt,
         "prompt_preview": _safe_short(preview_prompt or "", limit=220) if preview_prompt else "",
         "settings": {
@@ -2717,13 +2727,6 @@ def main(
         help="Resume a conversation by session ID, or open picker",
         rich_help_panel="Session",
     ),
-    name: str | None = typer.Option(
-        None,
-        "--name",
-        "-n",
-        help="Set a display name for this session",
-        rich_help_panel="Session",
-    ),
     # --- Model & Effort ---
     model: str | None = typer.Option(
         None,
@@ -2812,7 +2815,7 @@ def main(
     settings_file: str | None = typer.Option(
         None,
         "--settings",
-        help="Path to a JSON settings file or inline JSON string",
+        help="Path to a JSON settings file to load (replaces the default ~/.iterate-harness/settings.json)",
         rich_help_panel="System & Context",
     ),
     base_url: str | None = typer.Option(
@@ -2826,12 +2829,6 @@ def main(
         "--api-key",
         "-k",
         help="API key (overrides config and environment)",
-        rich_help_panel="System & Context",
-    ),
-    bare: bool = typer.Option(
-        False,
-        "--bare",
-        help="Minimal mode: skip hooks, plugins, MCP, and auto-discovery",
         rich_help_panel="System & Context",
     ),
     api_format: str | None = typer.Option(
@@ -2852,12 +2849,6 @@ def main(
         "--debug",
         "-d",
         help="Enable debug logging",
-        rich_help_panel="Advanced",
-    ),
-    mcp_config: Optional[list[str]] = typer.Option(
-        None,
-        "--mcp-config",
-        help="Load MCP servers from JSON files or strings",
         rich_help_panel="Advanced",
     ),
     cwd: str = typer.Option(
@@ -2915,6 +2906,18 @@ def main(
     if dangerously_skip_permissions:
         permission_mode = "full_auto"
 
+    # Validate --settings explicitly: a path that does not exist silently
+    # falls back to the default config file (load_settings treats it as if
+    # nothing was passed), which is an easy foot-gun. Error out instead.
+    if settings_file:
+        settings_file = str(Path(settings_file).expanduser().resolve())
+        if not Path(settings_file).is_file():
+            print(
+                f"Error: --settings file not found: {settings_file}",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
+
     # Apply --theme override to settings
     if theme:
         from iterate_harness.config.settings import load_settings, save_settings
@@ -2946,6 +2949,11 @@ def main(
             api_key=api_key,
             api_format=api_format,
             permission_mode=permission_mode,
+            config_path=settings_file,
+            effort=effort,
+            verbose=verbose or None,
+            allowed_tools=allowed_tools,
+            disallowed_tools=disallowed_tools,
         )
         effective_output_format = output_format or "text"
         if effective_output_format == "text":
@@ -3019,6 +3027,11 @@ def main(
                 restore_tool_metadata=session_data.get("tool_metadata"),
                 permission_mode=permission_mode,
                 api_format=api_format,
+                config_path=settings_file,
+                effort=effort,
+                verbose=verbose or None,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
             )
         )
         return
@@ -3041,6 +3054,11 @@ def main(
                 api_format=api_format,
                 permission_mode=permission_mode,
                 max_turns=max_turns,
+                config_path=settings_file,
+                effort=effort,
+                verbose=verbose or None,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
             )
         )
         return
@@ -3057,6 +3075,11 @@ def main(
                 api_format=api_format,
                 permission_mode=permission_mode,
                 task_mode=task_mode,
+                config_path=settings_file,
+                effort=effort,
+                verbose=verbose or None,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
             )
         )
         return
@@ -3073,5 +3096,10 @@ def main(
             api_key=api_key,
             api_format=api_format,
             permission_mode=permission_mode,
+            config_path=settings_file,
+            effort=effort,
+            verbose=verbose or None,
+            allowed_tools=allowed_tools,
+            disallowed_tools=disallowed_tools,
         )
     )

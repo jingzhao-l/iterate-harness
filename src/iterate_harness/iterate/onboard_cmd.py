@@ -69,6 +69,31 @@ def _load_existing_config(path: Path) -> dict[str, object] | None:
     return raw if isinstance(raw, dict) else None
 
 
+def _deep_merge(base: dict[str, object], override: dict[str, object]) -> dict[str, object]:
+    """Merge ``override`` on top of ``base``, recursing into nested dicts.
+
+    Empty containers in ``override`` (``{}``, ``[]``) never wipe a non-empty
+    value already present in ``base`` — ``onboard``/``reonboard`` must refresh
+    the goal/dimensions/rounds/validation/onboarding sections while preserving
+    user-owned sections and any non-empty sub-keys the new config omits.
+    """
+    merged = dict(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(existing, value)
+        elif _is_empty_container(value) and existing is not None:
+            # Never wipe a user-owned section with an empty refresh value.
+            continue
+        else:
+            merged[key] = value
+    return merged
+
+
+def _is_empty_container(value: object) -> bool:
+    return isinstance(value, (dict, list)) and not value
+
+
 def _merge_into_existing(
     new_config: dict[str, object], config_path: Path
 ) -> dict[str, object]:
@@ -81,9 +106,7 @@ def _merge_into_existing(
     existing = _load_existing_config(config_path)
     if existing is None:
         return new_config
-    merged = dict(existing)
-    merged.update(new_config)
-    return merged
+    return _deep_merge(existing, new_config)
 
 
 def render_detection_iterate_md(

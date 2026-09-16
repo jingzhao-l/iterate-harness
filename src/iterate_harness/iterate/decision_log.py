@@ -60,10 +60,33 @@ def append_entry(
         },
         ensure_ascii=False,
     )
+    # Compute the number of *valid* pre-existing entries (mirroring the
+    # filtering in read_entries) by scanning lines once instead of re-parsing
+    # the whole log into objects on every append.
+    existing_count = 0
+    if file_path.exists():
+        try:
+            with file_path.open("rb") as rb:
+                raw = rb.read()
+        except OSError:
+            raw = b""
+        for raw_line in raw.split(b"\n"):
+            if not raw_line.strip():
+                continue
+            try:
+                parsed = json.loads(raw_line.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            try:
+                int(parsed.get("round", 0))
+            except (ValueError, TypeError):
+                continue
+            existing_count += 1
     with file_path.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
-    count = len(read_entries(project_root))
-    return count, file_path
+    return existing_count + 1, file_path
 
 
 def read_entries(project_root: str | Path) -> list[DecisionLogEntry]:
@@ -78,7 +101,9 @@ def read_entries(project_root: str | Path) -> list[DecisionLogEntry]:
         return []
     try:
         content = file_path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # A non-UTF-8 or unreadable log must degrade to [] (the append-only
+        # contract makes a partial log more valuable than a hard failure).
         return []
 
     entries: list[DecisionLogEntry] = []

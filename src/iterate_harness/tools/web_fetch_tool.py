@@ -48,6 +48,10 @@ class WebFetchTool(BaseTool[WebFetchToolInput]):
                 headers={"User-Agent": USER_AGENT},
                 timeout=15.0,
                 max_redirects=MAX_REDIRECTS,
+                # Cap the download at the truncated-window size: a hostile or
+                # pathological page is bounded at fetch time, not after being
+                # read fully into memory.
+                max_bytes=arguments.max_chars + 8192,
             )
             response.raise_for_status()
         except (httpx.HTTPError, NetworkGuardError) as exc:

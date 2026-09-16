@@ -19,6 +19,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -124,9 +126,23 @@ def storage_dir(base_dir: str | Path | None, project_root: str | Path) -> Path:
 def save(base_dir: str | Path | None, project_root: str | Path, data: PersonalizationData) -> Path:
     """Persist personalization JSON atomically (temp file + rename)."""
     target = storage_dir(base_dir, project_root) / PERSONALIZATION_FILENAME
-    tmp = target.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(target)
+    # Process-unique temp name (mkstemp) avoids concurrent writers clobbering
+    # each other's fixed ".json.tmp"; os.replace keeps the swap atomic.
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(target.parent), prefix=target.name, suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            json.dump(data.to_dict(), tmp, ensure_ascii=False, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return target
 
 

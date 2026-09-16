@@ -122,7 +122,7 @@ async def test_handle_line_snapshots_submission_model_not_restored_model(tmp_pat
 
     monkeypatch.setattr(
         "iterate_harness.ui.runtime.load_settings",
-        lambda: _FakeSettings(),
+        lambda _config_path=None: _FakeSettings(),
     )
     monkeypatch.setattr(
         "iterate_harness.ui.runtime.load_hook_registry",
@@ -186,7 +186,7 @@ async def test_handle_line_snapshots_current_model_without_submit_model(tmp_path
 
     monkeypatch.setattr(
         "iterate_harness.ui.runtime.load_settings",
-        lambda: _FakeSettings(),
+        lambda _config_path=None: _FakeSettings(),
     )
     monkeypatch.setattr(
         "iterate_harness.ui.runtime.load_hook_registry",

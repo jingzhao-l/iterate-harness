@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import re
+import secrets
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -846,8 +847,12 @@ def create_default_command_registry(
             return CommandResult(message=build_sdk_url(tokens[1], tokens[2]))
         if tokens[0] == "spawn" and len(tokens) >= 2:
             command = args[len("spawn ") :]
+            # A clock-only id collides when two spawns happen in the same
+            # second (the manager would silently overwrite the first session's
+            # process and output-copy task). Add a random suffix so ids are
+            # unique per spawn while keeping them short and recognizable.
             handle = await get_bridge_manager().spawn(
-                session_id=f"bridge-{datetime.now(timezone.utc).strftime('%H%M%S')}",
+                session_id=f"bridge-{datetime.now(timezone.utc).strftime('%H%M%S')}-{secrets.token_hex(3)}",
                 command=command,
                 cwd=context.cwd,
             )

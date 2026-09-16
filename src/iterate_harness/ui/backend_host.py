@@ -42,6 +42,11 @@ log = logging.getLogger(__name__)
 
 _PROTOCOL_PREFIX = "OHJSON:"
 
+#: How long any human-interaction modal (permission / question / select) waits
+#: before the engine auto-answers with its safe default, so an unattended
+#: frontend can never hang the loop on an unanswered prompt.
+_MODAL_TIMEOUT = 300.0
+
 
 @dataclass(frozen=True)
 class BackendHostConfig:
@@ -65,6 +70,11 @@ class BackendHostConfig:
     extra_plugin_roots: tuple[str, ...] = ()
     memory_backend: MemoryCommandBackend | None = None
     include_project_memory: bool = True
+    config_path: str | None = None
+    effort: str | None = None
+    verbose: bool | None = None
+    allowed_tools: list[str] | None = None
+    disallowed_tools: list[str] | None = None
 
 
 class ReactBackendHost:
@@ -107,6 +117,11 @@ class ReactBackendHost:
             extra_plugin_roots=self._config.extra_plugin_roots,
             memory_backend=self._config.memory_backend,
             include_project_memory=self._config.include_project_memory,
+            config_path=self._config.config_path,
+            effort=self._config.effort,
+            verbose=self._config.verbose,
+            allowed_tools=self._config.allowed_tools,
+            disallowed_tools=self._config.disallowed_tools,
         )
         if self._bundle is None:
             raise RuntimeError("backend host started before runtime bundle was built")
@@ -649,7 +664,13 @@ class ReactBackendHost:
             return
 
         if command == "passes":
-            current = int(state.passes or settings.passes)
+            raw_current = state.passes or settings.passes
+            try:
+                current = int(raw_current)
+            except (TypeError, ValueError):
+                # Malformed persisted passes value degrades to the default
+                # instead of 500-ing the selector.
+                current = settings.passes
             options = [
                 {"value": str(value), "label": f"{value} pass{'es' if value != 1 else ''}", "active": value == current}
                 for value in range(1, 9)
@@ -837,9 +858,9 @@ class ReactBackendHost:
                 )
             )
             try:
-                return await asyncio.wait_for(future, timeout=300)
+                return await asyncio.wait_for(future, timeout=_MODAL_TIMEOUT)
             except asyncio.TimeoutError:
-                log.warning("Permission request %s timed out after 300s, denying", request_id)
+                log.warning("Permission request %s timed out after %.0fs, denying", request_id, _MODAL_TIMEOUT)
                 return False
             finally:
                 self._permission_requests.pop(request_id, None)
@@ -861,9 +882,9 @@ class ReactBackendHost:
         try:
             # Bounded wait like _ask_permission — an unanswered modal must not
             # hang the agent loop forever.
-            return await asyncio.wait_for(future, timeout=300)
+            return await asyncio.wait_for(future, timeout=_MODAL_TIMEOUT)
         except asyncio.TimeoutError:
-            log.warning("Question request %s timed out after 300s, aborting", request_id)
+            log.warning("Question request %s timed out after %.0fs, aborting", request_id, _MODAL_TIMEOUT)
             return ""
         finally:
             self._question_requests.pop(request_id, None)
@@ -893,7 +914,19 @@ class ReactBackendHost:
             )
         )
         try:
-            return await future
+            # Bounded wait like the other modals: an unanswered select (e.g. a
+            # dead frontend/reconnect) falls back to the documented safe first
+            # option instead of hanging the iterate loop indefinitely.
+            try:
+                return await asyncio.wait_for(future, timeout=_MODAL_TIMEOUT)
+            except asyncio.TimeoutError:
+                log.warning(
+                    "Select request %s timed out after %.0fs; applying cancel value %r",
+                    request_id,
+                    _MODAL_TIMEOUT,
+                    cancel_value,
+                )
+                return cancel_value
         finally:
             self._question_requests.pop(request_id, None)
 
@@ -944,6 +977,11 @@ async def run_backend_host(
     extra_plugin_roots: tuple[str | Path, ...] = (),
     memory_backend: MemoryCommandBackend | None = None,
     include_project_memory: bool = True,
+    config_path: str | None = None,
+    effort: str | None = None,
+    verbose: bool | None = None,
+    allowed_tools: list[str] | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> int:
     """Run the structured React backend host."""
     if cwd:
@@ -968,6 +1006,11 @@ async def run_backend_host(
             extra_plugin_roots=tuple(str(Path(path).expanduser().resolve()) for path in extra_plugin_roots),
             memory_backend=memory_backend,
             include_project_memory=include_project_memory,
+            config_path=config_path,
+            effort=effort,
+            verbose=verbose,
+            allowed_tools=allowed_tools,
+            disallowed_tools=disallowed_tools,
         )
     )
     return await host.run()

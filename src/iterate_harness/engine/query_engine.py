@@ -427,7 +427,14 @@ class QueryEngine:
             reasoning_effort=self._reasoning_effort,
             defensive_kernel=self._new_defensive_kernel(),
         )
-        async for event, usage in run_query(context, self._messages):
+        query_messages = list(self._messages)
+        async for event, usage in run_query(context, query_messages):
+            if isinstance(event, AssistantTurnComplete):
+                # Publish the completed turn atomically. Never hand the live
+                # list to run_query: it tears ``messages[:]`` in place during
+                # compaction, so a concurrent reader would observe a partially
+                # rewritten conversation.
+                self._messages = list(query_messages)
             if usage is not None:
                 self._cost_tracker.add(usage)
             yield event

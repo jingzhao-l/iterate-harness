@@ -56,7 +56,10 @@ async def test_build_runtime_registers_enabled_plugin_tools(tmp_path: Path, monk
 
     from iterate_harness.config.settings import Settings
 
-    monkeypatch.setattr("iterate_harness.ui.runtime.load_settings", lambda: Settings(allow_project_plugins=True))
+    monkeypatch.setattr(
+        "iterate_harness.ui.runtime.load_settings",
+        lambda _config_path=None: Settings(allow_project_plugins=True),
+    )
 
     bundle = await build_runtime(cwd=str(project), api_client=_StaticApiClient())
     try:

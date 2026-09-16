@@ -12,6 +12,7 @@ backends can share the same logic.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from iterate_harness.coordinator.coordinator_mode import (
     TaskNotification,
@@ -26,8 +27,15 @@ from iterate_harness.ui.runtime import (
     SystemPrinter,
 )
 
+log = logging.getLogger(__name__)
+
 
 _TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "killed"})
+
+#: Upper bound on how long the coordinator waits for one batch of background
+#: agent tasks. A worker that never reaches a terminal state (hung process,
+#: zombie, manager restart) must not stall the coordinator loop forever.
+_DEFAULT_DRAIN_TIMEOUT_SECONDS = 1800.0
 
 
 def _async_agent_task_entries(tool_metadata: dict[str, object] | None) -> list[dict[str, object]]:
@@ -68,7 +76,16 @@ async def wait_for_completed_async_agent_entries(
     tool_metadata: dict[str, object] | None,
     *,
     poll_interval_seconds: float = 0.1,
+    max_wait_seconds: float = _DEFAULT_DRAIN_TIMEOUT_SECONDS,
 ) -> list[dict[str, object]]:
+    """Return the first batch of completed entries, waiting up to *max_wait_seconds*.
+
+    A worker that hangs past the deadline is marked with ``status = "timed_out"``
+    and ``notification_sent = True`` so the caller's drain loop stops re-entering
+    this function indefinitely.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max_wait_seconds
     manager = get_task_manager()
     while True:
         pending = pending_async_agent_entries(tool_metadata)
@@ -88,6 +105,20 @@ async def wait_for_completed_async_agent_entries(
                 completed.append(entry)
         if completed:
             return completed
+        if loop.time() >= deadline:
+            # Deadline exceeded: mark still-pending entries as timed-out so
+            # the caller's drain loop can make progress and the frontend is
+            # notified of the stalled workers.
+            for entry in pending_async_agent_entries(tool_metadata):
+                if not bool(entry.get("notification_sent")):
+                    entry["notification_sent"] = True
+                    entry["status"] = "timed_out"
+            log.warning(
+                "Background agent tasks timed out after %.0fs: %s",
+                max_wait_seconds,
+                [e.get("task_id") for e in pending if not e.get("notification_sent")],
+            )
+            return []
         await asyncio.sleep(poll_interval_seconds)
 
 
@@ -168,6 +199,7 @@ async def drain_coordinator_async_agents(
     print_system: SystemPrinter,
     render_event: StreamRenderer,
     announce_waiting: bool = True,
+    max_wait_seconds: float = _DEFAULT_DRAIN_TIMEOUT_SECONDS,
 ) -> None:
     """Block until pending async-agent tasks finish, then submit notifications.
 
@@ -189,7 +221,8 @@ async def drain_coordinator_async_agents(
                 f"Waiting for {len(pending)} background agent task(s) to finish..."
             )
         completed = await wait_for_completed_async_agent_entries(
-            getattr(engine, "tool_metadata", None)
+            getattr(engine, "tool_metadata", None),
+            max_wait_seconds=max_wait_seconds,
         )
         notification_payload = format_completed_task_notifications(completed)
         if not notification_payload.strip():

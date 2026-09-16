@@ -32,6 +32,8 @@ harness 本身是**一个 Python 包**。这个 npm 包是一个薄分发包装�
    解析 `iterate-harness==X.Y.Z`，即使 GitHub 不可达或 TLS 证书校验失败也能安装。
    若 PyPI 不可用，再兑底 GitHub release 上的**预构建 wheel**（已内置编译好的前端
    资源——与 iterate-skill-installer 分发预打包资源一致），最后才用锁定的**源码归档**。
+   本包装器自行下载的每个产物都会在 pip 安装前用 SHA256 与 release 发布的 `.sha256`
+   校验文件做完整性校验——被篡改或损坏的下载会被拒绝，绝不安装。
 4. 代理调用 venv 里真正的 `ih` 可执行文件，转发 argv、stdio、信号与退出码。
 
 若 `npm install` 期间无法完成安装（无 Python、无网络，或

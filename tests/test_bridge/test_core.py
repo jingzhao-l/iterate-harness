@@ -110,6 +110,24 @@ async def test_manager_stop_unknown_session_raises(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_manager_spawn_rejects_duplicate_session_id(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("iterate_harness.bridge.manager.get_data_dir", lambda: tmp_path)
+    mgr = BridgeSessionManager()
+    await mgr.spawn(session_id="id1", command="echo a", cwd=tmp_path)
+    with pytest.raises(ValueError, match="Duplicate or empty bridge session_id"):
+        await mgr.spawn(session_id="id1", command="echo b", cwd=tmp_path)
+    await mgr.stop("id1")
+
+
+@pytest.mark.asyncio
+async def test_manager_spawn_rejects_empty_session_id(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("iterate_harness.bridge.manager.get_data_dir", lambda: tmp_path)
+    mgr = BridgeSessionManager()
+    with pytest.raises(ValueError, match="Duplicate or empty bridge session_id"):
+        await mgr.spawn(session_id="", command="echo a", cwd=tmp_path)
+
+
+@pytest.mark.asyncio
 async def test_spawn_session_and_kill(tmp_path: Path):
     handle = await spawn_session(session_id="s1", command="sleep 30", cwd=tmp_path)
     assert handle.process.returncode is None

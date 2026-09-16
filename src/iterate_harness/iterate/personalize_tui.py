@@ -384,11 +384,35 @@ async def _edit_extra_commands(
             return
 
 
+def _valid_module_key(module: str) -> bool:
+    """A personalization module key: short, printable, no config-fragment chars."""
+    value = module.strip()
+    return (
+        0 < len(value) <= 64
+        and not any(ch.isspace() for ch in value)
+        and ":" not in value
+        and "\\" not in value
+        and '"' not in value
+        and "'" not in value
+    )
+
+
 async def _collect_extra_command(data: PersonalizationData, ask_prompt: AskPrompt) -> None:
     """Add one (module, command); invalid commands are re-asked with the reason."""
-    module = await _prompt(ask_prompt, "模块名 / Module key (e.g. pytest):")
+    module = (await _prompt(ask_prompt, "模块名 / Module key (e.g. pytest):") or "").strip()
     if not module:
         return
+    if not _valid_module_key(module):
+        module = (
+            await _prompt(
+                ask_prompt,
+                "! 非法模块名 / Invalid module key — max 64 chars, no spaces, "
+                "quotes, backslash or colon. Re-enter or leave empty to cancel:",
+            )
+            or ""
+        ).strip()
+        if not module or not _valid_module_key(module):
+            return
     while True:
         command = await _prompt(
             ask_prompt, f"[{module}] 命令 / Command (留空结束 / empty to finish):"

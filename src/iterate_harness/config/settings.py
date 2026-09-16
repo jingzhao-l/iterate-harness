@@ -784,12 +784,42 @@ class Settings(BaseModel):
         )
 
     def merge_cli_overrides(self, **overrides: Any) -> Settings:
-        """Return a new Settings with CLI overrides applied (non-None values only)."""
+        """Return a new Settings with CLI overrides applied (non-None values only).
+
+        Permission knobs arrive as flat CLI concepts (``--permission-mode``,
+        ``--allowed-tools``, ``--disallowed-tools``) but live on the nested
+        ``Settings.permission`` submodel, so they are routed there instead of
+        setting a stray, never-read attribute on the Settings instance.
+        """
         updates = {k: v for k, v in overrides.items() if v is not None}
         # Strip ANSI escape sequences from model name if present
         if "model" in updates and isinstance(updates["model"], str):
             updates["model"] = strip_ansi_escape_sequences(updates["model"])
+
+        permission_updates: dict[str, Any] = {}
+        permission_mode = updates.pop("permission_mode", None)
+        if permission_mode is not None:
+            try:
+                permission_updates["mode"] = PermissionMode(str(permission_mode))
+            except ValueError:
+                log.warning(
+                    "Ignoring invalid --permission-mode %r (expected default/plan/full_auto)",
+                    permission_mode,
+                )
+                permission_updates["mode"] = PermissionMode.DEFAULT
+        allowed_tools = updates.pop("allowed_tools", None)
+        if allowed_tools:
+            permission_updates["allowed_tools"] = list(dict.fromkeys(allowed_tools))
+        disallowed_tools = updates.pop("disallowed_tools", None)
+        if disallowed_tools:
+            permission_updates["denied_tools"] = list(dict.fromkeys(disallowed_tools))
+
         merged = self.model_copy(update=updates)
+        if permission_updates:
+            merged = merged.model_copy(
+                update={"permission": merged.permission.model_copy(update=permission_updates)}
+            )
+
         if not updates:
             return merged
         profile_keys = {

@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field
 
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
+#: Upper bound on the file size this tool will read into the model context.
+#: Files above this reference :func:`~iterate_harness.tools.grep_tool.GrepTool`
+#: or a narrowed ``offset`` --- reading a pathological multi-GB file would
+#: otherwise exhaust the agent's context and memory.
+MAX_READ_BYTES = 10 * 1024 * 1024
+
 
 class FileReadToolInput(BaseModel):
     """Arguments for the file read tool."""
@@ -48,6 +54,20 @@ class FileReadTool(BaseTool[FileReadToolInput]):
             return ToolResult(output=f"File not found: {path}", is_error=True)
         if path.is_dir():
             return ToolResult(output=f"Cannot read directory: {path}", is_error=True)
+
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            return ToolResult(output=f"Cannot stat file: {path} ({exc})", is_error=True)
+        if size > MAX_READ_BYTES:
+            return ToolResult(
+                output=(
+                    f"File too large to read whole ({size} bytes > {MAX_READ_BYTES}). "
+                    "Use grep/source_search for content, or read a narrowed "
+                    "offset/limit window instead."
+                ),
+                is_error=True,
+            )
 
         raw = path.read_bytes()
         if b"\x00" in raw:

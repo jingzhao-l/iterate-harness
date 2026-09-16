@@ -12,6 +12,21 @@ from __future__ import annotations
 
 import json
 
+
+def _safe_int(value: object, default: int = 0) -> int:
+    """Coerce a numeric slot from LLM/json safely (no ValueError crashes)."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (ValueError, TypeError):
+            return default
+    return default
+
+
 #: Name of the default kickoff template preset (keeps current behavior).
 DEFAULT_TEMPLATE = "standard"
 
@@ -373,9 +388,9 @@ def resume_kickoff(
     """
     verdict = str(last_summary.get("verdict") or "unknown")
     rounds_raw = last_summary.get("rounds")
-    last_rounds = int(rounds_raw) if isinstance(rounds_raw, (int, str)) else 0
+    last_rounds = _safe_int(rounds_raw)
     total_raw = last_summary.get("totalFindings")
-    total = int(total_raw) if isinstance(total_raw, (int, str)) else 0
+    total = _safe_int(total_raw)
     interrupted = last_summary.get("interrupted", False)
     preview_lines: list[str] = []
     preview_raw = last_summary.get("preview")

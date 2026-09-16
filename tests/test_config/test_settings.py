@@ -69,6 +69,24 @@ class TestSettings:
         assert s.model != updated.model
         assert s is not updated
 
+    def test_merge_cli_overrides_routes_permission_knobs_to_submodel(self):
+        """CLI --permission-mode/--allowed-tools/--disallowed-tools map onto the
+        nested Settings.permission submodel instead of being ignored."""
+        s = Settings()
+        updated = s.merge_cli_overrides(
+            permission_mode="full_auto",
+            allowed_tools=["bash", "read_file"],
+            disallowed_tools=["write_file"],
+        )
+        assert updated.permission.mode.value == "full_auto"
+        assert updated.permission.allowed_tools == ["bash", "read_file"]
+        assert updated.permission.denied_tools == ["write_file"]
+
+    def test_merge_cli_overrides_rejects_invalid_permission_mode(self):
+        s = Settings()
+        updated = s.merge_cli_overrides(permission_mode="not-a-mode")
+        assert updated.permission.mode.value == "default"
+
     def test_resolve_auth_prefers_env_over_flat_api_key_for_openai(self, monkeypatch):
         """When api_format=openai, resolve_auth() should use OPENAI_API_KEY
         from the environment rather than the flat api_key field which may

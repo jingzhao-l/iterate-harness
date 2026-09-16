@@ -33,6 +33,7 @@ from uuid import uuid4
 
 from .hub import hub
 from .schemas import ChatRunStatus, RunState, SelectOption, WaitingKind
+from .security import AuditLog
 
 #: Python 3.10 compatibility — ``datetime.UTC`` is only available in 3.11+.
 UTC = timezone.utc
@@ -180,6 +181,8 @@ class RunManager:
                 self.state = "idle"
             raise
         await self._publish_chat("system", f"收到启动指令：iterate {mode}", kind="status")
+        if project_root:
+            AuditLog(project_root).record("run.start", mode, summary={"run_id": run_id})
         self._task = asyncio.create_task(
             self._run_loop(project_root, mode, changed, ref, run_id)
         )
@@ -357,7 +360,9 @@ class RunManager:
             except asyncio.CancelledError:
                 # The enclosing task was cancelled again while we tried to deliver
                 # the shutdown message; nothing further can be awaited safely.
+                # Set state to stopped so start() is not permanently blocked.
                 self._stopping = True
+                self.state = "stopped"
                 log.warning("iterate web run cancelled while publishing stop notice")
             raise
         except SystemExit as exc:
@@ -606,6 +611,8 @@ class RunManager:
             pause_requested()
             self.last_message = "已请求暂停，将在下一轮边界生效"
         await self._publish_chat("system", "已请求暂停，将在下一轮边界生效", kind="status")
+        if self.project_root:
+            AuditLog(self.project_root).record("run.pause", self.run_id)
         return {"ok": True, "message": "已请求暂停，将在下一轮边界生效"}
 
     async def _resume(self) -> dict[str, Any]:
@@ -622,6 +629,8 @@ class RunManager:
         except asyncio.InvalidStateError:  # pragma: no cover - raced resolve
             raise RunManagerError("暂停请求已失效") from None
         await self._publish_chat("user", "resume", kind="decision")
+        if self.project_root:
+            AuditLog(self.project_root).record("run.resume", self.run_id)
         return {"ok": True, "message": "已继续运行"}
 
     async def _stop(self) -> dict[str, Any]:
@@ -639,22 +648,30 @@ class RunManager:
                     pending[0].set_result("stop")
                 except asyncio.InvalidStateError:  # pragma: no cover - raced resolve
                     pass
+                if self.project_root:
+                    AuditLog(self.project_root).record("run.stop", self.run_id, summary={"method": "select-resolve"})
                 return {"ok": True, "message": "正在停止…"}
             # A question/permission is pending with no clean answer channel:
             # abort the run task (engine state is checkpointed for resume).
             task = self._task
             if task is not None and not task.done():
                 task.cancel()
+            if self.project_root:
+                AuditLog(self.project_root).record("run.stop", self.run_id, summary={"method": "task-cancel"})
             return {"ok": True, "message": "正在停止…"}
         policy = self._policy()
         if policy is not None:
             pause_requested = getattr(policy, "request_pause", None)
             if callable(pause_requested):
                 pause_requested()
+                if self.project_root:
+                    AuditLog(self.project_root).record("run.stop", self.run_id, summary={"method": "policy-pause"})
                 return {"ok": True, "message": "已请求停止，将在下一轮边界生效"}
         task = self._task
         if task is not None and not task.done():
             task.cancel()
+        if self.project_root:
+            AuditLog(self.project_root).record("run.stop", self.run_id, summary={"method": "direct-cancel"})
         return {"ok": True, "message": "正在停止…"}
 
     async def _clear_stopping_if_owned(self, run_id: str) -> None:

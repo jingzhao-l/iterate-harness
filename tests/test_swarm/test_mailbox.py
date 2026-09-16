@@ -13,6 +13,8 @@ from iterate_harness.swarm.mailbox import (
     create_idle_notification,
     create_shutdown_request,
     create_user_message,
+    get_agent_mailbox_dir,
+    validate_agent_id,
 )
 
 
@@ -194,3 +196,32 @@ def test_create_idle_notification():
     msg = create_idle_notification("worker1", "leader", "finished task")
     assert msg.type == "idle_notification"
     assert msg.payload["summary"] == "finished task"
+
+
+# ---------------------------------------------------------------------------
+# Path safety (agent_id / team_name must never escape the mailbox root)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_agent_id_accepts_name_at_team_and_rejects_traversal():
+    assert validate_agent_id("worker@default-team") == "worker@default-team"
+    assert validate_agent_id("agent-1") == "agent-1"
+    with pytest.raises(ValueError):
+        validate_agent_id("../../etc")
+    with pytest.raises(ValueError):
+        validate_agent_id("..")
+    with pytest.raises(ValueError):
+        validate_agent_id("/abs/path")
+    with pytest.raises(ValueError):
+        validate_agent_id("a\\b")
+    with pytest.raises(ValueError):
+        validate_agent_id("")
+
+
+def test_get_agent_mailbox_dir_rejects_path_traversal_in_agent_id(tmp_path, monkeypatch):
+    """A ../ agent_id must never create/read dirs outside the team root."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with pytest.raises(ValueError):
+        get_agent_mailbox_dir("my-team", "../evil")
+    escaped = tmp_path / "evil"
+    assert not escaped.exists()

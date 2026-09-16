@@ -13,7 +13,10 @@ never shared across turns.
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -51,14 +54,35 @@ class FileTransactionBuffer:
         resolved = self._resolve(path)
         self._snapshots.pop(resolved, None)
 
-    def rollback(self) -> list[Path]:
-        """Restore every tracked file to its snapshot and clear the buffer.
+    def rollback(
+        self, paths: str | Path | Iterable[str | Path] | None = None
+    ) -> list[Path]:
+        """Restore tracked files to their snapshots and clear matching state.
+
+        When ``paths`` is given, only those files are restored; their
+        snapshots are dropped while edits for other pending paths stay
+        tracked (fail-fast without a cross-edit cascade).  When omitted, every
+        tracked file is restored (and the buffer is cleared).
 
         Returns the list of paths that were actually restored (or removed for
         files that did not exist at snapshot time).
+
+        Each restore is atomic: bytes are written to a sibling temp file and
+        swapped in with ``os.replace`` so a crash mid-rollback can never leave
+        a half-written file behind.
         """
         restored: list[Path] = []
-        for resolved, original in self._snapshots.items():
+        targets: Iterable[Path] | None
+        if paths is None:
+            targets = list(self._snapshots)
+        elif isinstance(paths, (str, Path)):
+            targets = [self._resolve(paths)]
+        else:
+            targets = [self._resolve(p) for p in paths]
+        for resolved in targets:
+            original = self._snapshots.get(resolved)
+            if original is None:
+                continue
             try:
                 if original == _MISSING_SENTINEL:
                     if resolved.exists():
@@ -66,11 +90,27 @@ class FileTransactionBuffer:
                         restored.append(resolved)
                 else:
                     resolved.parent.mkdir(parents=True, exist_ok=True)
-                    resolved.write_bytes(original)
+                    fd, tmp_name = tempfile.mkstemp(
+                        dir=resolved.parent,
+                        prefix=f".{resolved.name}.",
+                        suffix=".rollback",
+                    )
+                    try:
+                        with os.fdopen(fd, "wb") as tmp_file:
+                            tmp_file.write(original)
+                            tmp_file.flush()
+                            os.fsync(tmp_file.fileno())
+                        os.replace(tmp_name, resolved)
+                    except BaseException:
+                        try:
+                            os.unlink(tmp_name)
+                        except OSError:
+                            pass
+                        raise
                     restored.append(resolved)
             except OSError as exc:
                 log.warning("defensive rollback failed for %s: %s", resolved, exc)
-        self._snapshots.clear()
+            self._snapshots.pop(resolved, None)
         return restored
 
     @property

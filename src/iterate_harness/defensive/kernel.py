@@ -23,6 +23,7 @@ each ``submit_message`` in ``code`` mode and attaches it to the
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -101,16 +102,25 @@ class DefensiveKernel:
         has_invariants = isinstance(raw_override, dict) and isinstance(
             raw_override.get("invariants"), dict
         )
-        if has_invariants:
-            invariants = effective.config.invariants
-            if invariants is not None:
-                self._commands = dict(invariants.commands)
-                self._ensure = list(invariants.ensure)
+        invariants = effective.config.invariants
+        if invariants is not None and (invariants.commands or invariants.ensure):
+            self._commands = dict(invariants.commands)
+            self._ensure = list(invariants.ensure)
+            self._configured_invariants = True
+        elif invariants is not None and has_invariants:
+            # An explicit ``invariants: {}`` (or empty lists) section disables
+            # invariant guarding instead of silently falling back: the project
+            # declared an intentional, empty invariant set.
+            self._commands = {}
+            self._ensure = []
             self._configured_invariants = True
         else:
+            # No ``invariants`` section (or it carried only non-invariant
+            # keys): fall back to ``validation.commands`` so pre-v3.0 projects
+            # still get post-edit validation for free.
             self._commands = dict(effective.config.validation.commands)
             self._ensure = []
-            self._configured_invariants = False
+            self._configured_invariants = bool(self._commands)
 
     def snapshot(self, path: str | Path) -> None:
         """Snapshot a file before a mutating tool runs (no-op when disabled)."""
@@ -122,9 +132,14 @@ class DefensiveKernel:
         """Accept an edit whose post-check passed (drop its snapshot)."""
         self._buffer.commit(path)
 
-    def rollback(self) -> list[Path]:
-        """Restore all snapshotted edits and return the restored paths."""
-        return self._buffer.rollback()
+    def rollback(self, paths: str | Path | Iterable[str | Path] | None = None) -> list[Path]:
+        """Restore snapshotted edits (``paths`` or every pending one).
+
+        Scoped rollback lets a failed mutation revert only its own snapshot
+        while sibling edits stay tracked — fail-fast without a cross-edit
+        cascade (design §20.3.2).
+        """
+        return self._buffer.rollback(paths)
 
     def record_assumption(self, statement: str, status: str = "declared", detail: str = "") -> None:
         """Record an agent-declared assumption into the decision log."""
@@ -176,7 +191,7 @@ class DefensiveKernel:
         if not self._enabled:
             return None
         if not success:
-            restored = self.rollback()
+            restored = self.rollback(path)
             reason = f"[defensive] {tool_name} failed on {path}"
             if error_hint:
                 reason += f": {error_hint}"
@@ -193,7 +208,7 @@ class DefensiveKernel:
         if report.passed:
             self.commit(path)
             return None
-        restored = self.rollback()
+        restored = self.rollback(path)
         violations = "; ".join(
             f"{v.kind}:{v.label} ({v.detail})" for v in report.violations[:4]
         )

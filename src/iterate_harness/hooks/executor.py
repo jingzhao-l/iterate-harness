@@ -237,9 +237,22 @@ def _inject_arguments(
     return template.replace("$ARGUMENTS", serialized)
 
 
+def _strip_code_fences(text: str) -> str:
+    """Remove surrounding markdown code fences from *text*.
+
+    Models frequently wrap structured output in ````json … ```` blocks.
+    The outer fences make ``json.loads`` fail; this helper peels them away so
+    that ``json.loads`` sees only the JSON payload itself.
+    """
+    import re
+    stripped = text.strip()
+    m = re.match(r"^```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$", stripped)
+    return m.group(1) if m else stripped
+
+
 def _parse_hook_json(text: str) -> dict[str, Any]:
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(_strip_code_fences(text))
         if isinstance(parsed, dict) and isinstance(parsed.get("ok"), bool):
             return parsed
     except json.JSONDecodeError as exc:

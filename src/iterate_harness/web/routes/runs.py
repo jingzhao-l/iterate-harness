@@ -97,13 +97,15 @@ def get_run_timeline(
                 detail=f"unknown entry type: {type} (allowed: {', '.join(sorted(allowed_types))})",
             )
         filtered = [e for e in filtered if e.type == type]
+    if offset >= len(filtered):
+        return []
     if offset <= 0:
         page = filtered[-limit:] if limit else filtered
         base = max(0, len(filtered) - len(page))
     else:
         # Offset counts backwards from the newest entry.
         start = max(0, len(filtered) - offset - limit)
-        end = len(filtered) - offset
+        end = max(start, len(filtered) - offset)
         page = filtered[start:end]
         base = start
     return [
@@ -124,6 +126,7 @@ def get_findings(
     round: int = Query(-1, description="Restrict findings to one round (-1 = all)"),
     severity: str = Query("", description="Filter by severity (empty = all)"),
     dimension: str = Query("", description="Filter by dimension (empty = all)"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(
         MAX_FINDINGS_PAGE, ge=1, le=MAX_FINDINGS_PAGE, description="Max findings"
     ),
@@ -169,7 +172,7 @@ def get_findings(
             findings.append(dict(finding))
 
     total = len(findings)
-    page = findings[:limit]
+    page = findings[offset:offset + limit]
     return {"findings": page, "total": total, "page": len(page)}
 
 

@@ -145,4 +145,12 @@ def _write_runtime_settings(payload: dict[str, Any]) -> Path:
         tmp.write("\n")
     finally:
         tmp.close()
+    # Belt-and-suspenders: Python's NamedTemporaryFile already creates the file
+    # with 0600, but re-assert it explicitly so the policy payload is never
+    # readable by other local users even under shared/networked temp
+    # directories that ignore the umask.
+    try:
+        Path(tmp.name).chmod(0o600)
+    except OSError:
+        pass
     return Path(tmp.name)

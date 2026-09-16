@@ -29,8 +29,8 @@ from starlette.responses import StreamingResponse
 
 from ..iterate.checkpoint import load_checkpoint
 from ..iterate.decision_log import read_entries
+from ._coerce import as_finite, as_float, as_int
 from .hub import hub
-from ._coerce import as_float, as_int
 
 router = APIRouter(tags=["events"])
 
@@ -63,13 +63,19 @@ def _build_status_payload(project_root: Path) -> dict[str, Any]:
     converged = report_data.get("converged")
     if converged is None:
         converged = checkpoint_converged
+    # ``or`` keeps the "report missing/present-but-zero → use checkpoint"
+    # fallback, but a NaN cost is truthy and would otherwise win; sanitize
+    # non-finite values to 0.0 so the SSE payload stays valid JSON.
+    cost_usd = as_float(report_data.get("totalCostUsd")) or as_float(
+        checkpoint.get("cost_usd", 0.0)
+    )
     return {
         "entryCount": len(entries),
         "latestRound": latest_round,
         "checkpointExists": bool(checkpoint),
         "checkpointRound": as_int(checkpoint.get("round")) if checkpoint else 0,
         "totalTokens": as_int(report_data.get("totalTokens")) or as_int(checkpoint.get("input_tokens", 0)),
-        "totalCostUsd": as_float(report_data.get("totalCostUsd")) or as_float(checkpoint.get("cost_usd", 0.0)),
+        "totalCostUsd": as_finite(cost_usd),
         "converged": converged,
         "timestamp": time.time(),
     }

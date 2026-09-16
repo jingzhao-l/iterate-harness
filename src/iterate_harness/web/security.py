@@ -136,14 +136,17 @@ def resolve_within(base: str | Path, candidate: str, *parts: str) -> Path:
 def redact_secret(key: str, value: Any) -> Any:
     """Return a safe-to-echo representation of a config value.
 
-    Scalar values whose key suggests a credential are replaced with a
-    redaction marker; every other value is returned untouched.
+    Scalar values whose key suggests a credential are replaced with an opaque
+    redaction marker — no character fragments survive (the old form kept the
+    first 3 / last 2 characters, leaking partial secrets). The marker keeps
+    its ``<redacted:`` prefix so the config write-back restores the original
+    value when the (redacted) editor saves.
     """
     lowered = (key or "").lower()
     if any(suffix in lowered for suffix in _SECRET_SUFFIXES) and isinstance(value, str):
         if not value:
             return ""
-        return f"<redacted:{value[:3]}...{value[-2:] if len(value) > 5 else ''}>"
+        return "<redacted:redacted>"
     return value
 
 

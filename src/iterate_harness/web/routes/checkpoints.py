@@ -88,9 +88,9 @@ def restore_checkpoint(
     )
     return OperationResult(
         status="ok",
-        message=f"Checkpoint armed for resume (round {round_value})",
+        message=f"已记录 checkpoint 恢复操作（round {round_value}），文件未修改",
         target="checkpoint.json",
-        detail={"round": round_value},
+        detail={"round": round_value, "modified": False},
     )
 
 

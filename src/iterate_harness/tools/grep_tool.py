@@ -353,7 +353,14 @@ async def _terminate_process(process: asyncio.subprocess.Process) -> None:
         await asyncio.wait_for(process.wait(), timeout=2.0)
     except asyncio.TimeoutError:
         process.kill()
-        await process.wait()
+        try:
+            await process.wait()
+        except ProcessLookupError:
+            # The process exited between kill() and wait(); its returncode was
+            # already reaped by the event loop — nothing left to wait on.
+            return None
+    except ProcessLookupError:
+        return None
     return None
 
 

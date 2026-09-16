@@ -87,11 +87,21 @@ def build_backend_command(
     max_turns: int | None = None,
     base_url: str | None = None,
     system_prompt: str | None = None,
-    api_key: str | None = None,
     api_format: str | None = None,
     permission_mode: str | None = None,
+    config_path: str | None = None,
+    effort: str | None = None,
+    verbose: bool | None = None,
+    allowed_tools: list[str] | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> list[str]:
-    """Return the command used by the React frontend to spawn the backend host."""
+    """Return the command used by the React frontend to spawn the backend host.
+
+    Credentials are deliberately absent: an ``api_key`` must travel via the
+    inherited environment (``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY``), never
+    as a ``--api-key <value>`` argv element that leaks into process listings
+    and the ``ITERATE_FRONTEND_CONFIG`` JSON blob.
+    """
     command = [sys.executable, "-m", "iterate_harness", "--backend-only"]
     if cwd:
         command.extend(["--cwd", cwd])
@@ -103,12 +113,20 @@ def build_backend_command(
         command.extend(["--base-url", base_url])
     if system_prompt:
         command.extend(["--system-prompt", system_prompt])
-    if api_key:
-        command.extend(["--api-key", api_key])
     if api_format:
         command.extend(["--api-format", api_format])
     if permission_mode:
         command.extend(["--permission-mode", permission_mode])
+    if config_path:
+        command.extend(["--settings", config_path])
+    if effort:
+        command.extend(["--effort", effort])
+    if verbose:
+        command.append("--verbose")
+    for tool in allowed_tools or []:
+        command.extend(["--allowed-tools", tool])
+    for tool in disallowed_tools or []:
+        command.extend(["--disallowed-tools", tool])
     return command
 
 
@@ -123,6 +141,11 @@ async def launch_react_tui(
     api_key: str | None = None,
     api_format: str | None = None,
     permission_mode: str | None = None,
+    config_path: str | None = None,
+    effort: str | None = None,
+    verbose: bool | None = None,
+    allowed_tools: list[str] | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> int:
     """Launch the React terminal frontend as the default UI."""
     frontend_dir = get_frontend_dir()
@@ -144,6 +167,10 @@ async def launch_react_tui(
             raise RuntimeError("Failed to install React terminal frontend dependencies")
 
     env = os.environ.copy()
+    # Credentials travel via the environment (inherited by the backend host),
+    # never through the argv or the JSON config blob.
+    if api_key:
+        env["ANTHROPIC_API_KEY"] = api_key
     env["ITERATE_FRONTEND_CONFIG"] = json.dumps(
         {
             "backend_command": build_backend_command(
@@ -152,9 +179,13 @@ async def launch_react_tui(
                 max_turns=max_turns,
                 base_url=base_url,
                 system_prompt=system_prompt,
-                api_key=api_key,
                 api_format=api_format,
                 permission_mode=permission_mode,
+                config_path=config_path,
+                effort=effort,
+                verbose=verbose,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
             ),
             "initial_prompt": prompt,
             "theme": _resolve_theme(),

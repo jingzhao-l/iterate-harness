@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import Iterable
 
 from iterate_harness.coordinator.coordinator_mode import is_coordinator_mode
 
@@ -52,6 +53,11 @@ async def run_repl(
     restore_messages: list[dict[str, object]] | None = None,
     restore_tool_metadata: dict[str, object] | None = None,
     permission_mode: str | None = None,
+    config_path: str | None = None,
+    effort: str | None = None,
+    verbose: bool | None = None,
+    allowed_tools: Iterable[str] | None = None,
+    disallowed_tools: Iterable[str] | None = None,
 ) -> None:
     """Run the default IterateHarness interactive application (React TUI)."""
     if backend_only:
@@ -68,6 +74,11 @@ async def run_repl(
             restore_tool_metadata=restore_tool_metadata,
             enforce_max_turns=max_turns is not None,
             permission_mode=permission_mode,
+            config_path=config_path,
+            effort=effort,
+            verbose=verbose,
+            allowed_tools=list(allowed_tools) if allowed_tools else None,
+            disallowed_tools=list(disallowed_tools) if disallowed_tools else None,
         )
         return
 
@@ -81,6 +92,11 @@ async def run_repl(
         api_key=api_key,
         api_format=api_format,
         permission_mode=permission_mode,
+        config_path=config_path,
+        effort=effort,
+        verbose=verbose,
+        allowed_tools=list(allowed_tools) if allowed_tools else None,
+        disallowed_tools=list(disallowed_tools) if disallowed_tools else None,
     )
     if exit_code != 0:
         raise SystemExit(exit_code)
@@ -98,6 +114,11 @@ async def run_task_worker(
     api_client: SupportsStreamingMessages | None = None,
     permission_mode: str | None = None,
     task_mode: str | None = None,
+    config_path: str | None = None,
+    effort: str | None = None,
+    verbose: bool | None = None,
+    allowed_tools: Iterable[str] | None = None,
+    disallowed_tools: Iterable[str] | None = None,
 ) -> None:
     """Run a stdin-driven headless worker for background agent tasks.
 
@@ -148,6 +169,11 @@ async def run_task_worker(
         enforce_max_turns=max_turns is not None,
         permission_mode=permission_mode,
         task_mode=task_mode,
+        config_path=config_path,
+        effort=effort,
+        verbose=verbose,
+        allowed_tools=list(allowed_tools) if allowed_tools else None,
+        disallowed_tools=list(disallowed_tools) if disallowed_tools else None,
     )
     await start_runtime(bundle)
     try:
@@ -187,6 +213,11 @@ async def run_print_mode(
     api_client: SupportsStreamingMessages | None = None,
     permission_mode: str | None = None,
     max_turns: int | None = None,
+    config_path: str | None = None,
+    effort: str | None = None,
+    verbose: bool | None = None,
+    allowed_tools: Iterable[str] | None = None,
+    disallowed_tools: Iterable[str] | None = None,
 ) -> None:
     """Non-interactive mode: submit prompt, stream output, exit."""
     from iterate_harness.engine.stream_events import (
@@ -219,6 +250,11 @@ async def run_print_mode(
         api_client=api_client,
         permission_prompt=_noop_permission,
         ask_user_prompt=_noop_ask,
+        config_path=config_path,
+        effort=effort,
+        verbose=verbose,
+        allowed_tools=list(allowed_tools) if allowed_tools else None,
+        disallowed_tools=list(disallowed_tools) if disallowed_tools else None,
     )
     await start_runtime(bundle)
 
