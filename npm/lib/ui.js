@@ -110,7 +110,21 @@ function askYesNo(question, defaultNo = false, options = {}) {
         );
         finish(defaultNo);
       }, timeoutMs);
-      if (typeof timer.unref === "function") timer.unref();
+      // Only unref the timer when the real terminal is in play. A TTY or
+      // piped stdin keeps the event loop alive through its OS file descriptor,
+      // so the unref'd timeout cannot be dropped before it fires (and it never
+      // blocks process exit once the prompt has settled). Injected streams
+      // (tests, embedded hosts) hold NO descriptor, so an unref'd timer can be
+      // skipped on an otherwise-empty loop — leaving the call pending forever
+      // instead of settling on the default. Keep the timer referenced there so
+      // the bounded-wait guarantee actually holds.
+      if (
+        typeof timer.unref === "function" &&
+        input === process.stdin &&
+        Boolean(input.isTTY)
+      ) {
+        timer.unref();
+      }
     }
     const hint = defaultNo ? "[y/N]" : "[Y/n]";
     rl.question(`\x1b[36m◆\x1b[0m  ${question} ${hint} `, (answer) => {
