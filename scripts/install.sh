@@ -52,12 +52,12 @@ done
 # Banner
 # ---------------------------------------------------------------------------
 echo ""
-echo -e "${BOLD}${CYAN}  ██████╗ ██╗  ██╗${RESET}"
-echo -e "${BOLD}${CYAN} ██╔═══██╗██║  ██║${RESET}   iterate-harness Installer"
-echo -e "${BOLD}${CYAN} ██║   ██║███████║${RESET}   review → fix → validate → converge"
-echo -e "${BOLD}${CYAN} ██║   ██║██╔══██║${RESET}   the iterate review/fix harness"
-echo -e "${BOLD}${CYAN} ╚██████╔╝██║  ██║${RESET}"
-echo -e "${BOLD}${CYAN}  ╚═════╝ ╚═╝  ╚═╝${RESET}"
+echo -e "${BOLD}${CYAN} ██╗ ██╗  ██╗${RESET}"
+echo -e "${BOLD}${CYAN} ██║ ██║  ██║${RESET}"
+echo -e "${BOLD}${CYAN} ██║ ███████║${RESET}"
+echo -e "${BOLD}${CYAN} ██║ ██╔══██║${RESET}"
+echo -e "${BOLD}${CYAN} ██║ ██║  ██║${RESET}"
+echo -e "${BOLD}${CYAN} ╚═╝ ╚═╝  ╚═╝${RESET}"
 echo ""
 
 # ---------------------------------------------------------------------------

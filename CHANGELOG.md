@@ -2,6 +2,45 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.2.8] - 2026-09-17
+
+### Fixed
+
+- **`enter_plan_mode` / `exit_plan_mode` 工具只持久化全局设置、不作用于当前会话**
+  （`tools/enter_plan_mode_tool.py`，`tools/exit_plan_mode_tool.py`，
+  `engine/query.py`，`permissions/checker.py`）：
+  两个工具原先调用 `load_settings()` / `save_settings()` 把权限模式写入
+  `~/.iterate-harness/settings.json`——模型触发一次 plan-mode 切换会永久改变
+  用户的全局默认权限模式（波及所有未来会话），但正在运行的会话的
+  `PermissionChecker` 完全不知情，切换在本次会话内毫无作用（状态自相矛盾）。
+  现改为**会话级**权限覆盖：
+  - 工具把 `session_permission_mode` 写入执行上下文的 `metadata`，引擎在
+    工具执行后合并回持久的 `tool_metadata`，下一个工具调用的权限检查即生效；
+  - `PermissionChecker.evaluate` 新增 `mode_override` 参数（缺省保留原行为），
+    敏感路径 / forbidden-fix pattern / risk area / allow-deny 等硬边界仍在
+    模式判断之前执行，覆盖永远不会放宽这些硬限制；非法覆盖值降级为配置模式
+    （fail-closed）；
+  - `exit_plan_mode` 工具原本被归类为 mutating 工具（`is_read_only=False`），
+    进入 plan 模式后会被 plan 模式自己封死、无法退出——现已改为 read-only，
+    并清理会话覆盖恢复配置模式。
+- **`toggle_voice_mode` 死代码 / 伪实现**
+  （`voice/voice_mode.py`）：原实现 `return not enabled` 不读写任何状态，
+  且全库无调用方，属伪实现。现实现为真实持久化的切换（读取当前设置、翻转、
+  写回全局 settings，返回新状态）；`/voice` 命令与 Textual TUI 的
+  `ctrl+v` 均改为调用该共享 helper，消除重复内联逻辑。
+- **新增回归测试**（`tests/test_tools/test_plan_mode_tools.py`，10 例）：
+  覆盖 enter 记录会话覆盖、不污染全局 settings、plan-覆盖拦截 mutating 且
+  放行 read、exit 恢复配置模式、exit 工具为 read-only（plan 模式可退出）、
+  full_auto 覆盖不放宽敏感路径、引擎 `_execute_tool_call` 全链路执行后
+  下一个 mutating 调用被拦截等。
+
+### Verification
+
+- 全量 pytest **2111 passed, 6 skipped**；ruff clean；mypy strict clean
+  （246 源文件）；npm 包装器 **56 passed**；前端 `tsc --noEmit` + vitest
+  **13 passed**。
+- 版本号在 `__init__.py` / `npm/package.json` / `CHANGELOG.md` 同步至 2.2.8。
+
 ## [2.2.7] - 2026-09-15
 
 ### Fixed

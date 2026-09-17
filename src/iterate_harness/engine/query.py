@@ -423,6 +423,34 @@ def _update_plan_mode(tool_metadata: dict[str, object] | None, mode: str) -> Non
     tool_metadata["permission_mode"] = mode
 
 
+#: Session metadata key that ``enter_plan_mode`` sets (and ``exit_plan_mode``
+#: clears) so the live permission checker enforces plan mode without touching
+#: the global settings file.
+_SESSION_PERMISSION_OVERRIDE_KEY = "session_permission_mode"
+
+
+def _session_permission_override(tool_metadata: dict[str, object] | None) -> str | None:
+    """Return the active session-scoped permission-mode override, or ``None``.
+
+    ``enter_plan_mode`` writes ``session_permission_mode = "plan"`` into the
+    tool execution metadata; the engine merges it into the durable
+    ``tool_metadata`` after the call, so the NEXT tool's permission check sees
+    it. ``exit_plan_mode`` removes the key, restoring the configured mode. A
+    malformed value degrades to ``None`` (fail-closed to configured behavior).
+    """
+    if not isinstance(tool_metadata, dict):
+        return None
+    value = tool_metadata.get(_SESSION_PERMISSION_OVERRIDE_KEY)
+    if isinstance(value, str) and value in {"default", "plan", "full_auto"}:
+        return value
+    if value is not None:
+        log.warning(
+            "Ignoring malformed session permission-mode override: %r",
+            value,
+        )
+    return None
+
+
 def _record_tool_carryover(
     context: QueryContext,
     *,
@@ -1231,6 +1259,12 @@ async def _execute_tool_call(
         file_path=_file_path,
         command=_command,
         content=_content,
+        # Session-scoped permission override (enter_plan_mode/exit_plan_mode
+        # tools record ``session_permission_mode`` in tool metadata, which the
+        # engine merges into the durable tool_metadata after each tool call).
+        # The checker keeps the built-in sensitive/forbidden/risk boundaries
+        # intact and only swaps the mode decision.
+        mode_override=_session_permission_override(context.tool_metadata),
     )
     # Iterate per-fix diff approval (Settings.iterate.require_fix_approval):
     # while a normal-mode loop is active, route mutating file tools through

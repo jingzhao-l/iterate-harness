@@ -1639,6 +1639,7 @@ def create_default_command_registry(
 
     async def _voice_handler(args: str, context: CommandContext) -> CommandResult:
         from iterate_harness.voice import extract_keyterms, inspect_voice_capabilities
+        from iterate_harness.voice.voice_mode import toggle_voice_mode
 
         settings = load_settings()
         diagnostics = inspect_voice_capabilities(detect_provider(settings))
@@ -1660,11 +1661,10 @@ def create_default_command_registry(
         if tokens[0] == "keyterms" and len(tokens) == 2:
             keyterms = extract_keyterms(tokens[1])
             return CommandResult(message="\n".join(keyterms) if keyterms else "(no keyterms)")
-        enabled = {"on": True, "off": False, "toggle": not current}.get(tokens[0])
-        if enabled is None:
+        action_map = {"on": True, "off": False, "toggle": not current}
+        if tokens[0] not in action_map:
             return CommandResult(message="Usage: /voice [show|on|off|toggle|keyterms TEXT]")
-        settings.voice_mode = enabled
-        save_settings(settings)
+        enabled = toggle_voice_mode(action_map[tokens[0]])
         if context.app_state is not None:
             context.app_state.set(
                 voice_enabled=enabled,

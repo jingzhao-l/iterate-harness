@@ -431,11 +431,10 @@ class IterateHarnessTerminalApp(App[None]):
     def action_toggle_voice(self) -> None:
         if self._bundle is None:
             return
-        current = self._bundle.app_state.get().voice_enabled
-        settings = load_settings()
-        settings.voice_mode = not current
-        save_settings(settings)
-        self._bundle.app_state.set(voice_enabled=not current)
+        from iterate_harness.voice.voice_mode import toggle_voice_mode
+
+        enabled = toggle_voice_mode()
+        self._bundle.app_state.set(voice_enabled=enabled)
         self._refresh_sidebars()
 
     def action_quit_session(self) -> None:

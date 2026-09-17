@@ -6,6 +6,7 @@ import shutil
 from dataclasses import dataclass
 
 from iterate_harness.api.provider import ProviderInfo
+from iterate_harness.config.settings import load_settings, save_settings
 from iterate_harness.voice.stream_stt import (
     STREAM_STT_UNAVAILABLE_REASON,
     stream_stt_available,
@@ -21,9 +22,20 @@ class VoiceDiagnostics:
     recorder: str | None = None
 
 
-def toggle_voice_mode(enabled: bool) -> bool:
-    """Toggle voice mode state."""
-    return not enabled
+def toggle_voice_mode(enabled: bool | None = None) -> bool:
+    """Set (or flip) the persisted voice-mode setting and return the new state.
+
+    ``enabled`` is the desired state; ``None`` flips the current persisted
+    value (toggle semantics, matching ``/voice toggle``/``ctrl+v``). The change
+    is written back to the global settings file so it survives the session —
+    the same persistence contract as ``/vim`` / ``/fast`` / ``/output-style``.
+    """
+    settings = load_settings()
+    new_state = bool(enabled) if enabled is not None else not bool(settings.voice_mode)
+    if bool(settings.voice_mode) != new_state:
+        settings.voice_mode = new_state
+        save_settings(settings)
+    return new_state
 
 
 def inspect_voice_capabilities(provider: ProviderInfo) -> VoiceDiagnostics:
@@ -51,4 +63,3 @@ def inspect_voice_capabilities(provider: ProviderInfo) -> VoiceDiagnostics:
         reason="voice shell is available",
         recorder=recorder,
     )
-

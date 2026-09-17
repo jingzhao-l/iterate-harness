@@ -87,6 +87,26 @@ class PermissionChecker:
                     rule,
                 )
 
+    def _resolve_mode(self, mode_override: str | None) -> PermissionMode:
+        """Return the effective permission mode for one decision.
+
+        A session-scoped ``mode_override`` (set by ``enter_plan_mode`` /
+        ``exit_plan_mode`` tools through the engine's tool metadata) wins over
+        the checker's configured mode. Unknown / empty override values fall
+        back to the configured mode so a malformed session key can never crash
+        a permission decision (fail-closed to the configured behavior).
+        """
+        if mode_override:
+            try:
+                return PermissionMode(mode_override)
+            except ValueError:
+                log.warning(
+                    "Ignoring invalid session permission-mode override %r; "
+                    "using the configured mode",
+                    mode_override,
+                )
+        return self._settings.mode
+
     def evaluate(
         self,
         tool_name: str,
@@ -95,8 +115,20 @@ class PermissionChecker:
         file_path: str | None = None,
         command: str | None = None,
         content: str | None = None,
+        mode_override: str | None = None,
     ) -> PermissionDecision:
-        """Return whether the tool may run immediately."""
+        """Return whether the tool may run immediately.
+
+        ``mode_override`` (a ``PermissionMode`` value name such as
+        ``"default"`` / ``"plan"`` / ``"full_auto"``) temporarily replaces the
+        configured mode for THIS decision only — it is how the session-scoped
+        ``enter_plan_mode`` / ``exit_plan_mode`` tools make their effect visible
+        to the live engine without rewriting the global settings file. The
+        built-in sensitive-path / forbidden-content / risk-area boundaries (and
+        the explicit allow/deny lists) are applied BEFORE the mode check, so an
+        override can never widen those hard limits.
+        """
+        effective_mode = self._resolve_mode(mode_override)
         # Built-in sensitive path protection — always active, cannot be
         # overridden by user settings or permission mode.  This is a
         # defence-in-depth measure against LLM-directed or prompt-injection
@@ -186,7 +218,7 @@ class PermissionChecker:
                     )
 
         # Full auto: allow everything
-        if self._settings.mode == PermissionMode.FULL_AUTO:
+        if effective_mode == PermissionMode.FULL_AUTO:
             return PermissionDecision(allowed=True, reason="Auto mode allows all tools")
 
         # Read-only tools always allowed
@@ -194,7 +226,7 @@ class PermissionChecker:
             return PermissionDecision(allowed=True, reason="read-only tools are allowed")
 
         # Plan mode: block mutating tools
-        if self._settings.mode == PermissionMode.PLAN:
+        if effective_mode == PermissionMode.PLAN:
             return PermissionDecision(
                 allowed=False,
                 reason="Plan mode blocks mutating tools until the user exits plan mode",
