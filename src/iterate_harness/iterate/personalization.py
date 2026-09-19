@@ -87,13 +87,19 @@ class PersonalizationData:
                 file=str(item.get("file", "")),
                 dimension=str(item.get("dimension", "")),
                 reason=str(item.get("reason", "")),
-                line=item.get("line") if isinstance(item.get("line"), int) else None,
+                # bool is a subclass of int; YAML `line: true` must not be
+                # accepted as a "line 1" anchor.
+                line=_int_line(item.get("line")),
             )
             for item in (known_raw if isinstance(known_raw, list) else [])
             if isinstance(item, dict)
         ]
         focus_raw = data.get("review_focus_areas")
-        focus = [str(x) for x in focus_raw if str(x).strip()] if isinstance(focus_raw, list) else []
+        focus = (
+            [x for x in focus_raw if isinstance(x, str) and x.strip()]
+            if isinstance(focus_raw, list)
+            else []
+        )
 
         def _mapping(key: str) -> dict[str, str]:
             raw = data.get(key)
@@ -112,6 +118,25 @@ class PersonalizationData:
             project_quirks=str(data.get("project_quirks") or ""),
             communication_preferences=str(data.get("communication_preferences") or ""),
         )
+
+
+def _int_line(value: object) -> int | None:
+    """Coerce a known-intentional ``line`` field to an int, or ``None``.
+
+    ``bool`` is a subclass of ``int`` in Python, so ``line: true`` (common in
+    YAML configs) must NOT be accepted as a "line 1" anchor — it would silently
+    change which lines the review filter treats as known-intentional.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 def storage_dir(base_dir: str | Path | None, project_root: str | Path) -> Path:

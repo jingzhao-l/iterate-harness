@@ -41,5 +41,13 @@ class ExitPlanModeTool(BaseTool[ExitPlanModeToolInput]):
         del arguments
         if isinstance(context.metadata, dict):
             context.metadata[SESSION_PERMISSION_MODE_KEY] = DEFAULT_MODE_VALUE
-            context.metadata.pop(SESSION_OVERRIDE_KEY, None)
+            # Rewrite the override to "default" instead of popping the key:
+            # the engine's post-execution merge only copies back keys that are
+            # PRESENT in the execution metadata, so a pop here would leave the
+            # durable ``session_permission_mode="plan"`` in place and the
+            # session would stay locked in plan mode forever. Writing
+            # "default" makes the merge replace the stale "plan" value, which
+            # ``_session_permission_override`` resolves to ``PermissionMode.DEFAULT``
+            # (falls through to the configured mode).
+            context.metadata[SESSION_OVERRIDE_KEY] = DEFAULT_MODE_VALUE
         return ToolResult(output="Plan mode disabled. Mutating tools are permitted again.")

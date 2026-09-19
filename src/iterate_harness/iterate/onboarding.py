@@ -351,15 +351,21 @@ def replace_user_owned_section(fresh_markdown: str, user_section: str) -> str:
 
 
 def update_completed_at_in_md(markdown: str, completed_at: str) -> str:
-    """Rewrite the completed_at row of the metadata table (no-op when absent)."""
+    """Rewrite the completed_at row of the metadata table (no-op when absent).
+
+    Only an exact metadata row (``| completed_at | ... |``, two cells) is
+    replaced — a merely *containing* "completed_at" cell in some unrelated
+    user-owned table must never be rewritten by automation.
+    """
     lines = markdown.splitlines(keepends=True)
     for index, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith("|") and "completed_at" in stripped:
-            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-            if len(cells) >= 2:
-                lines[index] = f"| completed_at | {completed_at} |\n"
-                return "".join(lines)
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) == 2 and cells[0].lower() == "completed_at":
+            lines[index] = f"| completed_at | {completed_at} |\n"
+            return "".join(lines)
     return markdown
 
 

@@ -147,7 +147,17 @@ def load_session_snapshot(cwd: str | Path) -> dict[str, Any] | None:
         raw = path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError):
         return None
-    return _sanitize_snapshot_payload(json.loads(raw))
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        log.warning("Skipping unreadable session snapshot %s", path, exc_info=True)
+        return None
+    try:
+        return _sanitize_snapshot_payload(payload)
+    except (ValueError, TypeError):
+        # Corrupt message entries (wrong shape/types) must not crash a resume.
+        log.warning("Skipping malformed session snapshot %s", path, exc_info=True)
+        return None
 
 
 def _coerce_mtime(value: object, fallback: float) -> float:
@@ -165,6 +175,14 @@ def _coerce_mtime(value: object, fallback: float) -> float:
     return number
 
 
+def _session_mtime(path: Path) -> float:
+    """Best-effort mtime; foreign/racing filesystems may fail ``stat``."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, Any]]:
     """List saved sessions for the project, newest first."""
     session_dir = get_project_session_dir(cwd)
@@ -172,29 +190,36 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
     seen_ids: set[str] = set()
 
     # Named session files
-    for path in sorted(session_dir.glob("session-*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for path in sorted(session_dir.glob("session-*.json"), key=_session_mtime, reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        try:
             sid = data.get("session_id", path.stem.replace("session-", ""))
-            seen_ids.add(sid)
-            summary = data.get("summary", "")
-            if not summary:
-                # Extract from first user message
-                for msg in data.get("messages", []):
-                    if msg.get("role") == "user":
-                        texts = [b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text"]
+        except (AttributeError, TypeError):
+            continue
+        seen_ids.add(sid)
+        summary = data.get("summary", "")
+        if not summary:
+            # Extract from first user message
+            messages = data.get("messages", [])
+            if isinstance(messages, list):
+                for msg in messages:
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        texts = [b.get("text", "") for b in msg.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
                         summary = " ".join(texts).strip()[:80]
                         if summary:
                             break
-            sessions.append({
-                "session_id": sid,
-                "summary": summary,
-                "message_count": data.get("message_count", len(data.get("messages", []))),
-                "model": data.get("model", ""),
-                "created_at": _coerce_mtime(data.get("created_at"), path.stat().st_mtime),
-            })
-        except (json.JSONDecodeError, OSError):
-            continue
+        sessions.append({
+            "session_id": sid,
+            "summary": summary,
+            "message_count": data.get("message_count", len(data.get("messages", []))),
+            "model": data.get("model", ""),
+            "created_at": _coerce_mtime(data.get("created_at"), _session_mtime(path)),
+        })
         if len(sessions) >= limit:
             break
 
@@ -203,24 +228,28 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
     if latest_path.exists() and len(sessions) < limit:
         try:
             data = json.loads(latest_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return sessions[:limit]
             sid = data.get("session_id", "latest")
             if sid not in seen_ids:
                 summary = data.get("summary", "")
                 if not summary:
-                    for msg in data.get("messages", []):
-                        if msg.get("role") == "user":
-                            texts = [b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text"]
-                            summary = " ".join(texts).strip()[:80]
-                            if summary:
-                                break
+                    messages = data.get("messages", [])
+                    if isinstance(messages, list):
+                        for msg in messages:
+                            if isinstance(msg, dict) and msg.get("role") == "user":
+                                texts = [b.get("text", "") for b in msg.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
+                                summary = " ".join(texts).strip()[:80]
+                                if summary:
+                                    break
                 sessions.append({
                     "session_id": sid,
                     "summary": summary or "(latest session)",
                     "message_count": data.get("message_count", len(data.get("messages", []))),
                     "model": data.get("model", ""),
-                    "created_at": _coerce_mtime(data.get("created_at"), latest_path.stat().st_mtime),
+                    "created_at": _coerce_mtime(data.get("created_at"), _session_mtime(latest_path)),
                 })
-        except (json.JSONDecodeError, OSError) as exc:
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
             log.debug("Skipping unreadable latest session file %s: %s", latest_path, exc)
 
     # Sort by created_at descending
@@ -243,14 +272,23 @@ def load_session_by_id(cwd: str | Path, session_id: str) -> dict[str, Any] | Non
     except (FileNotFoundError, OSError):
         raw = None
     if raw is not None:
-        return _sanitize_snapshot_payload(json.loads(raw))
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            log.warning("Skipping unreadable session file %s", path, exc_info=True)
+            return None
+        return _sanitize_snapshot_payload(payload)
     # Fallback to latest.json if session_id matches
     latest = session_dir / "latest.json"
     try:
         raw = latest.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError):
         return None
-    data = _sanitize_snapshot_payload(json.loads(raw))
+    try:
+        data = _sanitize_snapshot_payload(json.loads(raw))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        log.warning("Skipping unreadable latest session file %s", latest, exc_info=True)
+        return None
     if data.get("session_id") == session_id or session_id == "latest":
         return data
     return None

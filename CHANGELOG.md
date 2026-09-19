@@ -2,6 +2,79 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.3.0] - 2026-09-19
+
+### Added
+
+- **WebUI 会话可指定初始权限模式**（`web/schemas.py`，`web/routes/chat.py`，
+  `web/run_manager.py`）：`POST /api/chat/start` 新增可选
+  `permission_mode: "full_auto" | "plan" | "default"`（缺省 `full_auto`，无人值守
+  不被 prompt 卡死），校验非法值报 422；`RunManager` 持久化 `permission_mode`
+  并在 `_run_loop` 传给 `build_runtime`，允许 WebUI 以 plan/default 模式起步。
+- **bridge 会话保留最近完成记录**（`bridge/manager.py`）：自然完成的会话不再
+  立即从 `_sessions`/`_commands`/`_output_paths` 驱逐——UI 可在完成后读回
+  transcript；仅显式 `stop` 的会话被驱逐，且完成会话池有界
+  （`max_completed=20`，超出按最旧优先修剪，字典永不无限增长）。
+- **npm 包装器下载完整性 fail-closed**（`npm/lib/bootstrap.js`）：自下载产物
+  必须以 `.sha256` sidecar 核验通过才能交给 pip——sidecar 拉取失败、digest
+  缺失/畸形、或不匹配一律删除产物并拒绝安装（唯一豁免是显式 `--no-verify`）；
+  校验本次 `bootstrap.js` 全部加固项：下载/拉取校验和硬超时
+  （响应级 + 总墙钟 60s）、非 2xx 一律拒绝、重定向预算 5 跳、缓存文件名
+  消毒（版本号不允许 `..`/`/` 逃逸缓存目录）、venv 仅当 activate marker +
+  interpreter 均存在才复用（否则整目录重建）、SIGINT/SIGTERM 下清理在途下载
+  文件并把信号转发给 in-flight pip 子进程（本次把 `activeStepChildren`
+  注册补上，先前为死代码）；npm `engines.node` 从 `>=16` 上调为 `>=18`
+  （`AbortSignal.reason`、`node --test` 所需）。
+
+### Changed
+
+- **权限敏感路径边界扩展**（`permissions/checker.py`）：内置 `SENSITIVE_PATH_PATTERNS`
+  新增 `*/.env`、`*/.env.*`、`*/.envrc`、`*/.netrc`、`*/.pypirc`、`*/.npmrc`、
+  `*/.git-credentials`、`*/.config/gh/hosts.yml`。该边界在任何 allow/deny 规则与
+  权限模式判断**之前**执行，永远无法被 override/allow-list 放宽。
+- **`kernel.rollback` 调用修正**（`engine/query.py`）：defensive `rollback` 是同步
+  方法，`CancelledError` 分支误写 `await`（运行期 await 一个非协程结果而直接返回、
+  mypy 报错），改为同步调用后再 `raise`。
+
+### Fixed
+
+- **引擎 / 工具层**：`exit_plan_mode` 写 `"default"` 清理会话覆盖（而非 pop 造成
+  残留）；`transaction` 回滚失败时保留 snapshot（不再抛第二异常吞掉原始错误）；
+  `query.py` 终态 `final_message` 为 `None` 时产出 `ErrorEvent` 而非崩溃；
+  `after_mutation` 遇 `CancelledError` 先回滚快照再上抛；`_WRITE_PAYLOAD_FIELDS`
+  补 `"item"`；`FILE_MUTATING_TOOLS` 补 `"todo_write"`；`worktree_flow` 的
+  `merge` 失败回退 `merge --abort`（无 merge 态时兜底清理）。
+- **iterate 包**：`last_state` 对 `rounds`/`totalFindings`/`perDimension` 数值字段
+  加固（非 int 降级）；`loop_policy.by_dim` 拒绝 bool 计数维度；
+  `personalization` 的 `line: true` 不再被当作第 1 行、`focus` 仅接受 str 并去空白；
+  `onboarding.update_completed_at_in_md` 只替换精确的两单元格元数据行；
+  `trend_store.record_run` 新增 `covered_dimensions`——仅在覆盖维度集合存在时对
+  集合内的缺失 finding 标记 fixed，空 `by_dimension` 保守不自动 fixed；
+  `finding_fingerprint` 拒绝 bool line；`iterate_tools._record_trend` 作用域随后台
+  发布 state 判断。
+- **web**：`run_manager.send_message` TOCTOU 修复——锁内二次检查 `future.done()`
+  与 registry 成员再 resolve，失效请求抛「该请求已超时或已失效」而非 500；finally
+  守护 `close_runtime`（仅当 `self._bundle is bundle` 才关旧 bundle，避免新 run
+  沙箱被误杀）+ 终态 run-state 发布（仅当 `self._task is task_handle`）；CJK
+  否定词批准语义修复——「不想批准」「不能同意」正确视为拒绝、「没关系/没问题」
+  仍为批准；`web/events.py` cursor `stat()` 包 `OSError`；
+  `ui/backend_host.py` 无活动任务时中断输出明确提示、`task.cancel()` 后同步 await
+  ack；`tasks/manager.py` 输出文件 8MiB 滚动截断（`_trim_output_front`）。
+- **防御守卫（防崩溃）**：`plugins/loader.py` hooks/mcp JSON 损坏、顶层非对象、
+  条目非 dict 全部安全降级不崩溃；`services/session_storage.py` 快照/列表/按 ID
+  加载对 JSON 畸形、`stat` 竞争删除、payload 非 dict、消息条目形状错误全部
+  try/except 兜底返回 `None`/跳过；`mcp/client.py` `result.content`/
+  `result.contents` 可为 `None`、条目无法 `model_dump_json` 时降级 `str()`；
+  `utils/file_lock.py` Windows 锁改用 `fstat`（消除按路径 `stat` 的删除竞态）。
+- **遗留（Sep 18）未提交改动纳入**：`swarm/worktree.py` 陈旧目录清理 + 跨仓库
+  删除守卫；`tests/test_swarm/test_worktree.py` +180 行测试。
+
+### Verification
+
+- 全量 pytest **2127 passed, 6 skipped**；ruff clean；mypy strict clean
+  （246 源文件）；npm 包装器 **56 passed**。
+- 版本号在 `__init__.py` / `npm/package.json` / `CHANGELOG.md` 同步至 2.3.0。
+
 ## [2.2.8] - 2026-09-17
 
 ### Fixed

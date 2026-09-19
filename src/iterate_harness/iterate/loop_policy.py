@@ -101,7 +101,15 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
     if not isinstance(state, dict):
         return None
     by_dim_raw = state.get("by_dimension")
-    by_dim = {str(k): int(v) for k, v in by_dim_raw.items()} if isinstance(by_dim_raw, dict) else {}
+    by_dim = (
+        {
+            str(k): max(0, int(v))
+            for k, v in by_dim_raw.items()
+            if isinstance(v, int) and not isinstance(v, bool)
+        }
+        if isinstance(by_dim_raw, dict)
+        else {}
+    )
     fbr_raw = state.get("findings_by_round")
     fbr = [int(x) for x in fbr_raw] if isinstance(fbr_raw, list) else []
     exhausted_raw = state.get("exhausted_dimensions")

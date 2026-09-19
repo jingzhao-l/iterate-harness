@@ -56,7 +56,11 @@ def finding_fingerprint(finding: dict[str, Any]) -> str | None:
     if not file_name or not dimension:
         return None
     line_value = finding.get("line")
-    line_part = str(line_value) if isinstance(line_value, int) and line_value > 0 else "0"
+    line_part = (
+        "0"
+        if not isinstance(line_value, int) or isinstance(line_value, bool) or line_value <= 0
+        else str(line_value)
+    )
     key = f"{file_name}|{line_part}|{dimension}"
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
@@ -180,11 +184,14 @@ def _save_library(project_root: str | Path, records: dict[str, dict[str, Any]]) 
 
 def _record_from_finding(fingerprint: str, finding: dict[str, Any], now: str) -> TrendRecord:
     line_value = finding.get("line")
+    usable_line = (
+        isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0
+    )
     return TrendRecord(
         fingerprint=fingerprint,
         file=str(finding.get("file") or ""),
         dimension=str(finding.get("dimension") or ""),
-        line=line_value if isinstance(line_value, int) and line_value > 0 else None,
+        line=line_value if usable_line else None,
         severity=str(finding.get("severity") or "medium"),
         summary=str(finding.get("summary") or ""),
         first_seen=now,
@@ -198,6 +205,7 @@ def _apply_run_updates(
     records: dict[str, dict[str, Any]],
     findings: list[dict[str, Any]],
     now: str,
+    covered_dimensions: set[str] | None = None,
 ) -> TrendDelta:
     delta = TrendDelta(run_timestamp=now)
     current: dict[str, dict[str, Any]] = {}
@@ -214,11 +222,12 @@ def _apply_run_updates(
             record = _record_from_finding(fingerprint, finding, now)
             delta.new_findings.append(record.to_dict())
         else:
+            existing_line = existing.get("line")
             record = TrendRecord(
                 fingerprint=fingerprint,
                 file=str(existing.get("file") or finding.get("file") or ""),
                 dimension=str(existing.get("dimension") or finding.get("dimension") or ""),
-                line=existing.get("line") if isinstance(existing.get("line"), int) else None,
+                line=existing_line if isinstance(existing_line, int) and not isinstance(existing_line, bool) else None,
                 severity=str(finding.get("severity") or existing.get("severity") or "medium"),
                 summary=str(finding.get("summary") or existing.get("summary") or ""),
                 first_seen=str(existing.get("first_seen") or now),
@@ -230,10 +239,19 @@ def _apply_run_updates(
                 delta.regressed_findings.append(record.to_dict())
         records[fingerprint] = record.to_dict()
 
-    # Anything open before and absent now is fixed.
+    # Anything open before and absent now is fixed — but only when this run
+    # actually covered the finding's dimension. A diff/changed-only or
+    # dimension-scoped run reviews a subset of the surface; findings in
+    # non-covered dimensions are simply not re-seen this run, and marking
+    # them "fixed" would (a) lose them and (b) turn a later re-appearance
+    # into a spurious "regression".
     for fingerprint, existing in list(records.items()):
         if fingerprint in current or existing.get("status") != STATUS_OPEN:
             continue
+        if covered_dimensions is not None:
+            dimension = str(existing.get("dimension") or "")
+            if dimension and dimension not in covered_dimensions:
+                continue
         existing["status"] = STATUS_FIXED
         existing["fixed_at"] = now
         delta.fixed_findings.append(dict(existing))
@@ -258,17 +276,32 @@ def record_run(
     project_root: str | Path,
     findings: list[dict[str, Any]] | None,
     run_timestamp: str | None = None,
+    covered_dimensions: list[str] | set[str] | None = None,
 ) -> TrendDelta:
     """Record one finished run's findings into the trend library.
 
     Returns the delta vs. the previous run (new / fixed / regressed /
     stubborn). Malformed finding entries are skipped defensively; a failure
     to persist never propagates to the caller's loop.
+
+    ``covered_dimensions`` names the dimensions this run actually reviewed.
+    Findings in other dimensions are **not** auto-marked "fixed" on absence —
+    a scoped run (diff-only, changed-only, dimension filter) must not erase
+    trend history for surfaces it never looked at. Pass ``None`` only for
+    runs that reviewed the full dimension surface.
     """
     now = run_timestamp or datetime.now(UTC).isoformat()
     safe_findings = [f for f in (findings or []) if isinstance(f, dict)]
+    # ``None`` = legacy full-sweep attribution (no coverage info available);
+    # an *empty* set = a run that surfaced no findings — it must not erase
+    # lingering open records either.
+    covered: set[str] | None = None
+    if covered_dimensions is not None:
+        covered = {
+            str(d) for d in covered_dimensions if isinstance(d, str) and d.strip()
+        }
     records = load_library(project_root)
-    delta = _apply_run_updates(records, safe_findings, now)
+    delta = _apply_run_updates(records, safe_findings, now, covered_dimensions=covered)
     _prune(records)
     _save_library(project_root, records)
     return delta

@@ -187,7 +187,18 @@ async def exit_session(
                     "a merge commit (main checkout diverged while the round ran)",
                     session.branch,
                 )
-                await _git(["merge", "--no-edit", session.branch], cwd=session.repo_path)
+                try:
+                    await _git(["merge", "--no-edit", session.branch], cwd=session.repo_path)
+                except WorktreeFlowError:
+                    # The fallback merge itself collided. Do NOT leave the main
+                    # checkout in a conflicted mid-merge state (MERGE_HEAD +
+                    # unmerged paths): abort the merge first so subsequent
+                    # rounds read/write a clean tree, then surface the error.
+                    try:
+                        await _git(["merge", "--abort"], cwd=session.repo_path)
+                    except WorktreeFlowError:
+                        log.exception("iterate worktree %s: merge --abort failed", session.branch)
+                    raise
     finally:
         removed = await mgr.remove_worktree(session.slug)
         if not removed:

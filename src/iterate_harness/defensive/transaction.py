@@ -109,7 +109,11 @@ class FileTransactionBuffer:
                         raise
                     restored.append(resolved)
             except OSError as exc:
+                # Keep the snapshot entry on a failed restore so a later
+                # rollback call can retry — dropping it here would leave the
+                # invariant-violating edit effectively committed-by-default.
                 log.warning("defensive rollback failed for %s: %s", resolved, exc)
+                continue
             self._snapshots.pop(resolved, None)
         return restored
 

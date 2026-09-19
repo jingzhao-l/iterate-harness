@@ -33,6 +33,16 @@ SENSITIVE_PATH_PATTERNS: tuple[str, ...] = (
     "*/.docker/config.json",
     # Kubernetes credentials
     "*/.kube/config",
+    # GitHub CLI / git auth token stores
+    "*/.config/gh/hosts.yml",
+    "*/.git-credentials",
+    # Dotfiles that routinely carry secrets / access tokens
+    "*/.env",
+    "*/.env.*",
+    "*/.envrc",
+    "*/.netrc",
+    "*/.pypirc",
+    "*/.npmrc",
     # IterateHarness own credential stores
     "*/.iterate-harness/credentials.json",
 )

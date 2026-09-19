@@ -51,6 +51,12 @@ const TARBALL_CACHE_DIR_NAME = "cache";
 
 const MAX_DOWNLOAD_REDIRECTS = 5;
 const DOWNLOAD_TIMEOUT_MS = 120000;
+// Hard wall-clock cap per single self-download (a stale-but-connected registry
+// that never dribbles more bytes must not be able to hang the bootstrap).
+const DOWNLOAD_TOTAL_TIMEOUT_MS = 60000;
+// Hard cap for the whole install/bootstrap, whatever pip or the download
+// fallbacks are doing.
+const BOOTSTRAP_TIMEOUT_MS = 900000;
 const CURL_MAX_TIME_SECONDS = 240;
 
 // Integrity: every release publishes a `<artifact>.sha256` sidecar next to the
@@ -63,6 +69,12 @@ const PYTHON_ENV_VAR = "ITERATE_HARNESS_PYTHON";
 const HOME_ENV_VAR = "ITERATE_HARNESS_NPM_HOME";
 const INSTALL_URL_ENV_VAR = "ITERATE_HARNESS_INSTALL_URL";
 const SKIP_INSTALL_ENV_VAR = "ITERATE_HARNESS_SKIP_INSTALL";
+
+// Flags understood by the wrapper itself (stripped before argv is forwarded to
+// the Python `ih` child). Security-relevant escapes: verification gate and the
+// plain-HTTP source ban can only be lifted explicitly.
+const NO_VERIFY_FLAG = "--no-verify";
+const ALLOW_HTTP_FLAG = "--allow-http";
 
 const HARNESS_GITHUB_REPO = "jingzhao-l/iterate-harness";
 const HARNESS_RELEASE_DOWNLOAD_URL = `https://github.com/${HARNESS_GITHUB_REPO}/releases/download`;
@@ -90,6 +102,74 @@ class BootstrapError extends Error {}
 // Thrown when the user declines the interactive install wizard. Treated as a
 // graceful "nothing to do" exit (code 0), never as a failure.
 class CancelledError extends Error {}
+
+// ---------------------------------------------------------------------------
+// Process-lifetime helpers for cleanup on SIGINT/SIGTERM during bootstrap
+// ---------------------------------------------------------------------------
+
+// In-flight self-downloaded artifacts. If the process is signalled (Ctrl-C,
+// SIGTERM) mid-download, these partial files are removed instead of cluttering
+// the cache with a corrupt artifact that would only fail verification later.
+const activeDownloadFiles = new Set();
+
+function trackDownload(dest) {
+  activeDownloadFiles.add(dest);
+  return () => { activeDownloadFiles.delete(dest); };
+}
+
+function cleanupActiveDownloads() {
+  for (const dest of activeDownloadFiles) {
+    try { fs.rmSync(dest, { force: true }); } catch { /* best-effort */ }
+  }
+  activeDownloadFiles.clear();
+}
+
+// In-flight pip/python step children (async pip runner). A signal arriving
+// while the wrapper bootstraps kills these too so they never keep running
+// orphaned after the wrapper exits.
+const activeStepChildren = new Set();
+
+// AbortController wrapper: fires after `timeoutMs` with a clear
+// BootstrapError. Call `.clear()` when the work finishes normally.
+function abortable(timeoutMs, message) {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new BootstrapError(message)),
+    timeoutMs
+  );
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
+
+// The shared TLS-trust-store guidance shown when pip exits with
+// CERTIFICATE_VERIFY_FAILED.
+function certVerifyFailure(command, args, code) {
+  return new BootstrapError(
+    [
+      `${command} ${args.join(" ")} exited with code ${code}`,
+      "",
+      "The download failed TLS certificate verification. This is a local",
+      "Python/pip trust-store issue, not a harness problem. Common fixes:",
+      "  - macOS python.org installs: run",
+      "      /Applications/Python 3.1x/Install Certificates.command",
+      "  - Point pip at a CA bundle:  export PIP_CERT=$(python3 -m certifi)",
+      `  - Or use another interpreter: ${PYTHON_ENV_VAR}=/opt/homebrew/bin/python3.12 npm i -g iterate-harness`,
+    ].join("\n")
+  );
+}
+
+// Plain-HTTP install sources are trivially MITM-able; the wrapper refuses
+// them unless the user explicitly opts in.
+function assertHttpsInstallSource(url, allowHttp) {
+  const scheme = String(
+    (/^([a-z][a-z0-9+.-]*):/i.exec(String(url || "")) || [])[1] || ""
+  ).toLowerCase();
+  if (scheme === "http" && !allowHttp) {
+    throw new BootstrapError(
+      `refusing plain-HTTP install source ${url}; ` +
+        "use an https:// URL or pass --allow-http to permit plain HTTP"
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested in test/bootstrap.test.js)
@@ -192,31 +272,73 @@ function sha256File(filePath) {
 }
 
 // Small text fetch with the same redirect/timeout discipline as downloadFile.
-function fetchChecksumText(url, redirectBudget) {
+function fetchChecksumText(url, redirectBudget, totalTimeoutMs, signal) {
   const budget = redirectBudget === undefined ? MAX_DOWNLOAD_REDIRECTS : redirectBudget;
+  const totalTimeout = totalTimeoutMs === undefined ? DOWNLOAD_TOTAL_TIMEOUT_MS : totalTimeoutMs;
   return new Promise((resolve, reject) => {
+    let request = null;
+    let timer = null;
+    let onAbort = null;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      if (request) request.destroy(error);
+      reject(error);
+    };
+    timer = setTimeout(() => {
+      fail(
+        new BootstrapError(`fetching ${url} timed out after ${Math.round(totalTimeout / 1000)}s`)
+      );
+    }, totalTimeout);
+    if (signal) {
+      onAbort = () => {
+        fail(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new BootstrapError(`fetching ${url} aborted`)
+        );
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
     if (budget < 0) {
-      reject(new BootstrapError(`too many redirects while fetching ${url}`));
+      fail(new BootstrapError(`too many redirects while fetching ${url}`));
       return;
     }
     let parsed;
     try {
       parsed = new URL(url);
     } catch (error) {
-      reject(new BootstrapError(`invalid checksum URL ${url}: ${error.message}`));
+      fail(new BootstrapError(`invalid checksum URL ${url}: ${error.message}`));
       return;
     }
     const client = parsed.protocol === "http:" ? http : https;
-    const request = client.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (response) => {
+    request = client.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (response) => {
       const status = response.statusCode || 0;
       if (status >= 300 && status < 400 && response.headers.location) {
         response.resume();
-        resolve(fetchChecksumText(new URL(response.headers.location, url).toString(), budget - 1));
+        finish(
+          fetchChecksumText(
+            new URL(response.headers.location, url).toString(),
+            budget - 1,
+            totalTimeout,
+            signal
+          )
+        );
         return;
       }
       if (status < 200 || status >= 300) {
         response.resume();
-        reject(new BootstrapError(`fetching ${url} failed with HTTP ${status}`));
+        fail(new BootstrapError(`fetching ${url} failed with HTTP ${status}`));
         return;
       }
       const chunks = [];
@@ -224,42 +346,48 @@ function fetchChecksumText(url, redirectBudget) {
       response.on("data", (chunk) => {
         size += chunk.length;
         if (size > MAX_CHECKSUM_BYTES) {
-          request.destroy(new BootstrapError(`checksum file ${url} is unexpectedly large`));
+          fail(new BootstrapError(`checksum file ${url} is unexpectedly large`));
+          if (request) request.destroy();
           return;
         }
         chunks.push(chunk);
       });
-      response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-      response.on("error", (responseError) => reject(responseError));
+      response.on("end", () => finish(Buffer.concat(chunks).toString("utf8")));
+      response.on("error", (responseError) => fail(responseError));
     });
     request.on("timeout", () => {
-      request.destroy(new BootstrapError(`fetching ${url} timed out`));
+      fail(new BootstrapError(`fetching ${url} timed out`));
     });
-    request.on("error", (requestError) => reject(requestError));
+    request.on("error", (requestError) => fail(requestError));
   });
 }
 
 // Verify a self-downloaded artifact against its published `.sha256` sidecar.
-// Returns true when a checksum was present and matched, false when none is
-// published (pre-2.2.7 releases predate the sidecar), and throws on mismatch:
-// corrupted or tampered bytes must never reach pip.
-async function verifyDownloadedArtifact(url, filePath, fetchChecksum) {
+// Fail-CLOSED: any error fetching the sidecar, any missing/malformed digest, or
+// any mismatch deletes the artifact and aborts before pip can install it. The
+// only way past the gate is the explicit `--no-verify` opt-out.
+async function verifyDownloadedArtifact(url, filePath, fetchChecksum, noVerify) {
+  if (noVerify) {
+    process.stderr.write(
+      `[iterate-harness] skipping SHA256 verification for ${url} (--no-verify)\n`
+    );
+    return false;
+  }
   let content;
   try {
     content = await fetchChecksum(checksumAssetUrl(url));
   } catch (error) {
-    process.stderr.write(
-      `[iterate-harness] warning: no SHA256 checksum published for ${url} ` +
-        `(${error.message}); skipping integrity check\n`
+    fs.rmSync(filePath, { force: true });
+    throw new BootstrapError(
+      `cannot verify ${url}: failed to fetch its SHA256 sidecar (${error.message}); refusing to install`
     );
-    return false;
   }
   const expected = parseChecksum(content);
   if (!expected) {
-    process.stderr.write(
-      `[iterate-harness] warning: unreadable SHA256 checksum for ${url}; skipping integrity check\n`
+    fs.rmSync(filePath, { force: true });
+    throw new BootstrapError(
+      `cannot verify ${url}: missing or malformed SHA256 digest in the published sidecar; refusing to install`
     );
-    return false;
   }
   const actual = sha256File(filePath);
   if (actual !== expected) {
@@ -283,15 +411,26 @@ function artifactExtensionFor(url) {
 
 function downloadCachePath(homeDir, version, extension) {
   const ext = extension || DEFAULT_ARTIFACT_EXT;
+  // The version token ends up in the on-disk filename, so it must stay a single
+  // safe basename inside the cache dir — a hostile version/URL must never be
+  // able to traverse (`..`, `/`) out of the cache.
+  const safeVersion = path
+    .basename(String(version || ""))
+    .replace(/[^A-Za-z0-9._-]/g, "_");
+  if (!safeVersion || safeVersion === "." || safeVersion === "..") {
+    throw new BootstrapError(
+      `cannot build a safe cache filename for version "${version}"`
+    );
+  }
   if (ext === WHEEL_ARTIFACT_EXT) {
     // A locally-cached wheel must keep a valid PEP 427 filename (e.g.
     // `iterate_harness-1.12.6-py3-none-any.whl`). pip refuses any `*.whl`
     // whose name lacks the `{python}-{abi}-{platform}` tags, so the fallback
     // cache file reuses the real release asset name rather than a bare
     // `iterate-harness-{version}.whl`.
-    return path.join(homeDir, TARBALL_CACHE_DIR_NAME, wheelAssetName(version));
+    return path.join(homeDir, TARBALL_CACHE_DIR_NAME, wheelAssetName(safeVersion));
   }
-  return path.join(homeDir, TARBALL_CACHE_DIR_NAME, `iterate-harness-${version}${ext}`);
+  return path.join(homeDir, TARBALL_CACHE_DIR_NAME, `iterate-harness-${safeVersion}${ext}`);
 }
 
 function pipInstallArgs(target) {
@@ -385,21 +524,69 @@ function runStep(command, args, options) {
   }
   if (result.status !== 0) {
     if (capturedOutput.includes(CERT_VERIFY_FAILURE_MARKER)) {
-      throw new BootstrapError(
-        [
-          `${command} ${args.join(" ")} exited with code ${result.status}`,
-          "",
-          "The download failed TLS certificate verification. This is a local",
-          "Python/pip trust-store issue, not a harness problem. Common fixes:",
-          "  - macOS python.org installs: run",
-          "      /Applications/Python 3.1x/Install Certificates.command",
-          "  - Point pip at a CA bundle:  export PIP_CERT=$(python3 -m certifi)",
-          `  - Or use another interpreter: ${PYTHON_ENV_VAR}=/opt/homebrew/bin/python3.12 npm i -g iterate-harness`,
-        ].join("\n")
-      );
+      throw certVerifyFailure(command, args, result.status);
     }
     throw new BootstrapError(`${command} ${args.join(" ")} exited with code ${result.status}`);
   }
+}
+
+// Async pip runner used for install steps: unlike the synchronous runStep it
+// keeps the event loop live, so the bootstrap deadline can abort a pip that
+// hangs on a dead registry (spawnSync would block the timer forever) and kill
+// the stuck child instead of orphaning it.
+function runPipStepAsync(python, args, signal) {
+  return new Promise((resolve, reject) => {
+    let onAbort = null;
+    const child = spawn(python, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    // Registered so a SIGINT/SIGTERM arriving during bootstrap can kill the
+    // stuck pip child (see forwardSignal) instead of orphaning it.
+    activeStepChildren.add(child);
+    let capturedOutput = "";
+    const forwardOutput = (chunk) => {
+      const text = chunk.toString("utf8");
+      if (capturedOutput.length < 16 * 1024 * 1024) {
+        capturedOutput += text;
+      }
+      process.stderr.write(text);
+    };
+    child.stdout.on("data", forwardOutput);
+    child.stderr.on("data", forwardOutput);
+    const fail = (error) => {
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      if (!child.killed) child.kill();
+      reject(error);
+    };
+    if (signal) {
+      onAbort = () => {
+        fail(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new BootstrapError(`pip install of ${args[args.length - 1]} aborted`)
+        );
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    child.on("error", (error) => {
+      activeStepChildren.delete(child);
+      fail(new BootstrapError(`failed to run ${python}: ${error.message}`));
+    });
+    child.on("close", (code) => {
+      activeStepChildren.delete(child);
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      if (code !== 0) {
+        if (capturedOutput.includes(CERT_VERIFY_FAILURE_MARKER)) {
+          fail(certVerifyFailure(python, args, code));
+          return;
+        }
+        fail(new BootstrapError(`${python} ${args.join(" ")} exited with code ${code}`));
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 // Ordered install candidates, best-effort first:
@@ -419,32 +606,67 @@ function installCandidates(version, env) {
 // Artifact download fallback (Node-side TLS — survives broken pip trust stores)
 // ---------------------------------------------------------------------------
 
-function downloadFile(url, dest, redirectBudget) {
+function downloadFile(url, dest, redirectBudget, totalTimeoutMs, signal) {
   const budget = redirectBudget === undefined ? MAX_DOWNLOAD_REDIRECTS : redirectBudget;
+  const totalTimeout = totalTimeoutMs === undefined ? DOWNLOAD_TOTAL_TIMEOUT_MS : totalTimeoutMs;
   return new Promise((resolve, reject) => {
+    let request = null;
+    let timer = null;
+    let onAbort = null;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      if (request) request.destroy(error);
+      reject(error);
+    };
+    timer = setTimeout(() => {
+      fail(
+        new BootstrapError(`downloading ${url} timed out after ${Math.round(totalTimeout / 1000)}s`)
+      );
+    }, totalTimeout);
+    if (signal) {
+      onAbort = () => {
+        fail(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new BootstrapError(`downloading ${url} aborted`)
+        );
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
     if (budget < 0) {
-      reject(new BootstrapError(`too many redirects while downloading ${url}`));
+      fail(new BootstrapError(`too many redirects while downloading ${url}`));
       return;
     }
     let parsed;
     try {
       parsed = new URL(url);
     } catch (error) {
-      reject(new BootstrapError(`invalid download URL ${url}: ${error.message}`));
+      fail(new BootstrapError(`invalid download URL ${url}: ${error.message}`));
       return;
     }
     const client = parsed.protocol === "http:" ? http : https;
-    const request = client.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (response) => {
+    request = client.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (response) => {
       const status = response.statusCode || 0;
       if (status >= 300 && status < 400 && response.headers.location) {
         response.resume();
         const nextUrl = new URL(response.headers.location, url).toString();
-        resolve(downloadFile(nextUrl, dest, budget - 1));
+        finish(downloadFile(nextUrl, dest, budget - 1, totalTimeout, signal));
         return;
       }
       if (status < 200 || status >= 300) {
         response.resume();
-        reject(new BootstrapError(`downloading ${url} failed with HTTP ${status}`));
+        fail(new BootstrapError(`downloading ${url} failed with HTTP ${status}`));
         return;
       }
       const file = fs.createWriteStream(dest);
@@ -452,21 +674,21 @@ function downloadFile(url, dest, redirectBudget) {
       file.on("finish", () => {
         file.close((closeError) => {
           if (closeError) {
-            reject(closeError);
+            fail(closeError);
             return;
           }
-          resolve(dest);
+          finish(dest);
         });
       });
       file.on("error", (fileError) => {
         file.destroy();
-        reject(fileError);
+        fail(fileError);
       });
     });
     request.on("timeout", () => {
-      request.destroy(new BootstrapError(`downloading ${url} timed out`));
+      fail(new BootstrapError(`downloading ${url} timed out`));
     });
-    request.on("error", (requestError) => reject(requestError));
+    request.on("error", (requestError) => fail(requestError));
   });
 }
 
@@ -497,9 +719,14 @@ function curlDownload(url, dest, spawnFn) {
 }
 
 async function downloadTarballTo(url, dest, deps) {
-  const nodeDownload = (deps && deps.nodeDownload) || downloadFile;
-  const curlDownloadFn = (deps && deps.curlDownload) || curlDownload;
+  const signal = deps && deps.signal;
+  const nodeDownload =
+    (deps && deps.nodeDownload) ||
+    ((downloadUrl, downloadDest) =>
+      downloadFile(downloadUrl, downloadDest, undefined, DOWNLOAD_TOTAL_TIMEOUT_MS, signal));
+  const curlDownloadFn = deps && deps.curlDownload ? deps.curlDownload : curlDownload;
   fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const untrack = trackDownload(dest);
 
   const attempts = [
     {
@@ -520,8 +747,15 @@ async function downloadTarballTo(url, dest, deps) {
 
   const failures = [];
   for (const attempt of attempts) {
+    if (signal && signal.aborted) {
+      untrack();
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new BootstrapError("bootstrap aborted");
+    }
     try {
       await attempt.run();
+      untrack();
       return dest;
     } catch (error) {
       failures.push(`${attempt.name}: ${error.message}`);
@@ -531,6 +765,7 @@ async function downloadTarballTo(url, dest, deps) {
       fs.rmSync(dest, { force: true });
     }
   }
+  untrack();
   throw new BootstrapError(`direct download of ${url} failed (${failures.join("; ")})`);
 }
 
@@ -544,9 +779,16 @@ async function installHarness(options) {
   const homeDir = options.homeDir;
   const version = options.version;
   const candidates = options.candidates;
-  const runStepFn = options.runStepFn || runStep;
-  const downloader = options.downloader || downloadTarballTo;
-  const checksumFetcher = options.checksumFetcher || fetchChecksumText;
+  const signal = options.signal;
+  const noVerify = Boolean(options.noVerify);
+  const allowHttp = Boolean(options.allowHttp);
+  const runPipStep = options.runStepFn || runPipStepAsync;
+  const downloader = options.downloader
+    ? options.downloader
+    : (url, dest) => downloadTarballTo(url, dest, { signal });
+  const checksumFetcher = options.checksumFetcher
+    ? options.checksumFetcher
+    : (url) => fetchChecksumText(url, undefined, DOWNLOAD_TOTAL_TIMEOUT_MS, signal);
 
   if (!candidates || candidates.length === 0) {
     throw new BootstrapError("no install candidate URLs were provided");
@@ -554,26 +796,38 @@ async function installHarness(options) {
 
   const failures = [];
   for (const candidate of candidates) {
+    if (signal && signal.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new BootstrapError("bootstrap aborted");
+    }
     try {
       if (isRemoteHttpUrl(candidate)) {
         // HTTP(S) candidate: `pip` first, then node/curl download + local pip
         // (survives broken Python TLS trust stores on macOS python.org builds).
+        assertHttpsInstallSource(candidate, allowHttp);
         await installRemoteArtifact(
           python,
           candidate,
           homeDir,
           version,
-          runStepFn,
+          runPipStep,
           downloader,
-          checksumFetcher
+          checksumFetcher,
+          noVerify,
+          allowHttp,
+          signal
         );
       } else {
         // Non-URL candidate (e.g. `iterate-harness==1.12.9` resolved by pip
         // against the user's mirror): no artifact to download, just pip it.
-        runStepFn(python, pipInstallArgs(candidate));
+        await runPipStep(python, pipInstallArgs(candidate), signal);
       }
       return;
     } catch (error) {
+      if (signal && signal.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : error;
+      }
       failures.push(`${candidate}: ${error.message}`);
       process.stderr.write(
         `[iterate-harness] install from "${candidate}" failed (${error.message}); ` +
@@ -594,10 +848,14 @@ async function installRemoteArtifact(
   version,
   runStepFn,
   downloader,
-  checksumFetcher
+  checksumFetcher,
+  noVerify,
+  allowHttp,
+  signal
 ) {
+  assertHttpsInstallSource(url, allowHttp);
   try {
-    runStepFn(python, pipInstallArgs(url));
+    await runStepFn(python, pipInstallArgs(url), signal);
     return;
   } catch (primaryError) {
     process.stderr.write(
@@ -608,11 +866,12 @@ async function installRemoteArtifact(
   await downloader(url, cachePath);
   // These are bytes we fetched ourselves, so we own their integrity: check the
   // published SHA256 sidecar before handing the file to pip.
-  await verifyDownloadedArtifact(url, cachePath, checksumFetcher);
-  runStepFn(python, pipInstallArgs(cachePath));
+  await verifyDownloadedArtifact(url, cachePath, checksumFetcher, noVerify);
+  await runStepFn(python, pipInstallArgs(cachePath), signal);
 }
 
-async function bootstrap(homeDir, version, env) {
+async function bootstrap(homeDir, version, env, options) {
+  const opts = options || {};
   fs.mkdirSync(homeDir, { recursive: true });
 
   const venvDir = path.join(homeDir, VENV_DIR_NAME);
@@ -622,23 +881,49 @@ async function bootstrap(homeDir, version, env) {
     : path.join(venvDir, "bin", "activate");
 
   const interpreter = detectPython(env);
-  const recreateVenv = fs.existsSync(venvDir) && !fs.existsSync(activateMarker);
-  if (recreateVenv) {
-    fs.rmSync(venvDir, { recursive: true, force: true });
-  }
-  if (!fs.existsSync(activateMarker)) {
+  // A venv is only reusable when the activate marker AND the interpreter both
+  // resolve; anything else (missing marker, stale/corrupt/partial venv) is
+  // rebuilt from scratch rather than silently reused.
+  const venvUsable =
+    fs.existsSync(venvDir) &&
+    fs.existsSync(activateMarker) &&
+    fs.existsSync(executable.python);
+  if (!venvUsable) {
+    if (fs.existsSync(venvDir)) {
+      ui.step(`Removing broken virtualenv at ${venvDir}`);
+      fs.rmSync(venvDir, { recursive: true, force: true });
+    }
     ui.step(`Creating virtualenv at ${venvDir}`);
     runStep(interpreter.command, [...interpreter.preArgs, "-m", "venv", venvDir]);
+    if (!fs.existsSync(executable.python)) {
+      throw new BootstrapError(
+        `virtualenv creation failed: no interpreter at ${executable.python}`
+      );
+    }
   }
 
   const candidates = installCandidates(version, env);
   ui.step(`Installing iterate-harness ${version}`);
-  await installHarness({
-    python: executable.python,
-    candidates,
-    homeDir,
-    version,
-  });
+  // Overall bootstrap cap: a hung index must abort the install instead of
+  // hanging the wrapper forever.
+  const cap = abortable(
+    BOOTSTRAP_TIMEOUT_MS,
+    `bootstrap timed out after ${Math.round(BOOTSTRAP_TIMEOUT_MS / 60000)} minutes; ` +
+      "the install hung or stalled — check your network access to the index and retry"
+  );
+  try {
+    await installHarness({
+      python: executable.python,
+      candidates,
+      homeDir,
+      version,
+      noVerify: opts.noVerify,
+      allowHttp: opts.allowHttp,
+      signal: cap.signal,
+    });
+  } finally {
+    cap.clear();
+  }
 
   const stampPath = path.join(homeDir, STAMP_FILE_NAME);
   fs.writeFileSync(stampPath, `${version}\n`, "utf8");
@@ -678,7 +963,7 @@ async function ensureRuntime(env, options) {
         `\x1b[36m◆\x1b[0m Runtime:  ${homeDir}`,
       ]);
     }
-    await bootstrap(homeDir, version, environment);
+    await bootstrap(homeDir, version, environment, opts);
     if (opts.interactive) {
       ui.frameSection("Done", [
         `\x1b[32m✓\x1b[0m iterate-harness v${version} installed`,
@@ -723,32 +1008,58 @@ async function runHarness(args, env) {
   // when stderr is not a TTY (e.g. piped output), so `ih --version | jq` stays clean.
   ui.printBanner();
 
+  const cliArgs = Array.isArray(args) ? args : [];
+  const forwardedArgs = cliArgs.filter(
+    (arg) => arg !== NO_VERIFY_FLAG && arg !== ALLOW_HTTP_FLAG
+  );
+  const options = {
+    noVerify: cliArgs.includes(NO_VERIFY_FLAG),
+    allowHttp: cliArgs.includes(ALLOW_HTTP_FLAG),
+  };
+
+  // Signal handling spans the whole run: during bootstrap a Ctrl-C/SIGTERM
+  // must clean up in-flight downloads and not orphan a pip/python child; after
+  // bootstrap it is forwarded to the delegated `ih` child exactly as before.
+  let child = null;
+  const forwardSignal = (signal) => {
+    cleanupActiveDownloads();
+    const stepChildren = [...activeStepChildren];
+    for (const stepChild of stepChildren) {
+      if (!stepChild.killed) stepChild.kill(signal);
+    }
+    if (child && !child.killed) {
+      child.kill(signal);
+      return;
+    }
+    // No managed child yet (still bootstrapping): abort ourselves with the
+    // conventional exit code for the signal.
+    process.exit(signal === "SIGINT" ? 130 : 143);
+  };
+  process.on("SIGINT", forwardSignal);
+  process.on("SIGTERM", forwardSignal);
+
   let target;
   try {
-    target = await ensureRuntime(env, { interactive: interactiveSession() });
+    target = await ensureRuntime(env, { interactive: interactiveSession(), ...options });
   } catch (error) {
     if (error instanceof CancelledError) {
       ui.info(error.message);
+      process.removeListener("SIGINT", forwardSignal);
+      process.removeListener("SIGTERM", forwardSignal);
       process.exit(0);
       return;
     }
+    process.removeListener("SIGINT", forwardSignal);
+    process.removeListener("SIGTERM", forwardSignal);
     reportBootstrapFailure(error);
     process.exit(1);
     return;
   }
-  const child = spawn(target, args, {
+  child = spawn(target, forwardedArgs, {
     stdio: "inherit",
     windowsHide: false,
     env: env || process.env,
   });
-
-  const forwardSignal = (signal) => {
-    if (!child.killed) {
-      child.kill(signal);
-    }
-  };
-  process.on("SIGINT", forwardSignal);
-  process.on("SIGTERM", forwardSignal);
 
   child.on("error", (error) => {
     process.stderr.write(`[iterate-harness] failed to launch ih: ${error.message}\n`);

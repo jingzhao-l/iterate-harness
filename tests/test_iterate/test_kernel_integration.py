@@ -247,7 +247,9 @@ class TestIteratePermissionWiring:
         for path in ("/proj/.env", "/.env", "/proj/sub/server.key", "/proj/credentials.json"):
             write = checker.evaluate("write_file", is_read_only=False, file_path=path)
             assert not write.allowed and not write.requires_confirmation, path
-            assert "deny rule" in write.reason, path
+            # Either the iterate deny rule or (for .env) the built-in sensitive
+            # path boundary may reject first — both are hard denials.
+            assert ("deny rule" in write.reason) or ("sensitive credential path" in write.reason), path
             read = checker.evaluate("file_read", is_read_only=True, file_path=path)
             assert not read.allowed, path
 
@@ -268,7 +270,9 @@ class TestIteratePermissionWiring:
         settings = Settings.model_validate({"iterate": {"enabled": False}})
         checker = build_permission_checker(settings)
         # No iterate deny wiring: default mode falls back to confirmation flow.
-        decision = checker.evaluate("write_file", is_read_only=False, file_path="/proj/.env")
+        # (.env is avoided here — it is a built-in sensitive path and is denied
+        # outright regardless of iterate wiring.)
+        decision = checker.evaluate("write_file", is_read_only=False, file_path="/proj/config.yaml")
         assert not decision.allowed
         assert decision.requires_confirmation
         assert "deny rule" not in decision.reason

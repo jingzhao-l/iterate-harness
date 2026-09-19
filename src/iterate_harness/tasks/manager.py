@@ -19,6 +19,29 @@ from iterate_harness.utils.shell import create_shell_subprocess
 log = logging.getLogger(__name__)
 _TASK_RESTART_NOTICE = "[IterateHarness] Agent task restarted; prior interactive context was not preserved.\n"
 
+#: On-disk cap for one task's output file. Reads consume the *tail* of the
+#: file, so a runaway worker is trimmed from the front instead of growing
+#: without bound (disk-exhaustion guard). The file oscillates between the cap
+#: and 2× the cap between trims.
+_OUTPUT_CAP_BYTES = 8 * 1024 * 1024
+
+
+def _trim_output_front(path: Path) -> None:
+    """Drop the oldest bytes of ``path`` so it holds at most ``_OUTPUT_CAP_BYTES``."""
+    try:
+        size = path.stat().st_size
+        excess = size - _OUTPUT_CAP_BYTES
+        if excess <= 0:
+            return
+        with path.open("r+b") as handle:
+            handle.seek(excess)
+            remainder = handle.read()
+            handle.seek(0)
+            handle.write(remainder)
+            handle.truncate()
+    except OSError:
+        pass  # best-effort trim; the next write will re-attempt
+
 
 def _encode_task_worker_payload(data: str) -> bytes:
     """Serialize one worker input as a single JSON line.
@@ -288,8 +311,18 @@ class BackgroundTaskManager:
             if not chunk:
                 return
             async with self._output_locks[task_id]:
-                with self._tasks[task_id].output_file.open("ab") as handle:
+                path = self._tasks[task_id].output_file
+                with path.open("ab") as handle:
                     handle.write(chunk)
+            # Bound the on-disk output: a runaway worker must never fill the
+            # disk. Once the file passes the cap, drop the oldest bytes so it
+            # hovers around ``_OUTPUT_CAP_BYTES``; ``read_task_output`` reads
+            # the *tail*, so the newest diagnostics must survive.
+            try:
+                if path.stat().st_size > _OUTPUT_CAP_BYTES * 2:
+                    _trim_output_front(path)
+            except OSError:
+                pass
 
     def _require_task(self, task_id: str) -> TaskRecord:
         task = self._tasks.get(task_id)

@@ -252,6 +252,18 @@ class ReactBackendHost:
     async def _interrupt_active_request(self) -> None:
         task = self._active_request_task
         if task is None or task.done():
+            # Every Esc/stop press must produce visible feedback — the TUI
+            # gives no other indication, so a no-op interrupt would look like a
+            # broken key.
+            await self._emit(
+                BackendEvent(
+                    type="transcript_item",
+                    item=TranscriptItem(
+                        role="system",
+                        text="当前没有正在运行的任务，无法中断。",
+                    ),
+                )
+            )
             return
         # Graceful iterate pause (design §11.2.1 Esc intervention): when an
         # iterate loop is mid-run, Esc pauses the loop at the next round
@@ -259,6 +271,14 @@ class ReactBackendHost:
         if await self._request_iterate_pause():
             return
         task.cancel()
+        # Hard-cancel acked here; the CancelledError handler in
+        # ``_run_active_request`` emits the "Interrupted by user." transcript.
+        try:
+            await task
+        except asyncio.CancelledError:  # pragma: no cover - expected outcome
+            return
+        except Exception:  # noqa: BLE001 - interrupt handling must not crash
+            return
 
     async def _request_iterate_pause(self) -> bool:
         """Try to pause an active iterate loop; True when the pause was set."""

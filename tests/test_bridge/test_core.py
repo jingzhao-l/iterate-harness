@@ -68,22 +68,43 @@ def test_build_sdk_url_ipv6_loopback_uses_ws():
 
 @pytest.mark.asyncio
 async def test_manager_cleans_up_after_session_completes(tmp_path: Path, monkeypatch):
-    """When a session finishes, its entries must be dropped from every manager
-    dict so they do not accumulate over many runs."""
+    """A naturally completed session stays readable (its output must not
+    vanish immediately), so the manager never accumulates unboundedly."""
     monkeypatch.setattr("iterate_harness.bridge.manager.get_data_dir", lambda: tmp_path)
     mgr = BridgeSessionManager()
     await mgr.spawn(session_id="done", command="echo manager-cleanup", cwd=tmp_path)
-    # The copy task runs in the background; poll until it has finished and
-    # dropped the session (an already-finished process exits almost instantly).
+    # The copy task runs in the background; poll until it has finished.
     for _ in range(100):
         if session_id := next(iter(mgr._copy_tasks), None):
             await mgr._copy_tasks[session_id]
         else:
             break
-    assert mgr._sessions == {}
+    # A completed session is retained (bounded by the retention cap) so the
+    # UI can read back its transcript; only stopped sessions are evicted.
+    assert set(mgr._sessions) == {"done"}
+    assert "done" in mgr._output_paths
+    assert "done" in mgr._commands
     assert mgr._copy_tasks == {}
-    assert mgr._commands == {}
-    assert mgr._output_paths == {}
+
+
+@pytest.mark.asyncio
+async def test_manager_retention_caps_completed_sessions(tmp_path: Path, monkeypatch):
+    """Completed sessions above ``max_completed`` are pruned oldest-first so
+    the dicts cannot grow without bound across many runs (disk/memory guard)."""
+    monkeypatch.setattr("iterate_harness.bridge.manager.get_data_dir", lambda: tmp_path)
+    mgr = BridgeSessionManager(max_completed=3)
+    for i in range(5):
+        await mgr.spawn(session_id=f"s{i}", command="echo work", cwd=tmp_path)
+    # Wait for all five copy tasks to wind down.
+    for _ in range(200):
+        if not mgr._copy_tasks:
+            break
+        for session_id in list(mgr._copy_tasks):
+            await mgr._copy_tasks[session_id]
+    # Oldest two are pruned; the three most recent survive.
+    assert set(mgr._sessions) == {"s2", "s3", "s4"}
+    assert set(mgr._commands) == {"s2", "s3", "s4"}
+    assert set(mgr._output_paths) == {"s2", "s3", "s4"}
 
 
 @pytest.mark.asyncio

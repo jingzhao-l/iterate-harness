@@ -29,7 +29,7 @@ async def _reset_run_manager():
 
 class TestStart:
     def test_start_returns_run_id(self, client: TestClient, tmp_path, monkeypatch):
-        async def fake_start(project_root, mode, changed, ref):
+        async def fake_start(project_root, mode, changed, ref, permission_mode="full_auto"):
             return "run-abc123"
 
         monkeypatch.setattr(run_manager_module.run_manager, "start", fake_start)
@@ -44,7 +44,7 @@ class TestStart:
         assert body.json() == {"runId": "run-abc123", "status": "running"}
 
     def test_start_conflict_when_active(self, client: TestClient, tmp_path, monkeypatch):
-        async def fake_start(project_root, mode, changed, ref):
+        async def fake_start(project_root, mode, changed, ref, permission_mode="full_auto"):
             raise RunManagerError("已有运行中的 iterate 循环，请先停止或等待结束")
 
         monkeypatch.setattr(run_manager_module.run_manager, "start", fake_start)
@@ -57,7 +57,7 @@ class TestStart:
         assert "运行中" in body.json()["detail"]
 
     def test_start_bad_request_for_other_errors(self, client: TestClient, tmp_path, monkeypatch):
-        async def fake_start(project_root, mode, changed, ref):
+        async def fake_start(project_root, mode, changed, ref, permission_mode="full_auto"):
             raise RunManagerError("无效的 --ref：bogus")
 
         monkeypatch.setattr(run_manager_module.run_manager, "start", fake_start)
@@ -88,10 +88,11 @@ class TestStart:
     def test_start_defaults_to_review(self, client: TestClient, tmp_path, monkeypatch):
         captured: dict[str, object] = {}
 
-        async def fake_start(project_root, mode, changed, ref):
+        async def fake_start(project_root, mode, changed, ref, permission_mode="full_auto"):
             captured["mode"] = mode
             captured["changed"] = changed
             captured["ref"] = ref
+            captured["permission_mode"] = permission_mode
             return "run-1"
 
         monkeypatch.setattr(run_manager_module.run_manager, "start", fake_start)
@@ -100,7 +101,36 @@ class TestStart:
             params={"project_root": str(tmp_path)},
             json={},
         )
-        assert captured == {"mode": "review", "changed": False, "ref": "HEAD"}
+        assert captured == {
+            "mode": "review",
+            "changed": False,
+            "ref": "HEAD",
+            "permission_mode": "full_auto",
+        }
+
+    def test_start_forwards_permission_mode(self, client: TestClient, tmp_path, monkeypatch):
+        captured: dict[str, object] = {}
+
+        async def fake_start(project_root, mode, changed, ref, permission_mode="full_auto"):
+            captured["permission_mode"] = permission_mode
+            return "run-1"
+
+        monkeypatch.setattr(run_manager_module.run_manager, "start", fake_start)
+        body = client.post(
+            "/api/v1/chat/start",
+            params={"project_root": str(tmp_path)},
+            json={"mode": "run", "permission_mode": "plan"},
+        )
+        assert body.status_code == 200
+        assert captured["permission_mode"] == "plan"
+
+    def test_start_invalid_permission_mode_422(self, client: TestClient, tmp_path):
+        body = client.post(
+            "/api/v1/chat/start",
+            params={"project_root": str(tmp_path)},
+            json={"mode": "run", "permission_mode": "explode"},
+        )
+        assert body.status_code == 422
 
 
 class TestStatus:

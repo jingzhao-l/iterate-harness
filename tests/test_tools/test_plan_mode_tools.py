@@ -87,7 +87,10 @@ async def test_exit_plan_mode_restores_configured_mode():
 
     from iterate_harness.engine.query import _session_permission_override
 
-    assert _session_permission_override(ctx.metadata) is None
+    # exit rewrites the override to "default" (the engine merge only copies
+    # back PRESENT keys, so a pop would leave the stale "plan" override in the
+    # durable tool metadata and the session would stay locked in plan mode).
+    assert _session_permission_override(ctx.metadata) == "default"
     assert _session_permission_override({"session_permission_mode": "default"}) == "default"
 
 

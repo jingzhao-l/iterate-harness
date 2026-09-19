@@ -145,6 +145,7 @@ def _make_fake_git(repo_path: Path):
     """Return a _run_git stand-in that simulates a worktree leaf whenever the
     target directory holds a ``.git`` file (mirrors real workflow: a valid
     worktree is one created by WorktreeManager via ``git worktree add``)."""
+    registered: set[Path] = set()
 
     async def fake_run_git(*args, cwd=None):
         cwd_path = Path(cwd) if cwd else None
@@ -153,18 +154,22 @@ def _make_fake_git(repo_path: Path):
             leaf = cwd_path is not None and (cwd_path / ".git").exists()
             return (0, "", "") if leaf else (128, "", "not a repository")
         if args[:2] == ("rev-parse", "--git-common-dir"):
-            return (0, str(repo_path), "")
+            return (0, str(repo_path / ".git"), "")
         if args[:2] == ("rev-parse", "--abbrev-ref"):
             return (0, cwd_path.name + "-branch", "")
+        if args[:2] == ("worktree", "list"):
+            return (0, "\n".join(f"worktree {path}" for path in sorted(registered)), "")
         if args[:2] == ("worktree", "add"):
             i = args.index("-B")
             target = Path(args[i + 2])
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").write_text("gitdir: stub\n", encoding="utf-8")
+            registered.add(target.resolve())
             return (0, "", "")
         if args[:2] == ("worktree", "remove"):
             # Real `git worktree remove --force <path>` deletes the directory.
             target = Path(args[-1])
+            registered.discard(target.resolve())
             if target.exists():
                 shutil.rmtree(target)
             return (0, "", "")
@@ -229,3 +234,176 @@ async def test_cleanup_stale_removes_all_when_no_active_set(tmp_path, monkeypatc
     # active_agent_ids=None → all worktrees with an agent_id are stale.
     removed = await mgr.cleanup_stale(active_agent_ids=None)
     assert "only-task" in removed
+
+
+# ---------------------------------------------------------------------------
+# Defensive fix regressions: stale-dir cleanup + cross-repo removal guards
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_git_for_defects(*repo_paths: Path):
+    """Fake git that mirrors real ``git worktree`` registration for 1+ repos.
+
+    A worktree's ``.git`` marker resolves into its owning repo's
+    ``.git/worktrees`` metadata; ``rev-parse --git-dir`` fails when the marker
+    target is missing (a crashed/aborted run), which is the condition the
+    harness must recover from.  ``worktree list --porcelain`` reports only the
+    worktrees registered under the queried repo.
+    """
+    repo_roots = {Path(path).resolve(): Path(path).resolve() / ".git" for path in repo_paths}
+    owner_of: dict[Path, Path] = {}
+
+    async def fake_run_git(*args, cwd=None):
+        cwd_path = Path(cwd).resolve() if cwd else None
+        if cwd_path is None:
+            return (0, "", "")
+        if args[:2] == ("rev-parse", "--git-dir"):
+            if cwd_path in repo_roots:
+                return (0, str(repo_roots[cwd_path]), "")
+            marker = cwd_path / ".git"
+            if marker.is_dir():
+                return (0, str(marker), "")
+            if marker.is_file():
+                raw = marker.read_text(encoding="utf-8").strip()
+                if raw.startswith("gitdir:"):
+                    target = Path(raw[len("gitdir:"):].strip())
+                    if not target.is_absolute():
+                        target = cwd_path / target
+                    if target.exists():
+                        return (0, str(target.resolve()), "")
+            return (128, "", "not a git repository")
+        if args[:2] == ("rev-parse", "--git-common-dir"):
+            repo = owner_of.get(cwd_path)
+            if repo is not None:
+                return (0, str(repo_roots[repo]), "")
+            return (128, "", "not a worktree")
+        if args[:2] == ("rev-parse", "--abbrev-ref"):
+            return (0, cwd_path.name + "-branch", "")
+        if args[:2] == ("worktree", "list"):
+            matching = sorted(str(p) for p, owner in owner_of.items() if owner == cwd_path)
+            return (0, "\n".join(f"worktree {path}" for path in matching), "")
+        if args[:2] == ("worktree", "add"):
+            i = args.index("-B")
+            target = Path(args[i + 2])
+            target.mkdir(parents=True, exist_ok=True)
+            wt_meta = repo_roots[cwd_path] / "worktrees" / target.name
+            wt_meta.mkdir(parents=True, exist_ok=True)
+            (target / ".git").write_text(f"gitdir: {wt_meta}\n", encoding="utf-8")
+            owner_of[target.resolve()] = Path(cwd_path).resolve()
+            return (0, "", "")
+        if args[:2] == ("worktree", "remove"):
+            target = Path(args[-1])
+            owner_of.pop(target.resolve(), None)
+            if target.exists():
+                shutil.rmtree(target)
+            return (0, "", "")
+        return (0, "", "")
+
+    return fake_run_git
+
+
+async def test_create_worktree_cleans_stale_empty_dir(tmp_path, monkeypatch):
+    """A leftover empty dir from a crashed run must not block ``git worktree add``."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    mgr = WorktreeManager(base_dir=tmp_path / "wt")
+    monkeypatch.setattr(worktree_mod, "_run_git", _make_fake_git(repo))
+
+    slug = "stale-empty"
+    namespace = worktree_mod.repo_namespace(str(repo.resolve()))
+    stale_dir = mgr.base_dir / namespace / worktree_mod._flatten_slug(slug)
+    stale_dir.mkdir(parents=True)
+
+    await mgr.create_worktree(repo, slug)
+
+    listed = await mgr.list_worktrees()
+    assert [info.slug for info in listed] == ["stale-empty"]
+
+
+async def test_create_worktree_cleans_stale_own_repo_marker(tmp_path, monkeypatch):
+    """An unregistered dir whose gitdir marker points into the caller's repo
+    (orphaned by a crash before registration) is safely removed."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    mgr = WorktreeManager(base_dir=tmp_path / "wt")
+    fake = _make_fake_git_for_defects(repo)
+    monkeypatch.setattr(worktree_mod, "_run_git", fake)
+
+    slug = "orphan"
+    namespace = worktree_mod.repo_namespace(str(repo.resolve()))
+    orphan_dir = mgr.base_dir / namespace / worktree_mod._flatten_slug(slug)
+    orphan_dir.mkdir(parents=True)
+    (orphan_dir / ".git").write_text(
+        f"gitdir: {repo.resolve() / '.git' / 'worktrees' / 'dead'}\n",
+        encoding="utf-8",
+    )
+
+    info = await mgr.create_worktree(repo, slug)
+    assert info.path == orphan_dir
+    assert (orphan_dir / ".git").exists()
+
+
+async def test_create_worktree_refuses_stale_dir_with_foreign_repo_marker(tmp_path, monkeypatch):
+    """Never delete a leftover whose gitdir marker points into a DIFFERENT repo."""
+    repo_a = tmp_path / "repo-a"
+    repo_a.mkdir()
+    (repo_a / ".git").mkdir()
+    repo_b = tmp_path / "repo-b"
+    repo_b.mkdir()
+    (repo_b / ".git").mkdir()
+    mgr = WorktreeManager(base_dir=tmp_path / "wt")
+    monkeypatch.setattr(worktree_mod, "_run_git", _make_fake_git_for_defects(repo_a, repo_b))
+
+    slug = "foreign"
+    namespace = worktree_mod.repo_namespace(str(repo_a.resolve()))
+    foreign_dir = mgr.base_dir / namespace / worktree_mod._flatten_slug(slug)
+    foreign_dir.mkdir(parents=True)
+    (foreign_dir / ".git").write_text(
+        f"gitdir: {repo_b.resolve() / '.git' / 'worktrees' / 'foreign'}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="could not be verified as stale"):
+        await mgr.create_worktree(repo_a, slug)
+    assert foreign_dir.exists()
+
+
+async def test_remove_worktree_refuses_other_repo(tmp_path, monkeypatch):
+    """A slug matching a worktree of ANOTHER repository must not be pruned."""
+    repo_a = tmp_path / "repo-a"
+    repo_a.mkdir()
+    (repo_a / ".git").mkdir()
+    repo_b = tmp_path / "repo-b"
+    repo_b.mkdir()
+    (repo_b / ".git").mkdir()
+    mgr = WorktreeManager(base_dir=tmp_path / "wt")
+    fake = _make_fake_git_for_defects(repo_a, repo_b)
+    monkeypatch.setattr(worktree_mod, "_run_git", fake)
+
+    await mgr.create_worktree(repo_a, "mine")
+
+    with pytest.raises(RuntimeError, match="not .*repo-b"):
+        await mgr.remove_worktree("mine", repo_path=repo_b)
+    assert (await mgr.list_worktrees()) != []
+
+
+async def test_remove_worktree_refuses_ambiguous_slug_across_repos(tmp_path, monkeypatch):
+    """Without a repo_path, a slug shared by two repositories is refused."""
+    repo_a = tmp_path / "repo-a"
+    repo_a.mkdir()
+    (repo_a / ".git").mkdir()
+    repo_b = tmp_path / "repo-b"
+    repo_b.mkdir()
+    (repo_b / ".git").mkdir()
+    mgr = WorktreeManager(base_dir=tmp_path / "wt")
+    fake = _make_fake_git_for_defects(repo_a, repo_b)
+    monkeypatch.setattr(worktree_mod, "_run_git", fake)
+
+    await mgr.create_worktree(repo_a, "shared")
+    await mgr.create_worktree(repo_b, "shared")
+
+    with pytest.raises(RuntimeError, match="multiple repositories"):
+        await mgr.remove_worktree("shared")
+    # Neither repository's worktree was deleted.
+    assert len(await mgr.list_worktrees()) == 2

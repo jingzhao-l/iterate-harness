@@ -9,6 +9,7 @@ both race-free and crash-safe.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import os
 from pathlib import Path
 from typing import Iterator
 
@@ -68,7 +69,9 @@ def _exclusive_windows_lock(lock_path: Path) -> Iterator[None]:
         # in binary mode. Lock the first byte for the lifetime of the
         # critical section.
         lock_file.seek(0)
-        if lock_path.stat().st_size == 0:
+        # Use fstat (the already-open handle) rather than stat() by path so a
+        # concurrent delete of the lock file cannot raise mid-critical-section.
+        if os.fstat(lock_file.fileno()).st_size == 0:
             lock_file.write(b"\0")
             lock_file.flush()
         lock_file.seek(0)

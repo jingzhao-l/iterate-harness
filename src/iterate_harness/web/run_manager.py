@@ -89,7 +89,7 @@ _APPROVE_MARKERS = frozenset(
     {
         "approve", "approved", "allowed", "accepted", "confirm", "granted", "yes",
         "please", "go ahead", "continue", "proceed", "fine", "good", "ok",
-        "好的", "同意", "批准", "确认", "允许", "可以", "没问题", "好", "行", "对", "行吧", "继续",
+        "好的", "同意", "批准", "确认", "允许", "可以", "没问题", "没关系", "好", "行", "对", "行吧", "继续",
     }
 )
 
@@ -117,6 +117,42 @@ def _has_cjk_marker(text: str, markers: frozenset[str]) -> bool:
     return any(m in text for m in markers if not m.isascii())
 
 
+#: Approval markers that *begin* with a negation particle — ``没问题`` is an
+#: idiom ("no problem"), not a negated approval, so a negation match that
+#: opens one of these must not flip the verdict.
+_APPROVAL_IDIOM_STARTING_WITH_NEGATION = frozenset(
+    m for m in _APPROVE_MARKERS | _APPROVE_WORDS if m and m[0] in _NEGATION_PREFIXES
+)
+
+
+def _cjk_negation_before_approval(token: str) -> bool:
+    """True when a CJK negation particle precedes an approval within one token.
+
+    Catches embedded negations the word-start rule cannot see: ``不同意`` /
+    ``不想批准`` / ``不能同意`` all negate an approval marker even though the
+    marker is not the token's first word. Idiomatic approvals whose approval
+    word begins *at* the negation character itself (``没问题``, ``没关系``)
+    are excluded by requiring the approval to start strictly after the
+    negation: ``没问题`` has ``没`` at index 0 and the ``没问题`` marker at
+    index 0, so it is left to the positive-marker check below.
+    """
+    for neg_prefix in _NEGATION_PREFIXES:
+        neg_idx = token.find(neg_prefix)
+        while neg_idx != -1:
+            # A negation character that merely opens an idiomatic approval
+            # ("没问题，可以执行") is not a negation at all.
+            if not any(
+                token.startswith(m, neg_idx)
+                for m in _APPROVAL_IDIOM_STARTING_WITH_NEGATION
+            ):
+                for approve in _APPROVE_MARKERS | _APPROVE_WORDS:
+                    appr_idx = token.find(approve)
+                    if appr_idx != -1 and neg_idx < appr_idx:
+                        return True
+            neg_idx = token.find(neg_prefix, neg_idx + 1)
+    return False
+
+
 class RunManagerError(Exception):
     """Rejected run operation with a human-readable message (maps to 4xx)."""
 
@@ -128,6 +164,7 @@ class RunManager:
         self.state: RunState = "idle"
         self.run_id: str = ""
         self.mode: str = ""
+        self.permission_mode: str = "full_auto"
         self.project_root: str = ""
         self.round: int = 0
         self.new_findings: int = 0
@@ -156,12 +193,26 @@ class RunManager:
     # Public API (used by routes)
     # ------------------------------------------------------------------
 
-    async def start(self, project_root: str, mode: str, changed: bool, ref: str) -> str:
+    async def start(
+        self,
+        project_root: str,
+        mode: str,
+        changed: bool,
+        ref: str,
+        permission_mode: str = "full_auto",
+    ) -> str:
         """Validate state and launch a new iterate loop in the background.
 
         Returns the new ``run_id``. Raises :class:`RunManagerError` when a
         run is already active or the kickoff cannot be built.
+
+        ``permission_mode`` selects the human-in-the-loop posture for *this*
+        run: ``full_auto`` (default — the WebUI is unattended-friendly and a
+        prompt must never stall the loop), ``plan`` (pause on every write),
+        or ``default`` (fall back to the configured/credential mode).
         """
+        if permission_mode not in ("full_auto", "plan", "default"):
+            raise RunManagerError(f"未知的 permission_mode：{permission_mode}")
         async with self._lock:
             if self.state in ("starting", "running", "paused"):
                 raise RunManagerError("已有运行中的 iterate 循环，请先停止或等待结束")
@@ -169,6 +220,7 @@ class RunManager:
             run_id = uuid4().hex[:12]
             self.run_id = run_id
             self.mode = mode
+            self.permission_mode = permission_mode
             self.state = "starting"
         # Pre-validate the kickoff synchronously so an invalid ref / clean
         # worktree fails fast as a 4xx instead of being swallowed by the
@@ -184,7 +236,7 @@ class RunManager:
         if project_root:
             AuditLog(project_root).record("run.start", mode, summary={"run_id": run_id})
         self._task = asyncio.create_task(
-            self._run_loop(project_root, mode, changed, ref, run_id)
+            self._run_loop(project_root, mode, changed, ref, run_id, permission_mode)
         )
         return run_id
 
@@ -206,15 +258,29 @@ class RunManager:
             waiting = self.waiting_for
         if pending:
             future = pending[0]
+            result: str | bool
             if waiting == "permission":
-                future.set_result(self._parse_permission(content))
+                result = self._parse_permission(content)
                 kind = "decision"
             elif waiting == "user_select":
-                future.set_result(content)
+                result = content
                 kind = "decision"
             else:
-                future.set_result(content)
+                result = content
                 kind = "answer"
+            # Re-check under the lock immediately before resolving: between the
+            # snapshot above and here the engine may have timed out / resolved /
+            # popped this future (e.g. the 300s permission timeout fired, or a
+            # stop request cancelled the run task). Setting a result on a done
+            # future raises InvalidStateError -> 500, and answering a request
+            # that already aged out is semantically wrong anyway.
+            async with self._lock:
+                if not future.done() and any(
+                    candidate is future for candidate in self._request_registry.values()
+                ):
+                    future.set_result(result)
+                else:
+                    raise RunManagerError("该请求已超时或已失效，请重新操作")
             await self._publish_chat("user", content, kind=kind)
             return {"answered": True, "waitingFor": waiting}
         if self.state == "running":
@@ -306,7 +372,13 @@ class RunManager:
     # ------------------------------------------------------------------
 
     async def _run_loop(
-        self, project_root: str, mode: str, changed: bool, ref: str, run_id: str
+        self,
+        project_root: str,
+        mode: str,
+        changed: bool,
+        ref: str,
+        run_id: str,
+        permission_mode: str = "full_auto",
     ) -> None:
         bundle: Any = None
         # Capture the task this coroutine runs under so the finally block only
@@ -338,7 +410,7 @@ class RunManager:
                 permission_prompt=self._permission_prompt,
                 ask_user_prompt=self._ask_user_prompt,
                 ask_user_select=self._ask_user_select,
-                permission_mode="full_auto",
+                permission_mode=permission_mode,
             )
             self._bundle = bundle
             await start_runtime(bundle)
@@ -383,7 +455,15 @@ class RunManager:
             # no trace (no-op when the last turn completed and was already
             # flushed).
             await self._flush_assistant_buffer()
-            if bundle is not None:
+            async with self._lock:
+                # Only close the runtime if we still own it. A newer run may
+                # have already installed its own bundle (and possibly started
+                # its own Docker sandbox) in the gap between our "stopped"
+                # publish and this cleanup — closing the old bundle would tear
+                # down the *new* run's sandbox/MCP resources.
+                still_owner_bundle = self._bundle is bundle
+                still_owner_task = self._task is task_handle
+            if bundle is not None and still_owner_bundle:
                 try:
                     await close_runtime(bundle)
                 except Exception as exc:  # noqa: BLE001 - best-effort close
@@ -395,6 +475,17 @@ class RunManager:
                     self._bundle = None
                 if self._task is task_handle:
                     self._task = None
+            # Guarantee a terminal run-state event reaches the SSE stream even
+            # when every earlier state publish was suppressed by cancellation;
+            # run-state is idempotent so a duplicate "stopped" is harmless.
+            if still_owner_task:
+                try:
+                    await hub.publish(
+                        "run-state",
+                        {"state": "stopped", "message": self.last_message or "iterate 循环已结束"},
+                    )
+                except Exception as exc:  # noqa: BLE001 - best-effort publish
+                    log.warning("final run-state publish failed: %s", exc)
             # Only clear the stop request that this run placed itself, so
             # a new run's stop request is never clobbered by an old run's
             # cleanup racing in behind it.
@@ -755,6 +846,10 @@ class RunManager:
                     )
                     if negated_approval:
                         return False
+        # Embedded negation the word-start check misses ("不想批准" /
+        # "不能同意") — the negation precedes the approval mid-token.
+        if any(_cjk_negation_before_approval(word) for word in words):
+            return False
 
         # 4. Check for any approval marker. ASCII approval words must match as
         # whole words too, so e.g. "no approval" does not count as approval.
@@ -861,6 +956,7 @@ class RunManager:
     def _reset(self, project_root: str) -> None:
         self.run_id = ""
         self.mode = ""
+        self.permission_mode = "full_auto"
         self.project_root = project_root
         self.round = 0
         self.new_findings = 0

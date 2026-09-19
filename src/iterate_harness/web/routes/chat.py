@@ -63,7 +63,9 @@ async def start_run(
     """
     root = _resolve_project(request, project_root)
     try:
-        run_id = await run_manager.start(root, body.mode, body.changed, body.ref)
+        run_id = await run_manager.start(
+            root, body.mode, body.changed, body.ref, body.permission_mode
+        )
     except RunManagerError as exc:
         status = 409 if "运行中" in str(exc) else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc

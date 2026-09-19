@@ -121,7 +121,7 @@ class TestStartPrevalidation:
 
         monkeypatch.setattr(manager, "_build_kickoff", spy_kickoff)
         # Stub out the background loop so no engine is launched.
-        async def fake_loop(project_root, mode, changed, ref, run_id):
+        async def fake_loop(project_root, mode, changed, ref, run_id, permission_mode="full_auto"):
             calls.append("loop")
 
         monkeypatch.setattr(manager, "_run_loop", fake_loop)

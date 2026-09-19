@@ -933,7 +933,19 @@ async def run_query(
             return
 
         if final_message is None:
-            raise RuntimeError("Model stream finished without a final message")
+            # The provider stream ended cleanly without a final message (no
+            # exception, no terminal event). Surface it as a contained error
+            # event instead of letting a raw RuntimeError escape the stream
+            # generator — consumers of submit_message treat error events as a
+            # recoverable turn end, whereas an uncontained raise breaks the
+            # run loop.
+            yield ErrorEvent(
+                message=(
+                    "Model stream finished without a final message. "
+                    "The turn was ignored to keep the session healthy."
+                )
+            ), usage
+            return
 
         coordinator_context_message: ConversationMessage | None = None
         if context.system_prompt.startswith("You are a **coordinator**."):
@@ -1367,14 +1379,25 @@ async def _execute_tool_call(
         raise
     # Post-condition: verify the edit survived the project invariants; a
     # violation rolls the snapshot back and surfaces as a tool error the model
-    # must respond to (fail-fast + atomic transaction).
+    # must respond to (fail-fast + atomic transaction). The invariant command
+    # runs as a subprocess and can take seconds, so a cancellation arriving in
+    # that window must NOT skip the rollback: the edit is already applied and
+    # without a commit the atomic-mutation guarantee silently degrades to
+    # "writes applied, snapshot lost". Roll back on cancellation and re-raise.
     if kernel is not None and defensive_path is not None:
-        defensive_failure = await kernel.after_mutation(
-            tool_name,
-            defensive_path,
-            success=not result.is_error,
-            error_hint=result.output if result.is_error else "",
-        )
+        try:
+            defensive_failure = await kernel.after_mutation(
+                tool_name,
+                defensive_path,
+                success=not result.is_error,
+                error_hint=result.output if result.is_error else "",
+            )
+        except asyncio.CancelledError:
+            try:
+                kernel.rollback(defensive_path)
+            except Exception:  # noqa: BLE001 - best-effort rollback on teardown
+                log.exception("defensive rollback failed during cancellation for %s", defensive_path)
+            raise
         if defensive_failure:
             result = ToolResult(output=defensive_failure, is_error=True)
     # Carry tool metadata writes back into the durable per-session state so
@@ -1472,8 +1495,10 @@ def _extract_permission_command(
 # Extracted for mutating tools only and matched against the iterate
 # forbidden_fix_patterns regex boundary in PermissionChecker.evaluate.
 # Covers both naming conventions used by built-in tools (new_string for
-# MCP-style edits, new_str for the built-in file_edit tool).
-_WRITE_PAYLOAD_FIELDS = ("content", "new_string", "new_str", "diff", "patch")
+# MCP-style edits, new_str for the built-in file_edit tool). ``item`` covers
+# the todo_write tool's TODO-item payload so a forbidden write can never be
+# smuggled through a checklist line.
+_WRITE_PAYLOAD_FIELDS = ("content", "new_string", "new_str", "diff", "patch", "item")
 
 
 def _extract_permission_content(
@@ -1495,10 +1520,12 @@ def _extract_permission_content(
 
 
 # Mutating file tools gated by iterate.require_fix_approval. Names follow
-# the built-in tool registry (write_file / edit_file / notebook_edit); the
-# file_write/file_edit aliases cover MCP-style callers.
+# the built-in tool registry (write_file / edit_file / notebook_edit / todo_write);
+# the file_write/file_edit aliases cover MCP-style callers. todo_write mutates
+# a project checklist file, so it participates in the defensive snapshot /
+# invariant gates just like the other file-mutating tools.
 FILE_MUTATING_TOOLS = frozenset(
-    {"write_file", "edit_file", "notebook_edit", "file_write", "file_edit"}
+    {"write_file", "edit_file", "notebook_edit", "file_write", "file_edit", "todo_write"}
 )
 # Diff preview clipping bounds for the per-fix approval prompt.
 MAX_APPROVAL_DIFF_LINES = 40

@@ -144,12 +144,15 @@ class McpClientManager:
                 f"MCP server '{server_name}' call failed: {exc}"
             ) from exc
         parts: list[str] = []
-        for item in result.content:
+        for item in result.content or []:
             if getattr(item, "type", None) == "text":
                 parts.append(getattr(item, "text", ""))
             else:
-                parts.append(item.model_dump_json())
-        if result.structured_content and not parts:
+                try:
+                    parts.append(item.model_dump_json())
+                except (AttributeError, TypeError, ValueError):
+                    parts.append(str(item))
+        if getattr(result, "structured_content", None) and not parts:
             parts.append(str(result.structured_content))
         if not parts:
             parts.append("(no output)")
@@ -171,12 +174,19 @@ class McpClientManager:
                 f"MCP server '{server_name}' resource read failed: {exc}"
             ) from exc
         parts: list[str] = []
-        for item in result.contents:
+        for item in result.contents or []:
             text = getattr(item, "text", None)
             if text is not None:
                 parts.append(text)
             else:
-                parts.append(str(getattr(item, "blob", "")))
+                blob = getattr(item, "blob", None)
+                if blob is None:
+                    try:
+                        parts.append(item.model_dump_json())
+                    except (AttributeError, TypeError, ValueError):
+                        parts.append(str(item))
+                else:
+                    parts.append(str(blob))
         return "\n".join(parts).strip()
 
     async def _connect_stdio(self, name: str, config: McpStdioServerConfig) -> None:

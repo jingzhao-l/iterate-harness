@@ -136,7 +136,13 @@ def _decision_log_tail(log_path: Path, cursor: int) -> tuple[list[dict[str, Any]
 async def _event_generator(project_root: Path, stream_all: bool) -> Any:
     """Async generator interleaving hub events with periodic file snapshots."""
     log_path = project_root / ".iterate" / "decision-log.jsonl"
-    cursor = 0 if not log_path.exists() else log_path.stat().st_size
+    try:
+        cursor = 0 if not log_path.exists() else log_path.stat().st_size
+    except OSError:
+        # The journal may have been deleted/rotated between the exists() and
+        # stat() calls (or mid-stream by a concurrent cleanup); re-anchor at 0
+        # rather than letting the whole SSE stream die with an OSError.
+        cursor = 0
     queue = await hub.subscribe()
     last_flush = 0.0
     try:

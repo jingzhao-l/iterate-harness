@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -230,6 +231,114 @@ class WorktreeManager:
         self.base_dir: Path = base_dir or Path.home() / ".iterate-harness" / "worktrees"
 
     # ------------------------------------------------------------------
+    # Internal safety helpers
+    # ------------------------------------------------------------------
+
+    async def _registered_worktree_paths(self, repo_path: Path) -> set[Path]:
+        """Real paths of every worktree currently registered in *repo_path*."""
+        code, stdout, _ = await _run_git("worktree", "list", "--porcelain", cwd=repo_path)
+        if code != 0:
+            return set()
+        registered: set[Path] = set()
+        for line in stdout.splitlines():
+            if line.startswith("worktree "):
+                raw_path = line.split(" ", 1)[1].strip()
+                if not raw_path:
+                    continue
+                try:
+                    registered.add(Path(raw_path).resolve())
+                except OSError:
+                    continue
+        return registered
+
+    async def _worktree_owner_repo(self, worktree_path: Path) -> Path | None:
+        """Real path of the repository that owns *worktree_path*, or ``None``."""
+        code, git_common, _ = await _run_git(
+            "rev-parse", "--git-common-dir", cwd=worktree_path
+        )
+        if code != 0 or not git_common:
+            return None
+        try:
+            return Path(git_common).resolve().parent
+        except OSError:
+            return None
+
+    async def _remove_stale_worktree(self, repo_path: Path, worktree_path: Path) -> bool:
+        """Remove a leftover directory that blocks ``git worktree add``.
+
+        A crashed or aborted run can leave the target directory behind, which
+        makes ``git worktree add`` fail forever.  Removal is restricted to the
+        namespaced layout under ``base_dir`` and only happens when the path is
+        provably an orphan, never a live worktree of the caller's repo; a
+        ``.git`` marker, if present, must resolve back into the caller's repo.
+        Directories with unrelated contents (no git marker, non-empty) are
+        never deleted.
+        """
+        if worktree_path.is_symlink() or not worktree_path.is_dir():
+            return False
+        expected = (self.base_dir / repo_namespace(repo_path) / worktree_path.name).resolve()
+        if worktree_path.resolve() != expected:
+            logger.warning(
+                "[worktree] Refusing stale-cleanup of %s: not under the expected "
+                "namespaced layout for %s",
+                worktree_path, repo_path,
+            )
+            return False
+        registered = await self._registered_worktree_paths(repo_path)
+        if worktree_path.resolve() in registered:
+            logger.warning(
+                "[worktree] Refusing stale-cleanup of %s: registered as a live worktree",
+                worktree_path,
+            )
+            return False
+
+        git_marker = worktree_path / ".git"
+        if git_marker.exists() or git_marker.is_symlink():
+            # Never touch another repo's marker — only one that resolves back
+            # into THIS repo's git dir may be treated as our own orphan.
+            if git_marker.is_symlink() or not git_marker.is_file():
+                return False
+            code, repo_git_dir, _ = await _run_git("rev-parse", "--git-dir", cwd=repo_path)
+            if code != 0 or not repo_git_dir:
+                return False
+            marker_file = git_marker.read_text(encoding="utf-8").strip()
+            if not marker_file.startswith("gitdir:"):
+                return False
+            marker_target = Path(marker_file[len("gitdir:"):].strip())
+            if not marker_target.is_absolute():
+                marker_target = worktree_path / marker_target
+            try:
+                marker_target.resolve().relative_to(Path(repo_git_dir).resolve())
+            except (OSError, ValueError):
+                logger.warning(
+                    "[worktree] Refusing stale-cleanup of %s: .git marker does not "
+                    "point back at the caller's repository",
+                    worktree_path,
+                )
+                return False
+        else:
+            # No marker at all: only an empty leftover directory is safe.
+            try:
+                if any(worktree_path.iterdir()):
+                    logger.warning(
+                        "[worktree] Refusing stale-cleanup of %s: non-empty directory "
+                        "without a git marker",
+                        worktree_path,
+                    )
+                    return False
+            except OSError:
+                return False
+
+        try:
+            shutil.rmtree(worktree_path)
+        except OSError:
+            logger.exception(
+                "[worktree] Failed to remove stale directory %s", worktree_path
+            )
+            return False
+        return True
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -291,6 +400,16 @@ class WorktreeManager:
                     created_at=worktree_path.stat().st_mtime,
                     agent_id=agent_id,
                 )
+            # The path exists but is not a valid git worktree: a crashed or
+            # aborted prior run may have left a stale directory that makes
+            # ``git worktree add`` fail forever. Verify it is a safe-to-remove
+            # orphan before proceeding (never an arbitrary dir, never a live
+            # worktree of this or any repository).
+            if not await self._remove_stale_worktree(repo_path, worktree_path):
+                raise RuntimeError(
+                    f"Refusing to create worktree {slug!r}: leftover directory at "
+                    f"{worktree_path} could not be verified as stale"
+                )
 
         # New worktree: -B resets an orphan branch left by a prior remove
         code, _, stderr = await _run_git(
@@ -329,11 +448,19 @@ class WorktreeManager:
         otherwise the worktree is located by searching every repository
         namespace (and the legacy flat layout) under ``base_dir``.
 
+        The worktree's repo identity is verified before anything is deleted: a
+        dir whose owning repository is unknown, does not match ``repo_path``,
+        or is not registered as a worktree of its repo is refused with an
+        error instead of being pruned (defense against cross-repo deletion
+        when two repositories share a slug).
+
         Returns:
             True if the worktree was removed; False if it did not exist.
         """
         validate_worktree_slug(slug)
         flat_slug = _flatten_slug(slug)
+        if repo_path is not None:
+            repo_path = Path(repo_path).resolve()
 
         candidates: list[Path] = []
         if repo_path is not None:
@@ -347,6 +474,48 @@ class WorktreeManager:
         worktree_path = next((c for c in candidates if c.exists()), None)
         if worktree_path is None:
             return False
+        if worktree_path.is_symlink() or not worktree_path.is_dir():
+            raise RuntimeError(
+                f"Refusing to remove worktree {slug!r}: {worktree_path} is not "
+                "a regular directory"
+            )
+
+        owner_repo = await self._worktree_owner_repo(worktree_path)
+        if repo_path is not None:
+            if owner_repo is None or owner_repo != repo_path:
+                raise RuntimeError(
+                    f"Refusing to remove worktree {slug!r}: {worktree_path} belongs "
+                    f"to {owner_repo or 'an unknown repository'}, not {repo_path}"
+                )
+        else:
+            # No caller repo was given: the slug must not be ambiguous across
+            # repositories (removing by glob alone could prune another repo's
+            # worktree that happens to share the slug).
+            owners: set[Path] = set()
+            for candidate in candidates:
+                if not candidate.exists():
+                    continue
+                candidate_owner = await self._worktree_owner_repo(candidate)
+                if candidate_owner is not None:
+                    owners.add(candidate_owner)
+            if len(owners) > 1:
+                raise RuntimeError(
+                    f"Refusing to remove worktree {slug!r}: multiple repositories "
+                    "share this slug; pass repo_path to disambiguate"
+                )
+            if owner_repo is None:
+                raise RuntimeError(
+                    f"Refusing to remove worktree {slug!r}: could not determine the "
+                    f"owning repository of {worktree_path}"
+                )
+            repo_path = owner_repo
+
+        registered = await self._registered_worktree_paths(repo_path)
+        if worktree_path.resolve() not in registered:
+            raise RuntimeError(
+                f"Refusing to remove {worktree_path}: not registered as a worktree "
+                f"of {repo_path}"
+            )
 
         namespace = worktree_path.parent.name
         meta_file = _sidecar_meta_path(self.base_dir, namespace, worktree_path.name)
@@ -354,26 +523,9 @@ class WorktreeManager:
         # Remove symlinks before git removes the directory
         await _remove_symlinks(worktree_path)
 
-        # Determine repo root from the worktree's git metadata
-        code, git_common, _ = await _run_git(
-            "rev-parse", "--git-common-dir", cwd=worktree_path
-        )
-        if code == 0 and git_common:
-            # git_common points to .git inside the main repo
-            repo_path_resolved = Path(git_common).resolve().parent
-            if repo_path_resolved.exists():
-                await _run_git(
-                    "worktree", "remove", "--force", str(worktree_path),
-                    cwd=repo_path_resolved,
-                )
-                _drop_sidecar(meta_file)
-                return True
-
-        # Fallback: try to remove via absolute path from any working directory
-        # If repo_path detection failed, attempt removal with cwd=base_dir
         code, _, _ = await _run_git(
             "worktree", "remove", "--force", str(worktree_path),
-            cwd=self.base_dir,
+            cwd=repo_path,
         )
         if code == 0:
             _drop_sidecar(meta_file)
@@ -465,7 +617,16 @@ class WorktreeManager:
                 continue
             if active_agent_ids is not None and info.agent_id in active_agent_ids:
                 continue
-            ok = await self.remove_worktree(info.slug)
+            try:
+                # Pass the owning repo so a worktree never gets pruned from
+                # another repository that happens to share the same slug.
+                ok = await self.remove_worktree(info.slug, repo_path=info.original_path)
+            except RuntimeError as exc:
+                # One problematic worktree must not block the whole cleanup.
+                logger.warning(
+                    "[worktree] Skipping stale worktree %s: %s", info.slug, exc
+                )
+                continue
             if ok:
                 removed.append(info.slug)
         return removed

@@ -40,15 +40,20 @@ class BashTool(BaseTool[BashToolInput]):
     async def execute(self, arguments: BashToolInput, context: ToolExecutionContext) -> ToolResult:
         cwd = Path(arguments.cwd).expanduser() if arguments.cwd else context.cwd
         if arguments.cwd:
-            from iterate_harness.sandbox.session import is_docker_sandbox_active
-            if is_docker_sandbox_active():
-                from iterate_harness.sandbox.path_validator import validate_sandbox_path
-                allowed, reason = validate_sandbox_path(cwd, context.cwd)
-                if not allowed:
-                    return ToolResult(
-                        output=f"CWD '{cwd}' is outside the sandbox boundary: {reason}",
-                        is_error=True,
-                    )
+            # Always bound an explicit ``cwd`` to the workspace — not just when
+            # a Docker sandbox is active. The permission decision for bash is
+            # computed from the COMMAND only, so an approved command such as
+            # `git status` or `cat ~/.ssh/id_rsa` issued in a cwd far outside
+            # the project would otherwise silently operate on unrelated paths
+            # (or leak credentials) while passing every allow/deny rule.
+            from iterate_harness.sandbox.path_validator import validate_sandbox_path
+
+            allowed, reason = validate_sandbox_path(cwd, context.cwd)
+            if not allowed:
+                return ToolResult(
+                    output=f"CWD '{cwd}' is outside the sandbox boundary: {reason}",
+                    is_error=True,
+                )
         preflight_error = _preflight_interactive_command(arguments.command)
         if preflight_error is not None:
             return ToolResult(

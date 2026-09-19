@@ -130,17 +130,40 @@ def _summarize_checkpoint(
         "timestamp": str(checkpoint.get("timestamp") or ""),
         "mode": str(checkpoint.get("mode") or "dry-run"),
         "verdict": "interrupted",
-        "rounds": int(checkpoint.get("round") or 0),
-        "totalFindings": int(checkpoint.get("total_findings") or 0),
+        "rounds": _int_field(checkpoint, "round", 0),
+        "totalFindings": _int_field(checkpoint, "total_findings", 0),
         "severity": severity_counts,
         "perDimension": {
-            str(key): int(value) for key, value in per_dimension.items()
+            str(key): _int_value(value) for key, value in per_dimension.items()
         },
         "preview": preview,
         "lastIntervention": _last_intervention(entries),
         "entryCount": len(entries),
         "interrupted": True,
     }
+
+
+def _int_field(checkpoint: dict[str, Any], key: str, default: int) -> int:
+    """Safely coerce a checkpoint field to an int (legacy/historical shapes may
+    store strings, floats, or entirely wrong types — the resume panel must
+    degrade to a partial summary, never crash)."""
+    value = checkpoint.get(key, default)
+    return _int_value(value) if value is not None else default
+
+
+def _int_value(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
 
 
 def _last_entry(entries: list[DecisionLogEntry], entry_type: str) -> DecisionLogEntry | None:

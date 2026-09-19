@@ -1,0 +1,3 @@
+node_modules/
+# Test artifacts: download-path tests write cache files under `home/`
+home/

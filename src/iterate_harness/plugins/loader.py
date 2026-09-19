@@ -652,20 +652,34 @@ def _load_plugin_hooks(path: Path) -> dict[str, list[object]]:
         PromptHookDefinition,
     )
 
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        logger.warning("Skipping unreadable hooks file %s", path, exc_info=True)
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning("Skipping hooks file %s: top-level value is not an object", path)
+        return {}
     parsed: dict[str, list[object]] = {}
     for event, hooks in raw.items():
         parsed[event] = []
+        if not isinstance(hooks, list):
+            continue
         for hook in hooks:
-            hook_type = hook.get("type")
-            if hook_type == "command":
-                parsed[event].append(CommandHookDefinition.model_validate(hook))
-            elif hook_type == "prompt":
-                parsed[event].append(PromptHookDefinition.model_validate(hook))
-            elif hook_type == "http":
-                parsed[event].append(HttpHookDefinition.model_validate(hook))
-            elif hook_type == "agent":
-                parsed[event].append(AgentHookDefinition.model_validate(hook))
+            if not isinstance(hook, dict):
+                continue
+            try:
+                hook_type = hook.get("type")
+                if hook_type == "command":
+                    parsed[event].append(CommandHookDefinition.model_validate(hook))
+                elif hook_type == "prompt":
+                    parsed[event].append(PromptHookDefinition.model_validate(hook))
+                elif hook_type == "http":
+                    parsed[event].append(HttpHookDefinition.model_validate(hook))
+                elif hook_type == "agent":
+                    parsed[event].append(AgentHookDefinition.model_validate(hook))
+            except Exception:  # noqa: BLE001 - one bad hook must not kill the plugin
+                logger.debug("Skipping malformed %r hook in %s", hook.get("type"), path, exc_info=True)
     return parsed
 
 
@@ -706,7 +720,14 @@ def _load_plugin_mcp(path: Path) -> dict[str, McpServerConfig]:
         return {}
     from iterate_harness.mcp.types import McpJsonConfig
 
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        logger.warning("Skipping unreadable MCP file %s", path, exc_info=True)
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning("Skipping MCP file %s: top-level value is not an object", path)
+        return {}
     parsed = McpJsonConfig.model_validate(raw)
     return parsed.mcpServers
 

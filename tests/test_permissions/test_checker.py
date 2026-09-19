@@ -220,6 +220,14 @@ class TestSensitivePathProtection:
             "*/.gnupg/*": "/home/u/.gnupg/secring.gpg",
             "*/.docker/config.json": "/home/u/.docker/config.json",
             "*/.kube/config": "/home/u/.kube/config",
+            "*/.config/gh/hosts.yml": "/home/u/.config/gh/hosts.yml",
+            "*/.git-credentials": "/home/u/.git-credentials",
+            "*/.env": "/home/u/.env",
+            "*/.env.*": "/home/u/proj/.env.production",
+            "*/.envrc": "/home/u/proj/.envrc",
+            "*/.netrc": "/home/u/.netrc",
+            "*/.pypirc": "/home/u/.pypirc",
+            "*/.npmrc": "/home/u/.npmrc",
             "*/.iterate-harness/credentials.json": "/home/u/.iterate-harness/credentials.json",
         }
         test_path = example_paths[pattern]

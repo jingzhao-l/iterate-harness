@@ -29,11 +29,15 @@ class BridgeSessionRecord:
 class BridgeSessionManager:
     """Manage bridge-run child sessions and capture their output."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_completed: int = 20) -> None:
         self._sessions: dict[str, SessionHandle] = {}
         self._commands: dict[str, str] = {}
         self._output_paths: dict[str, Path] = {}
         self._copy_tasks: dict[str, asyncio.Task[None]] = {}
+        self._max_completed = max(1, max_completed)
+        # Sessions the caller explicitly stopped/killed: their records are
+        # released once the copy task winds down, like before.
+        self._stopped: set[str] = set()
 
     async def spawn(self, *, session_id: str, command: str, cwd: str | Path) -> SessionHandle:
         if not session_id or session_id in self._sessions:
@@ -90,6 +94,9 @@ class BridgeSessionManager:
             raise ValueError(f"Unknown bridge session: {session_id}")
         task = self._copy_tasks.get(session_id)
         await handle.kill()
+        # Mark the session as user-stopped so its copy-task finally block
+        # evicts the record instead of preserving it among completed sessions.
+        self._stopped.add(session_id)
         if task is not None:
             # Cancel so the copy task's finally block runs and drops this
             # session's entries from every manager dict.
@@ -99,10 +106,8 @@ class BridgeSessionManager:
             except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001 - shutdown cleanup
                 log.debug("Ignoring error while awaiting cancelled copy task %s: %s", session_id, exc)
         # Idempotent fallback cleanup in case the copy task never started.
-        self._copy_tasks.pop(session_id, None)
-        self._sessions.pop(session_id, None)
-        self._commands.pop(session_id, None)
-        self._output_paths.pop(session_id, None)
+        self._stopped.discard(session_id)
+        self._evict_session(session_id)
 
     async def _copy_output(self, session_id: str, handle: SessionHandle) -> None:
         path = self._output_paths[session_id]
@@ -120,12 +125,36 @@ class BridgeSessionManager:
                         stream.flush()
             await handle.process.wait()
         finally:
-            # The copy finished and the process has exited; drop this session
-            # so the manager dicts do not grow unbounded over many runs.
+            # The copy finished and the process has exited. Explicitly killed
+            # sessions are evicted immediately; naturally completed sessions
+            # are preserved so the UI can read their output, bounded by the
+            # retention cap below.
             self._copy_tasks.pop(session_id, None)
-            self._sessions.pop(session_id, None)
-            self._commands.pop(session_id, None)
-            self._output_paths.pop(session_id, None)
+            if session_id in self._stopped:
+                self._stopped.discard(session_id)
+                self._evict_session(session_id)
+            else:
+                self._prune_completed()
+
+    def _prune_completed(self) -> None:
+        """Drop oldest finished sessions beyond the retention cap.
+
+        A session whose process has not actually exited yet is never pruned.
+        At least one completed record is always retained.
+        """
+        finished = sorted(
+            (sid for sid, handle in self._sessions.items() if handle.process.returncode is not None),
+            key=lambda sid: self._sessions[sid].started_at,
+            reverse=True,
+        )
+        for session_id in finished[self._max_completed:]:
+            self._evict_session(session_id)
+
+    def _evict_session(self, session_id: str) -> None:
+        self._copy_tasks.pop(session_id, None)
+        self._sessions.pop(session_id, None)
+        self._commands.pop(session_id, None)
+        self._output_paths.pop(session_id, None)
 
 
 _DEFAULT_MANAGER: BridgeSessionManager | None = None

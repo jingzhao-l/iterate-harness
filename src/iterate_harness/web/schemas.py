@@ -172,6 +172,10 @@ class StartRequest(BaseModel):
     mode: Literal["review", "run", "resume"] = "review"
     changed: bool = False
     ref: str = "HEAD"
+    #: Human-in-the-loop override for this run (the WebUI keeps the
+    #: permission_mode compatible with a fully unattended loop by default).
+    #: ``default`` falls back to the configured/credential mode.
+    permission_mode: Literal["full_auto", "plan", "default"] = "full_auto"
 
 
 class SendMessageRequest(BaseModel):

@@ -38,9 +38,28 @@ const {
   wheelAssetUrl,
 } = require("../lib/bootstrap");
 
-// The checksum sidecar fetch is normally a network call. Tests exercising the
-// download path stub it so installs stay hermetic and fast (mimics a release
-// that predates sidecars: verify skips, install proceeds).
+// Download-path tests use this pair: the downloader writes real bytes and
+// records the artifact digest, and the checksum fetcher answers with those
+// published digests so the fail-closed verification gate passes.
+function digestRecordingDownloader(record) {
+  const fs = require("fs");
+  const digests = new Map();
+  const downloader = async (url, dest) => {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, "release bytes");
+    digests.set(url, sha256File(dest));
+    record.push(["downloaded", url, dest]);
+  };
+  const checksumFetcher = async (url) => {
+    const artifactUrl = url.replace(/\.sha256$/, "");
+    return `${digests.get(artifactUrl)}  ${path.basename(artifactUrl)}\n`;
+  };
+  return { downloader, checksumFetcher };
+}
+
+// A checksum fetcher that always throws. Only safe for tests that never reach
+// the download path (first-pip-success / downloader-fails scenarios); under
+// the fail-closed verification gate a real digest is required otherwise.
 const noChecksumStub = async () => {
   throw new BootstrapError("no sidecar (test stub)");
 };
@@ -232,6 +251,7 @@ test("installHarness falls back to a local pip install after a TLS failure", asy
   const cache = downloadCachePath(path.join("home", "npm"), "1.9.1");
   const pipCalls = [];
   const downloads = [];
+  const { downloader, checksumFetcher } = digestRecordingDownloader(downloads);
   const runStepFn = (command, args) => {
     pipCalls.push([command, args]);
     if (pipCalls.length === 1) {
@@ -244,12 +264,12 @@ test("installHarness falls back to a local pip install after a TLS failure", asy
     homeDir: path.join("home", "npm"),
     version: "1.9.1",
     runStepFn,
-    downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
-    checksumFetcher: noChecksumStub,
+    downloader,
+    checksumFetcher,
   });
   assert.equal(pipCalls.length, 2);
   assert.deepEqual(pipCalls[1][1], pipInstallArgs(cache));
-  assert.deepEqual(downloads, [[url, cache]]);
+  assert.deepEqual(downloads.map(([, downloadUrl, dest]) => [downloadUrl, dest]), [[url, cache]]);
 });
 
 test("installHarness wraps both failures when the download fallback dies too", async () => {
@@ -323,9 +343,11 @@ test("installHarness tries the next candidate when the previous one fails", asyn
   );
 });
 
-test("installHarness propagates the second pip failure untouched", async () => {
+test("installHarness propagates the local pip failure after verification", async () => {
   const cacheFailure = new BootstrapError("pip exited with code 1: no matching distribution");
   let pipCalls = 0;
+  const downloads = [];
+  const { downloader, checksumFetcher } = digestRecordingDownloader(downloads);
   await assert.rejects(
     installHarness({
       python: "/venv/bin/python",
@@ -339,8 +361,8 @@ test("installHarness propagates the second pip failure untouched", async () => {
         }
         throw cacheFailure;
       },
-      downloader: async () => undefined,
-      checksumFetcher: noChecksumStub,
+      downloader,
+      checksumFetcher,
     }),
     (error) =>
       error instanceof BootstrapError &&
@@ -359,6 +381,7 @@ test("installHarness downloads a wheel to a .whl cache file on a TLS failure", a
   const cache = downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl");
   const pipCalls = [];
   const downloads = [];
+  const { downloader, checksumFetcher } = digestRecordingDownloader(downloads);
   await installHarness({
     python: "/venv/bin/python",
     candidates: [wheelUrl],
@@ -370,12 +393,12 @@ test("installHarness downloads a wheel to a .whl cache file on a TLS failure", a
         throw new BootstrapError("pip exited with code 1: CERTIFICATE_VERIFY_FAILED");
       }
     },
-    downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
-    checksumFetcher: noChecksumStub,
+    downloader,
+    checksumFetcher,
   });
   assert.equal(pipCalls.length, 2);
   assert.deepEqual(pipCalls[1][1], pipInstallArgs(cache));
-  assert.deepEqual(downloads, [[wheelUrl, cache]]);
+  assert.deepEqual(downloads.map(([, downloadUrl, dest]) => [downloadUrl, dest]), [[wheelUrl, cache]]);
 });
 
 test("installHarness walks PyPI → wheel → archive across the fallback chain", async () => {
@@ -385,6 +408,7 @@ test("installHarness walks PyPI → wheel → archive across the fallback chain"
   const archiveUrl = releaseTarballUrl("1.9.1");
   const pipArgs = [];
   const downloads = [];
+  const { downloader, checksumFetcher } = digestRecordingDownloader(downloads);
   await installHarness({
     python: "/venv/bin/python",
     candidates: [pypiSpec, wheelUrl, archiveUrl],
@@ -394,11 +418,11 @@ test("installHarness walks PyPI → wheel → archive across the fallback chain"
       pipArgs.push(args);
       throw new BootstrapError("pip exited with code 1: CERTIFICATE_VERIFY_FAILED");
     },
-    downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
-    checksumFetcher: noChecksumStub,
+    downloader,
+    checksumFetcher,
   }).catch(() => undefined);
   // The PyPI spec is non-URL: one pip attempt, no download.
-  // The wheel (HTTP) and archive (HTTP) each do: pip → download → local pip.
+  // The wheel (HTTP) and archive (HTTP) each do: pip → download → verify → local pip.
   assert.deepEqual(pipArgs, [
     pipInstallArgs(pypiSpec),
     pipInstallArgs(wheelUrl),
@@ -406,7 +430,7 @@ test("installHarness walks PyPI → wheel → archive across the fallback chain"
     pipInstallArgs(archiveUrl),
     pipInstallArgs(downloadCachePath(path.join("home", "npm"), "1.9.1")),
   ]);
-  assert.deepEqual(downloads, [
+  assert.deepEqual(downloads.map(([, downloadUrl, dest]) => [downloadUrl, dest]), [
     [wheelUrl, downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl")],
     [archiveUrl, downloadCachePath(path.join("home", "npm"), "1.9.1")],
   ]);
@@ -608,7 +632,7 @@ test("verifyDownloadedArtifact deletes and rejects a mismatched artifact", async
   assert.equal(fs.existsSync(file), false);
 });
 
-test("verifyDownloadedArtifact warns and skips when no sidecar is published", async (t) => {
+test("verifyDownloadedArtifact is fail-closed when the sidecar cannot be fetched", async (t) => {
   const os = require("os");
   const fs = require("fs");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ih-verify-"));
@@ -616,11 +640,14 @@ test("verifyDownloadedArtifact warns and skips when no sidecar is published", as
   fs.writeFileSync(file, "archive bytes");
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-  const ok = await verifyDownloadedArtifact("https://x/y.tar.gz", file, async () => {
-    throw new BootstrapError("HTTP 404");
-  });
-  assert.equal(ok, false);
-  assert.equal(fs.existsSync(file), true);
+  await assert.rejects(
+    verifyDownloadedArtifact("https://x/y.tar.gz", file, async () => {
+      throw new BootstrapError("HTTP 404");
+    }),
+    (error) => error instanceof BootstrapError && error.message.includes("refusing to install")
+  );
+  // Fail-CLOSED: without a trusted digest the artifact must not reach pip.
+  assert.equal(fs.existsSync(file), false);
 });
 
 test("installRemoteArtifact verifies downloaded bytes before pip installs them", async (t) => {
@@ -655,7 +682,8 @@ test("installRemoteArtifact verifies downloaded bytes before pip installs them",
     downloader,
     async (url) => {
       assert.ok(url.endsWith(".sha256"));
-      return null;
+      const realDest = path.join(home, "cache", wheelAssetName("1.0.0"));
+      return `${sha256File(realDest)}  ${path.basename(realDest)}\n`;
     }
   );
 

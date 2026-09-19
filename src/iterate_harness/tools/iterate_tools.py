@@ -516,8 +516,24 @@ class IterateDecisionLogTool(BaseTool[BaseModel]):
         """Record the finished run into the trend library (best effort)."""
         raw = data.get("findings") if isinstance(data, dict) else None
         findings = [f for f in raw if isinstance(f, dict)] if isinstance(raw, list) else []
+        # A run that only reviewed a subset of dimensions must not erase trend
+        # history for the rest: honor the loop-policy state published by the
+        # aggregate step (``by_dimension`` lists the dimensions actually seen).
+        # When that state is absent (e.g. a resumed legacy session) fall back
+        # to the historical full-sweep attribution.
+        loop_state = context.metadata.get(ITERATE_STATE_KEY)
+        covered: list[str] | None = None
+        if isinstance(loop_state, dict):
+            by_dim = loop_state.get("by_dimension")
+            if isinstance(by_dim, dict):
+                # Conservative direction: an empty ``by_dimension`` (a run that
+                # surfaced no findings) cannot prove full-surface coverage, so
+                # it must not auto-fix lingering open records either.
+                covered = [str(d) for d in by_dim.keys() if str(d).strip()]
         try:
-            delta = trend_store.record_run(context.cwd, findings)
+            delta = trend_store.record_run(
+                context.cwd, findings, covered_dimensions=covered
+            )
         except Exception:  # noqa: BLE001 - trend tracking must never break the loop
             return {"error": "trend library update failed"}
         return {
