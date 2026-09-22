@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +46,8 @@ from iterate_harness.state import AppState, AppStateStore
 from iterate_harness.services.session_backend import DEFAULT_SESSION_BACKEND, SessionBackend
 from iterate_harness.tools import ToolRegistry, create_default_tool_registry
 from iterate_harness.keybindings import load_keybindings
+
+log = logging.getLogger(__name__)
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
 AskUserPrompt = Callable[[str], Awaitable[str]]
@@ -245,7 +249,15 @@ async def build_runtime(
     else:
         resolved_api_client = _resolve_api_client_from_settings(settings)
     mcp_manager = McpClientManager(load_mcp_server_configs(settings, plugins))
-    await mcp_manager.connect_all()
+    try:
+        await mcp_manager.connect_all()
+    except Exception:
+        # MCP is best-effort: a config typo / unreachable endpoint must not
+        # abort runtime construction (the web UI should still boot and show
+        # the server as failed). ``connect_all`` per-server failure handling
+        # already marks individual servers failed; this catch is for
+        # unexpected top-level errors.
+        log.exception("MCP connect_all failed; continuing with partial MCP state")
     tool_registry = create_default_tool_registry(mcp_manager)
     # Register plugin-provided tools
     for plugin in plugins:
@@ -367,7 +379,18 @@ async def build_runtime(
     if settings.sandbox.enabled and settings.sandbox.backend == "docker":
         from iterate_harness.sandbox.session import start_docker_sandbox
 
-        await start_docker_sandbox(settings, session_id, Path(cwd))
+        try:
+            await start_docker_sandbox(settings, session_id, Path(cwd))
+        except Exception:
+            # Never leak a half-built runtime: MCP stdio subprocesses started
+            # by connect_all() above must be closed before the partial failure
+            # propagates (fail_if_unavailable semantics preserved — a required
+            # sandbox failing to start still aborts the build).
+            try:
+                await mcp_manager.close()
+            except Exception:
+                log.debug("additional MCP close failure during build abort", exc_info=True)
+            raise
 
     return RuntimeBundle(
         api_client=resolved_api_client,
@@ -407,10 +430,18 @@ async def start_runtime(bundle: RuntimeBundle) -> None:
 
 
 async def close_runtime(bundle: RuntimeBundle) -> None:
-    """Close runtime-owned resources."""
+    """Close runtime-owned resources (best-effort; never raises).
+
+    Every resource call is wrapped so a teardown failure (subprocess already
+    reaped, dead docker container, MCP exec error) cannot prevent the
+    remaining resources — and the SESSION_END hook — from running.
+    """
     from iterate_harness.sandbox.session import stop_docker_sandbox
 
-    await stop_docker_sandbox()
+    try:
+        await stop_docker_sandbox()
+    except Exception:
+        log.exception("closing docker sandbox failed (continuing)")
     # Extract local environment rules from session before closing
     try:
         from iterate_harness.personalization.session_hook import update_rules_from_session
@@ -418,11 +449,17 @@ async def close_runtime(bundle: RuntimeBundle) -> None:
     except Exception:
         pass  # personalization is best-effort, never block session end
 
-    await bundle.mcp_manager.close()
-    await bundle.hook_executor.execute(
-        HookEvent.SESSION_END,
-        {"cwd": bundle.cwd, "event": HookEvent.SESSION_END.value},
-    )
+    try:
+        await bundle.mcp_manager.close()
+    except Exception:
+        log.exception("closing MCP manager failed (continuing)")
+    try:
+        await bundle.hook_executor.execute(
+            HookEvent.SESSION_END,
+            {"cwd": bundle.cwd, "event": HookEvent.SESSION_END.value},
+        )
+    except Exception:
+        log.exception("SESSION_END hook failed (continuing)")
 
 
 def _last_user_text(messages: list[ConversationMessage]) -> str:
@@ -662,6 +699,20 @@ async def handle_line(
         pending = _format_pending_tool_results(bundle.engine.messages)
         if pending:
             await print_system(pending)
+    except asyncio.CancelledError:
+        # User interrupt / shutdown: propagate (the caller owns teardown), but
+        # the snapshot below is skipped intentionally — the turn is incomplete.
+        raise
+    except Exception as exc:
+        # An unexpected query failure must never crash the whole backend: the
+        # TUI request loop and backend_host have no except clause, so a bare
+        # escape here would tear down the process (or wedge the web session).
+        # Surface it, snapshot whatever survived, and keep the loop alive.
+        log.exception("submit_message raised for line: %.200s", line)
+        await print_system(
+            f"Session error: {type(exc).__name__}: {exc}\nThe session is still healthy."
+        )
+    try:
         bundle.session_backend.save_snapshot(
             cwd=bundle.cwd,
             model=settings.model,
@@ -671,17 +722,8 @@ async def handle_line(
             session_id=bundle.session_id,
             tool_metadata=bundle.engine.tool_metadata,
         )
-        sync_app_state(bundle)
-        return True
-    bundle.session_backend.save_snapshot(
-        cwd=bundle.cwd,
-        model=settings.model,
-        system_prompt=system_prompt,
-        messages=bundle.engine.messages,
-        usage=bundle.engine.total_usage,
-        session_id=bundle.session_id,
-        tool_metadata=bundle.engine.tool_metadata,
-    )
+    except Exception:
+        log.exception("snapshot save failed (session continues)")
     sync_app_state(bundle)
     return True
 

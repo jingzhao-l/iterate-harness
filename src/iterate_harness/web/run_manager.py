@@ -454,7 +454,13 @@ class RunManager:
             # system-exit would otherwise drop the model's partial output with
             # no trace (no-op when the last turn completed and was already
             # flushed).
-            await self._flush_assistant_buffer()
+            try:
+                await asyncio.shield(self._flush_assistant_buffer())
+            except asyncio.CancelledError:
+                # A second cancel raced in; the enclosing task is being torn
+                # down — do not abort the runtime cleanup below, which is what
+                # the user actually needs to see complete.
+                self._stopping = True
             async with self._lock:
                 # Only close the runtime if we still own it. A newer run may
                 # have already installed its own bundle (and possibly started
@@ -465,7 +471,9 @@ class RunManager:
                 still_owner_task = self._task is task_handle
             if bundle is not None and still_owner_bundle:
                 try:
-                    await close_runtime(bundle)
+                    await asyncio.shield(close_runtime(bundle))
+                except asyncio.CancelledError:
+                    self._stopping = True
                 except Exception as exc:  # noqa: BLE001 - best-effort close
                     log.warning("iterate runtime close failed: %s", exc)
             async with self._lock:
@@ -480,16 +488,23 @@ class RunManager:
             # run-state is idempotent so a duplicate "stopped" is harmless.
             if still_owner_task:
                 try:
-                    await hub.publish(
-                        "run-state",
-                        {"state": "stopped", "message": self.last_message or "iterate 循环已结束"},
+                    await asyncio.shield(
+                        hub.publish(
+                            "run-state",
+                            {"state": "stopped", "message": self.last_message or "iterate 循环已结束"},
+                        )
                     )
+                except asyncio.CancelledError:
+                    self._stopping = True
                 except Exception as exc:  # noqa: BLE001 - best-effort publish
                     log.warning("final run-state publish failed: %s", exc)
             # Only clear the stop request that this run placed itself, so
             # a new run's stop request is never clobbered by an old run's
             # cleanup racing in behind it.
-            await self._clear_stopping_if_owned(run_id)
+            try:
+                await asyncio.shield(self._clear_stopping_if_owned(run_id))
+            except asyncio.CancelledError:
+                self._stopping = True
 
     async def _render_event(self, event: Any) -> None:
         """Translate engine stream events into chat/progress hub events."""
@@ -559,6 +574,12 @@ class RunManager:
         request_id = uuid4().hex
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         async with self._lock:
+            if self._stopping:
+                # A stop request while the loop is winding down must never
+                # park on a fresh permission dialog: deny immediately so the
+                # engine ends its turn and reaches the clean stop path. The
+                # decision is logged by the engine, not here.
+                return False
             self._request_registry[request_id] = future
             self.waiting_for = "permission"
             self.permission_tool = tool_name
@@ -589,12 +610,18 @@ class RunManager:
                 self.permission_reason = None
                 if not self._stopping:
                     self.state = "running"
-            await hub.publish("run-state", {"state": "running", "waitingFor": "none"})
+            if not self._stopping:
+                await hub.publish("run-state", {"state": "running", "waitingFor": "none"})
 
     async def _ask_user_prompt(self, question: str) -> str:
         request_id = uuid4().hex
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         async with self._lock:
+            if self._stopping:
+                # Short-circuit exactly like _ask_user_select: a stop request
+                # must never park on a fresh question — answer with the engine
+                # default ("") so the loop can wind down cleanly.
+                return ""
             self._request_registry[request_id] = future
             self.waiting_for = "user_prompt"
             self.question = question
@@ -628,7 +655,8 @@ class RunManager:
                 self.question = None
                 if not self._stopping:
                     self.state = "running"
-            await hub.publish("run-state", {"state": "running", "waitingFor": "none"})
+            if not self._stopping:
+                await hub.publish("run-state", {"state": "running", "waitingFor": "none"})
 
     async def _ask_user_select(self, title: str, options: list[dict[str, Any]]) -> str:
         # A stop request while running resolves here: the engine reaches the
@@ -683,7 +711,8 @@ class RunManager:
                 self.options = None
                 if not self._stopping:
                     self.state = "running"
-            await hub.publish("run-state", {"state": "running", "waitingFor": "none"})
+            if not self._stopping:
+                await hub.publish("run-state", {"state": "running", "waitingFor": "none"})
 
     # ------------------------------------------------------------------
     # Control operations
@@ -932,13 +961,20 @@ class RunManager:
         path = self._chat_path
         if path is not None:
             try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                await asyncio.to_thread(self._append_chat_entry, path, entry)
             except OSError as exc:
                 log.warning("web chat history write failed: %s", exc)
         await hub.publish("chat-message", entry)
         return entry
+
+    @staticmethod
+    def _append_chat_entry(path: Path, entry: dict[str, Any]) -> None:
+        # Synchronous file append (disk-backed chat history). Runs in a worker
+        # thread: `open().write()` is blocking I/O and must never sit on the
+        # event loop — a slow/contended disk would stall every SSE broadcast.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     async def _publish_tool(self, content: str) -> None:
         # Live tool activity is broadcast but never persisted (ephemeral).

@@ -191,14 +191,14 @@ class PermissionChecker:
         if tool_name in self._settings.denied_tools:
             return PermissionDecision(allowed=False, reason=f"{tool_name} is explicitly denied")
 
-        # Explicit tool allow list
-        if tool_name in self._settings.allowed_tools:
-            return PermissionDecision(allowed=True, reason=f"{tool_name} is explicitly allowed")
-
         # Check path-level rules (upstream contract: deny rules block BOTH
         # reads and writes — iterate protected_paths piggyback on this,
         # which also shields secrets from model reads, a strict superset of
-        # the "block writes, allow reads" design minimum).
+        # the "block writes, allow reads" design minimum). This MUST run
+        # before the ``allowed_tools`` early return: allowlisting a tool is a
+        # mode shortcut, never a license to touch deny-listed paths (a deny
+        # rule is an iterate hard boundary and cannot be widened by any
+        # session override or allowlist).
         if file_path and self._path_rules:
             for candidate_path in _policy_match_paths(file_path):
                 for rule in self._path_rules:
@@ -208,6 +208,10 @@ class PermissionChecker:
                                 allowed=False,
                                 reason=f"Path {file_path} matches deny rule: {rule.pattern}",
                             )
+
+        # Explicit tool allow list
+        if tool_name in self._settings.allowed_tools:
+            return PermissionDecision(allowed=True, reason=f"{tool_name} is explicitly allowed")
 
         # Exact-match command allowlist (iterate validation commands etc.):
         # a listed command is trusted as-is; prefixes never match.

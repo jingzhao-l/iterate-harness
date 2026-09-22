@@ -33,7 +33,21 @@ import stat
 import tempfile
 from pathlib import Path
 
-__all__ = ["atomic_write_bytes", "atomic_write_text"]
+__all__ = ["atomic_write_bytes", "atomic_write_text", "is_regular_file"]
+
+
+def is_regular_file(path: str | os.PathLike[str]) -> bool:
+    """Return True when ``path`` names a regular file (not a FIFO/device/socket).
+
+    A FIFO or device reports ``st_size == 0``, so a size-based guard never
+    protects a plain ``read_text``/``read_bytes`` from blocking forever on
+    the read end — the worst failure mode available to a tool running in the
+    event-loop thread. Guard every unguarded read with this helper.
+    """
+    try:
+        return stat.S_ISREG(Path(path).stat().st_mode)
+    except OSError:
+        return False
 
 
 def atomic_write_bytes(path: str | os.PathLike[str], data: bytes, *, mode: int | None = None) -> None:

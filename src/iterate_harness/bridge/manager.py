@@ -12,6 +12,14 @@ from iterate_harness.bridge.session_runner import SessionHandle, spawn_session
 
 log = logging.getLogger(__name__)
 
+#: Upper bound for a single session's capture file. A long-running bridge
+#: session can otherwise produce an unbounded ``.log`` on disk (the read API
+#: truncates for display, but the file itself kept growing). When the cap is
+#: crossed the capture is trimmed in place to its trailing
+#: :data:`BRIDGE_LOG_TAIL_BYTES`.
+BRIDGE_LOG_MAX_BYTES = 64 * 1024 * 1024
+BRIDGE_LOG_TAIL_BYTES = 16 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class BridgeSessionRecord:
@@ -118,6 +126,10 @@ class BridgeSessionManager:
                 # bytes while the process is still running.
                 with path.open("ab") as stream:
                     while True:
+                        if path.stat().st_size > BRIDGE_LOG_MAX_BYTES:
+                            # Trim the capture to its tail in place so a
+                            # runaway session cannot balloon disk usage.
+                            self._trim_log(path)
                         chunk = await handle.process.stdout.read(4096)
                         if not chunk:
                             break
@@ -135,6 +147,24 @@ class BridgeSessionManager:
                 self._evict_session(session_id)
             else:
                 self._prune_completed()
+
+    @staticmethod
+    def _trim_log(path: Path) -> None:
+        """Keep only the trailing segment of an oversized capture file."""
+        try:
+            with path.open("rb+") as stream:
+                size = stream.seek(0, 2)
+                if size <= BRIDGE_LOG_MAX_BYTES:
+                    return
+                keep = min(BRIDGE_LOG_TAIL_BYTES, size)
+                stream.seek(size - keep)
+                tail = stream.read()
+                stream.seek(0)
+                stream.write(tail)
+                stream.truncate()
+        except OSError:
+            # Never let a disk read/write issue tear down the copy loop.
+            return
 
     def _prune_completed(self) -> None:
         """Drop oldest finished sessions beyond the retention cap.

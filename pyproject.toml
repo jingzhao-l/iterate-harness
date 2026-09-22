@@ -26,7 +26,11 @@ dependencies = [
     "typing-extensions==4.16.0",
     "pydantic==2.13.4",
     "httpx==0.28.1",
-    "httpx2==2.10.0",
+    # Floor set by the 2026-09 HTTPX2 advisories: 2.12.0 fixes CVE-2026-84382
+    # (unbounded streaming decompression), 2.11.0 fixes CVE-2026-84380
+    # (Content-Length/Transfer-Encoding auto-framing) and CVE-2026-84379
+    # (multipart header injection). Dependabot alerts #41-#43.
+    "httpx2==2.12.0",
     "websockets==16.1.1; python_version < '3.11'",
     "websockets==17.0.1; python_version >= '3.11'",
     "mcp==2.0.0",

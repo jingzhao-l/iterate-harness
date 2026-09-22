@@ -472,6 +472,99 @@ async def test_query_engine_coordinator_mode_uses_coordinator_prompt_and_runs_ag
 
 
 @pytest.mark.asyncio
+async def test_query_engine_coordinator_context_never_accumulates_across_submits(tmp_path: Path, monkeypatch):
+    """Regression: coordinator runtime context must be appended fresh per
+    request and never persisted into live history, or every submit sends N
+    accumulated copies to the provider."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("CLAUDE_CODE_COORDINATOR_MODE", "1")
+
+    api_client = CoordinatorLoopApiClient()
+    system_prompt = build_runtime_system_prompt(Settings(), cwd=tmp_path, latest_user_prompt="investigate issue")
+    engine = QueryEngine(
+        api_client=api_client,
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(PermissionSettings()),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt=system_prompt,
+    )
+
+    events = [event async for event in engine.submit_message("investigate issue")]
+    assert any(isinstance(event, ToolExecutionCompleted) and event.tool_name == "agent" for event in events)
+    events = [event async for event in engine.submit_message("investigate issue")]
+
+    for request in api_client.requests:
+        coordinator_context_messages = [
+            msg for msg in request.messages if msg.role == "user" and "Coordinator User Context" in msg.text
+        ]
+        assert len(coordinator_context_messages) == 1, "coordinator context must not accumulate across submits"
+    live = [
+        msg for msg in engine.messages if msg.role == "user" and "Coordinator User Context" in msg.text
+    ]
+    assert live == [], "coordinator context must never be persisted into live history"
+    assert isinstance(events[-1], AssistantTurnComplete)
+
+
+@pytest.mark.asyncio
+async def test_query_engine_keeps_tool_results_when_max_turns_hit_after_tool_round(tmp_path: Path, monkeypatch):
+    """Regression: when the run ends with MaxTurnsExceeded right after a tool
+    round, ``engine.messages`` must still contain the executed tool_result
+    user message (so /continue resumes from a valid tool_use↔tool_result pair)
+    — and the synthetic coordinator context must NOT be persisted."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("CLAUDE_CODE_COORDINATOR_MODE", "1")
+
+    class ToolLoopApiClient:
+        def __init__(self) -> None:
+            self._calls = 0
+
+        async def stream_message(self, request):
+            self._calls += 1
+            yield ApiMessageCompleteEvent(
+                message=ConversationMessage(
+                    role="assistant",
+                    content=[
+                        TextBlock(text="Inspecting."),
+                        ToolUseBlock(
+                            id="toolu_loop_1",
+                            name="read_file",
+                            input={"path": str(tmp_path / "x.txt")},
+                        ),
+                    ],
+                ),
+                usage=UsageSnapshot(input_tokens=2, output_tokens=2),
+                stop_reason=None,
+            )
+
+    from iterate_harness.engine.query import MaxTurnsExceeded
+
+    engine = QueryEngine(
+        api_client=ToolLoopApiClient(),
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt="You are a **coordinator**. Workers spawned via the agent tool have access to these tools.",
+        max_turns=1,
+    )
+    with pytest.raises(MaxTurnsExceeded):
+        events = [event async for event in engine.submit_message("inspect")]
+        del events
+
+    # The executed tool result must be the trailing user message (matched to
+    # the tool_use block below it), enabling a clean continuation.
+    assert engine.messages[-1].role == "user"
+    blocks = engine.messages[-1].content
+    assert any(isinstance(b, ToolResultBlock) for b in blocks)
+    # Coordinator synthetic context must never reach the persisted history.
+    coordinator_live = [
+        m for m in engine.messages if m.role == "user" and "Coordinator User Context" in m.text
+    ]
+    assert coordinator_live == []
+
+
+@pytest.mark.asyncio
 async def test_query_engine_allows_unbounded_turns_when_max_turns_is_none(tmp_path: Path):
     sample = tmp_path / "hello.txt"
     sample.write_text("alpha\nbeta\n", encoding="utf-8")

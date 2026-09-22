@@ -858,6 +858,16 @@ def _coerce_flag(value: object) -> bool | None:
     return None
 
 
+#: Absolute ceiling for any round number produced from untrusted report JSON.
+#: Real reviews run single-digit-to-low-double-digit rounds; the cap exists
+#: purely to stop a ``round: 999999`` style injection from sizing
+#: ``aggregate_rounds.findings_by_round`` into a ~1M-element list. It beats
+#: the tool-layer param bound (``le=20``) on purpose: a resumed run may carry
+#: a report whose rounds already exceed the fresh-run default cap, but a
+#: 100-round report is never legitimate tool output.
+_MAX_SANE_ROUNDS = 100
+
+
 def _coerce_int(value: object) -> int | None:
     """Coerce an integer-like slot strictly (no bool/float/None acceptance)."""
     if isinstance(value, bool) or not isinstance(value, int):
@@ -865,6 +875,23 @@ def _coerce_int(value: object) -> int | None:
             return int(value.strip())
         return None
     return value
+
+
+def _clamp_round(value: int, cap: int | None) -> int:
+    """Clamp a round number into ``[1, cap]`` (or ``[1, _MAX_SANE_ROUNDS]``).
+
+    Both endpoints matter: a round below 1 (``round: -5``) would make
+    ``aggregate_rounds`` allocate nothing yet desync convergence math, and a
+    round hyper-inflated past the cap (``round: 999999``) would blow up
+    ``findings_by_round``. The cap itself is also bounded.
+    """
+    if value < 1:
+        return 1
+    if cap is None or cap > _MAX_SANE_ROUNDS:
+        cap = _MAX_SANE_ROUNDS
+    if cap < 1:
+        return 1
+    return min(value, cap)
 
 
 def report_from_dict(data: object) -> ReviewReport:
@@ -886,6 +913,14 @@ def report_from_dict(data: object) -> ReviewReport:
     dimensions = [str(d) for d in dimensions_raw] if isinstance(dimensions_raw, list) else []
     if not isinstance(dimensions_raw, list):
         errors.append("dimensions must be an array")
+
+    # Parse maxReviewRounds first; the resolved cap is passed to every
+    # per-round clamp so legitimate resume runs (round numbers up to the
+    # configured cap) survive while an untrusted ``round: 999999`` can never
+    # force aggregate_rounds to allocate a ~1M-entry findings_by_round slice.
+    max_review_rounds_raw = _coerce_int(data.get("maxReviewRounds"))
+    if max_review_rounds_raw is None and "maxReviewRounds" in data:
+        errors.append("maxReviewRounds must be an integer")
 
     rounds: list[ReviewRound] = []
     rounds_raw = data.get("rounds", [])
@@ -912,16 +947,22 @@ def report_from_dict(data: object) -> ReviewReport:
                 # TypeError, and must not abort parsing of later rounds.
                 errors.append(f"rounds[{r_index}].round must be an integer")
                 round_number = r_index + 1
-            rounds.append(ReviewRound(round=round_number, findings=findings))
+            rounds.append(
+                ReviewRound(
+                    round=_clamp_round(round_number, max_review_rounds_raw),
+                    findings=findings,
+                )
+            )
+
+    # Default the cap to the resolved round count when absent; clamp the
+    # result into the sane ceiling for both paths.
+    max_review_rounds = _clamp_round(
+        max_review_rounds_raw if max_review_rounds_raw is not None else (len(rounds) or 1),
+        None,
+    )
 
     if errors:
         raise ValueError("invalid report: " + "; ".join(errors))
-
-    max_review_rounds = _coerce_int(data.get("maxReviewRounds", len(rounds) or 1))
-    if max_review_rounds is None:
-        raise ValueError(
-            "invalid report: maxReviewRounds must be an integer"
-        )
 
     return build_review_report(
         mode=mode,

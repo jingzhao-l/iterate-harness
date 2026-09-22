@@ -105,6 +105,42 @@ def test_valid_deny_rule_does_not_block_non_matching_path():
     assert decision.allowed is True
 
 
+def test_deny_rule_beats_tool_allowlist():
+    """A deny rule is a hard boundary: allowlisting a tool must not let it
+    touch deny-listed paths (the path_rules gate runs BEFORE the
+    ``allowed_tools`` early return)."""
+    rule = PathRuleConfig(pattern="*/secrets/*", allow=False)
+    allowlisted = PermissionSettings(
+        mode=PermissionMode.FULL_AUTO,
+        path_rules=[rule],
+        allowed_tools=["write_file", "read_file"],
+    )
+    checker = PermissionChecker(allowlisted)
+
+    blocked = checker.evaluate(
+        "write_file", is_read_only=False, file_path="/proj/secrets/token.txt", content="x"
+    )
+    assert blocked.allowed is False
+    assert not blocked.requires_confirmation
+    assert "deny rule" in blocked.reason
+
+    blocked_read = checker.evaluate(
+        "read_file", is_read_only=True, file_path="/proj/secrets/token.txt"
+    )
+    assert blocked_read.allowed is False
+
+
+def test_allowlisted_mutating_tool_in_default_mode_skips_confirmation():
+    """The tool allowlist still works as a mutation shortcut for a tool that
+    does NOT hit a boundary path — its semantics are preserved after the
+    reorder."""
+    base = PermissionSettings(mode=PermissionMode.DEFAULT, allowed_tools=["write_file"])
+    checker = PermissionChecker(base)
+    decision = checker.evaluate("write_file", is_read_only=False, file_path="/proj/src/a.py")
+    assert decision.allowed is True
+    assert decision.reason == "write_file is explicitly allowed"
+
+
 def test_valid_allow_rule_is_added():
     """A rule with allow=True is accepted and stored without warnings."""
     rule = PathRuleConfig(pattern="/data/*", allow=True)

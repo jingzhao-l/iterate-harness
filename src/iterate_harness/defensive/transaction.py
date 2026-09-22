@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import threading
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
@@ -32,6 +33,12 @@ class FileTransactionBuffer:
         self._project_root = Path(project_root).resolve()
         #: Original file bytes keyed by resolved absolute path.
         self._snapshots: dict[Path, bytes] = {}
+        #: Guards the snapshot map so two concurrent mutations of the SAME
+        #: path (parallel file tools inside one turn, or tool calls running on
+        #: a worker thread) cannot interleave a read with a write to
+        #: ``_snapshots`` — the first snapshot must win atomically and a
+        #: rollback must never observe a half-written map entry.
+        self._lock = threading.Lock()
 
     def snapshot(self, path: str | Path) -> None:
         """Record the original bytes of ``path`` before a mutation.
@@ -41,18 +48,20 @@ class FileTransactionBuffer:
         that is already snapshotted is left untouched (first snapshot wins).
         """
         resolved = self._resolve(path)
-        if resolved in self._snapshots:
-            return
-        try:
-            self._snapshots[resolved] = resolved.read_bytes()
-        except OSError:
-            # Missing file -> remember as absent so rollback removes it.
-            self._snapshots[resolved] = _MISSING_SENTINEL
+        with self._lock:
+            if resolved in self._snapshots:
+                return
+            try:
+                self._snapshots[resolved] = resolved.read_bytes()
+            except OSError:
+                # Missing file -> remember as absent so rollback removes it.
+                self._snapshots[resolved] = _MISSING_SENTINEL
 
     def commit(self, path: str | Path) -> None:
         """Accept the edit: drop the snapshot for ``path`` (verified good)."""
         resolved = self._resolve(path)
-        self._snapshots.pop(resolved, None)
+        with self._lock:
+            self._snapshots.pop(resolved, None)
 
     def rollback(
         self, paths: str | Path | Iterable[str | Path] | None = None
@@ -72,17 +81,18 @@ class FileTransactionBuffer:
         a half-written file behind.
         """
         restored: list[Path] = []
-        targets: Iterable[Path] | None
         if paths is None:
-            targets = list(self._snapshots)
+            with self._lock:
+                targets = [self._resolve(p) for p in self._snapshots]
         elif isinstance(paths, (str, Path)):
             targets = [self._resolve(paths)]
         else:
             targets = [self._resolve(p) for p in paths]
         for resolved in targets:
-            original = self._snapshots.get(resolved)
-            if original is None:
-                continue
+            with self._lock:
+                original = self._snapshots.get(resolved)
+                if original is None:
+                    continue
             try:
                 if original == _MISSING_SENTINEL:
                     if resolved.exists():
@@ -114,18 +124,21 @@ class FileTransactionBuffer:
                 # invariant-violating edit effectively committed-by-default.
                 log.warning("defensive rollback failed for %s: %s", resolved, exc)
                 continue
-            self._snapshots.pop(resolved, None)
+            with self._lock:
+                self._snapshots.pop(resolved, None)
         return restored
 
     @property
     def pending(self) -> list[Path]:
         """Return the paths currently tracked (edits not yet committed)."""
-        return list(self._snapshots)
+        with self._lock:
+            return list(self._snapshots)
 
     @property
     def is_empty(self) -> bool:
         """Return True when no edit is pending rollback."""
-        return not self._snapshots
+        with self._lock:
+            return not self._snapshots
 
     def _resolve(self, path: str | Path) -> Path:
         candidate = Path(path)

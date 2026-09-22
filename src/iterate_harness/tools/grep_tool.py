@@ -24,6 +24,17 @@ class GrepToolInput(BaseModel):
     timeout_seconds: int = Field(default=20, ge=1, le=120)
 
 
+#: Cap on a single line the Python fallback will load into memory (bytes).
+#: Ripgrep skips lines past its stream buffer; the fallback must mirror that
+#: instead of buffering a multi-GB minified blob on a search hit.
+_MAX_PY_LINE_BYTES = 8 * 1024 * 1024
+
+#: Cap on total bytes read from one file in the Python fallback. Side-steps a
+#: pathological file that would otherwise have Python load it fully per search
+#: (memory bomb) while still scanning the pragmatic head of any real source.
+_MAX_PY_FILE_BYTES = 64 * 1024 * 1024
+
+
 class GrepTool(BaseTool[GrepToolInput]):
     """Search text files for a regex pattern."""
 
@@ -51,12 +62,13 @@ class GrepTool(BaseTool[GrepToolInput]):
                 return _format_rg_result(matches, arguments.timeout_seconds)
 
             return ToolResult(
-                output=_python_grep_files(
+                output=await _python_grep_files(
                     paths=[root],
                     pattern=arguments.pattern,
                     case_sensitive=arguments.case_sensitive,
                     limit=arguments.limit,
                     display_base=display_base,
+                    timeout_seconds=arguments.timeout_seconds,
                 )
             )
 
@@ -74,12 +86,13 @@ class GrepTool(BaseTool[GrepToolInput]):
 
         # Python fallback (kept for portability).
         return ToolResult(
-            output=_python_grep_files(
+            output=await _python_grep_files(
                 paths=root.glob(arguments.file_glob),
                 pattern=arguments.pattern,
                 case_sensitive=arguments.case_sensitive,
                 limit=arguments.limit,
                 display_base=root,
+                timeout_seconds=arguments.timeout_seconds,
             )
         )
 
@@ -92,15 +105,17 @@ def _display_base(path: Path, cwd: Path) -> Path:
     return cwd
 
 
-def _python_grep_files(
+async def _python_grep_files(
     *,
     paths: Iterable[Path],
     pattern: str,
     case_sensitive: bool,
     limit: int,
     display_base: Path,
+    timeout_seconds: int,
 ) -> str:
-    # Python fallback (kept for portability).
+    """Pure-Python grep fallback, bounded in time, line length, and total
+    bytes read per file so a pathological tree cannot wedge the tool."""
     flags = 0 if case_sensitive else re.IGNORECASE
     try:
         compiled = re.compile(pattern, flags)
@@ -108,27 +123,58 @@ def _python_grep_files(
         return f"(invalid regex pattern '{pattern}': {exc})"
     collected: list[str] = []
 
-    for path in paths:
-        if len(collected) >= limit:
-            break
-        if not path.is_file():
-            continue
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            continue
-        if b"\x00" in raw:
-            continue
-        text = raw.decode("utf-8", errors="replace")
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            if compiled.search(line):
-                collected.append(f"{_format_path(path, display_base)}:{line_no}:{line}")
-                if len(collected) >= limit:
-                    break
+    def _scan() -> str:
+        for path in paths:
+            if len(collected) >= limit:
+                break
+            if not path.is_file():
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size > _MAX_PY_FILE_BYTES:
+                continue
+            try:
+                with path.open("rb") as handle:
+                    head = handle.read(8192)
+            except OSError:
+                continue
+            if b"\x00" in head:
+                continue
+            try:
+                with path.open("r", encoding="utf-8", errors="replace") as handle:
+                    line_index = 0
+                    for line in handle:
+                        line_index += 1
+                        if len(line) > _MAX_PY_LINE_BYTES:
+                            # Oversized line (minified blob): skip rather than
+                            # hold multi-GB in memory on a hit.
+                            continue
+                        if "\x00" in line:
+                            # Binary content surfaced mid-stream: treat like
+                            # ripgrep and drop the file entirely.
+                            break
+                        if compiled.search(line):
+                            collected.append(
+                                f"{_format_path(path, display_base)}:{line_index}:{line.rstrip()}"
+                            )
+                            if len(collected) >= limit:
+                                break
+            except OSError:
+                continue
+        return "\n".join(collected) if collected else "(no matches)"
 
-    if not collected:
-        return "(no matches)"
-    return "\n".join(collected)
+    # Bound the whole fallback by the caller's timeout: a regex with
+    # catastrophic backtracking over a big tree must not hang the tool (the
+    # ripgrep path already honours the timeout; the fallback mirrors it).
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_scan),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        return f"[grep timed out after {timeout_seconds} seconds]"
 
 
 def _resolve_path(base: Path, candidate: str | None) -> Path:

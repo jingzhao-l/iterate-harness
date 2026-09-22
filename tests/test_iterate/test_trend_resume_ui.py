@@ -13,6 +13,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -495,3 +496,31 @@ async def test_pause_select_error_stops_safely(tmp_path):
     action, _ = await _handle_iterate_pause(context, _Progress())
     assert action == "stop"
     assert _last_intervention(tmp_path)["detail"] == "select error"
+
+
+@pytest.mark.asyncio
+async def test_pause_select_times_out_to_stop_when_channel_hangs(tmp_path, monkeypatch):
+    import iterate_harness.engine.query as query_mod
+
+    async def select(title, options):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(query_mod, "PAUSE_CHANNEL_TIMEOUT_SECONDS", 0.05)
+    context = _pause_context(tmp_path, select)
+    action, _ = await asyncio.wait_for(_handle_iterate_pause(context, _Progress()), timeout=5.0)
+    assert action == "stop"
+    assert _last_intervention(tmp_path)["detail"] == "select timeout"
+
+
+@pytest.mark.asyncio
+async def test_pause_text_times_out_to_stop_when_channel_hangs(tmp_path, monkeypatch):
+    import iterate_harness.engine.query as query_mod
+
+    async def prompt(question):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(query_mod, "PAUSE_CHANNEL_TIMEOUT_SECONDS", 0.05)
+    context = _pause_context(tmp_path, select=None, prompt=prompt)
+    action, _ = await asyncio.wait_for(_handle_iterate_pause(context, _Progress()), timeout=5.0)
+    assert action == "stop"
+    assert _last_intervention(tmp_path)["detail"] == "prompt timeout"

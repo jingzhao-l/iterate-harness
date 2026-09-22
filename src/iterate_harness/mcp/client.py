@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from contextlib import AsyncExitStack
-from typing import Any, cast
+from typing import Any, Awaitable, cast
 
 import httpx2
 from mcp import ClientSession, StdioServerParameters
@@ -25,6 +25,33 @@ from iterate_harness.mcp.types import (
 
 class McpServerNotConnectedError(Exception):
     """Raised when an MCP server is not connected or its session has been lost."""
+
+
+class McpServerTimeoutError(Exception):
+    """Raised when an MCP server does not answer within the bounded window.
+
+    Mirrors the harness's bounded-await policy for the assisted-intervention
+    channel: a hung stdio/HTTP server must never wedge the agent loop, so
+    every session call is clamped by ``asyncio.wait_for``.
+    """
+
+
+#: Bounded windows applied to MCP session interactions. A server that never
+#: replies stalls the whole agent turn, so every await is clamped (design
+#: finding: MCP calls had no timeout at all — a dead server hung forever).
+MCP_INIT_TIMEOUT_SECONDS = 30.0
+MCP_LIST_TIMEOUT_SECONDS = 30.0
+MCP_CALL_TIMEOUT_SECONDS = 120.0
+MCP_RESOURCE_TIMEOUT_SECONDS = 30.0
+
+
+async def _bounded_await(awaitable: Awaitable[Any], *, seconds: float, what: str) -> Any:
+    try:
+        return await asyncio.wait_for(awaitable, timeout=seconds)
+    except asyncio.TimeoutError as exc:
+        raise McpServerTimeoutError(
+            f"MCP {what} timed out after {seconds:g}s"
+        ) from exc
 
 
 class McpClientManager:
@@ -138,7 +165,13 @@ class McpClientManager:
                 f"MCP server '{server_name}' is not connected: {detail}"
             )
         try:
-            result: CallToolResult = await session.call_tool(tool_name, arguments)
+            result: CallToolResult = await _bounded_await(
+                session.call_tool(tool_name, arguments),
+                seconds=MCP_CALL_TIMEOUT_SECONDS,
+                what=f"call tool '{tool_name}' on '{server_name}'",
+            )
+        except McpServerTimeoutError as exc:
+            raise McpServerNotConnectedError(f"MCP server '{server_name}' call timed out: {exc}") from exc
         except Exception as exc:
             raise McpServerNotConnectedError(
                 f"MCP server '{server_name}' call failed: {exc}"
@@ -168,7 +201,13 @@ class McpClientManager:
                 f"MCP server '{server_name}' is not connected: {detail}"
             )
         try:
-            result: ReadResourceResult = await session.read_resource(uri)
+            result: ReadResourceResult = await _bounded_await(
+                session.read_resource(uri),
+                seconds=MCP_RESOURCE_TIMEOUT_SECONDS,
+                what=f"read resource '{uri}' on '{server_name}'",
+            )
+        except McpServerTimeoutError as exc:
+            raise McpServerNotConnectedError(f"MCP server '{server_name}' resource read timed out: {exc}") from exc
         except Exception as exc:
             raise McpServerNotConnectedError(
                 f"MCP server '{server_name}' resource read failed: {exc}"
@@ -210,14 +249,9 @@ class McpClientManager:
                 write_stream=write_stream,
                 auth_configured=bool(config.env),
             )
-        except asyncio.CancelledError as exc:
+        except asyncio.CancelledError:
             await self._close_failed_stack(stack)
-            self._mark_connection_failed(
-                name,
-                config,
-                auth_configured=bool(config.env),
-                exc=exc,
-            )
+            raise
         except Exception as exc:
             await self._close_failed_stack(stack)
             self._mark_connection_failed(
@@ -244,14 +278,9 @@ class McpClientManager:
                 write_stream=write_stream,
                 auth_configured=bool(config.headers),
             )
-        except asyncio.CancelledError as exc:
+        except asyncio.CancelledError:
             await self._close_failed_stack(stack)
-            self._mark_connection_failed(
-                name,
-                config,
-                auth_configured=bool(config.headers),
-                exc=exc,
-            )
+            raise
         except Exception as exc:
             await self._close_failed_stack(stack)
             self._mark_connection_failed(
@@ -272,13 +301,25 @@ class McpClientManager:
         auth_configured: bool,
     ) -> None:
         session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
-        await session.initialize()
-        tool_result = await session.list_tools()
+        await _bounded_await(
+            session.initialize(),
+            seconds=MCP_INIT_TIMEOUT_SECONDS,
+            what=f"initialize '{name}'",
+        )
+        tool_result = await _bounded_await(
+            session.list_tools(),
+            seconds=MCP_LIST_TIMEOUT_SECONDS,
+            what=f"list tools on '{name}'",
+        )
         resource_result = None
         try:
-            resource_result = await session.list_resources()
+            resource_result = await _bounded_await(
+                session.list_resources(),
+                seconds=MCP_LIST_TIMEOUT_SECONDS,
+                what=f"list resources on '{name}'",
+            )
         except Exception as exc:
-            if "Method not found" not in str(exc):
+            if not (isinstance(exc, McpServerTimeoutError) or "Method not found" in str(exc)):
                 raise
         tools = [
             McpToolInfo(

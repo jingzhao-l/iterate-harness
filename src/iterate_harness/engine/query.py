@@ -451,6 +451,22 @@ def _session_permission_override(tool_metadata: dict[str, object] | None) -> str
     return None
 
 
+def _coerce_nonneg_int(value: object, *, default: int) -> int:
+    """Safely coerce a model-supplied integer slot, falling back on garbage.
+
+    A malformed value (``"1.5"``, ``"abc"``, nested dict) must never make a
+    *successful* tool call get re-recorded as an error — the caller runs the
+    containment path after ``_record_tool_carryover``.
+    """
+    try:
+        coerced = int(str(value))  # int("1.5")/None raises — handled below
+    except (TypeError, ValueError):
+        return default
+    if coerced < 0 or coerced > 10_000_000:
+        return default
+    return coerced
+
+
 def _record_tool_carryover(
     context: QueryContext,
     *,
@@ -466,8 +482,8 @@ def _record_tool_carryover(
     if resolved_file_path is not None:
         _remember_active_artifact(context.tool_metadata, resolved_file_path)
     if tool_name == "read_file" and resolved_file_path is not None:
-        offset = int(str(tool_input.get("offset") or 0))
-        limit = int(str(tool_input.get("limit") or 200))
+        offset = _coerce_nonneg_int(tool_input.get("offset"), default=0)
+        limit = _coerce_nonneg_int(tool_input.get("limit"), default=200)
         _remember_read_file(
             context.tool_metadata,
             path=resolved_file_path,
@@ -802,27 +818,24 @@ async def run_query(
                     continue
             while not progress_queue.empty():
                 yield progress_queue.get_nowait(), None
+            # Awaiting the task BOTH stores its result and re-raises a failed
+            # compaction. A compaction LLM failure must not silently leave
+            # ``last_compaction_result`` stale: the loop below would then
+            # rewrite ``messages[:]`` from a snapshot that pretends nothing
+            # happened instead of surfacing the hard failure.
             last_compaction_result = await task
-        finally:
-            # The consumer can stop early (cancellation, an unmetablock
-            # error, an escape). In that case the compaction task must never
-            # keep running in the background: it holds the shared session
-            # ``messages`` list and would keep rewriting it — and mutating
-            # ``context.tool_metadata`` — after we have yielded control,
-            # tearing state the next turn reads.
-            if task.done():
-                if not task.cancelled():
-                    exc = task.exception()
-                    if exc is not None:
-                        log.error("compaction task failed: %s", exc)
-                return
-            task.cancel()
-            try:
+        except BaseException:
+            # The consumer stopped early (cancellation, generator close, an
+            # escape). The compaction task must never keep running in the
+            # background: it holds the shared session ``messages`` list and
+            # would keep rewriting it — and mutating ``context.tool_metadata``
+            # — after we have yielded control, tearing state the next turn
+            # reads.
+            if not task.done():
+                task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
-            except BaseException:
-                log.exception("compaction task did not finish cleanly")
-        return
+            raise
 
     turn_count = 0
     # Restore an active worktree-isolation session from durable tool
@@ -1205,8 +1218,16 @@ async def run_query(
                 from iterate_harness.iterate import worktree_runtime
 
                 await worktree_runtime.finalize(context, merged=True)
+                hint = ""
+                try:
+                    from iterate_harness.iterate.checkpoint import load_checkpoint
+
+                    if load_checkpoint(context.cwd) is not None:
+                        hint = " (resume later rounds with /iterate resume)"
+                except Exception:  # noqa: BLE001 - hint is best-effort
+                    pass
                 yield StatusEvent(
-                    message=f"iterate loop stopped: {decision.stop_reason}"
+                    message=f"iterate loop stopped: {decision.stop_reason}{hint}"
                 ), None
                 return
 
@@ -1305,7 +1326,22 @@ async def _execute_tool_call(
                         "reason": decision.reason,
                     },
                 )
-            confirmed = await context.permission_prompt(tool_name, decision.reason)
+            try:
+                confirmed = await asyncio.wait_for(
+                    context.permission_prompt(tool_name, decision.reason),
+                    timeout=PAUSE_CHANNEL_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                # No answer within the intervention window: fail closed. The
+                # pause menus above resolve a hung channel the same way so a
+                # dropped/detached UI can never leave the query wedged on an
+                # unanswered deny-by-default prompt.
+                log.warning(
+                    "permission prompt timed out after %ss for %s; denying",
+                    PAUSE_CHANNEL_TIMEOUT_SECONDS,
+                    tool_name,
+                )
+                confirmed = False
             if not confirmed:
                 log.debug("permission denied by user for %s", tool_name)
                 return ToolResultBlock(
@@ -1640,6 +1676,11 @@ PAUSE_ACTION_SKIP = "skip"
 PAUSE_ACTION_NARROW = "narrow"
 PAUSE_ACTION_RESUME = "resume"
 
+#: Bounded wait for the pause intervention channel (TUI/web). Mirrors the
+#: 300s modal timeout used by the web run manager: an unresponsive client must
+#: never hard-lock the query coroutine — the loop falls back to STOP.
+PAUSE_CHANNEL_TIMEOUT_SECONDS = 300.0
+
 
 async def _handle_iterate_pause(
     context: "QueryContext",
@@ -1664,6 +1705,26 @@ async def _handle_iterate_pause(
     select_cb = context.ask_user_select
     prompt_cb = context.ask_user_prompt
     if select_cb is None and prompt_cb is None:
+        # Headless/no-channel session: never block the loop on a human that
+        # isn't there — stop cleanly AND surface the reason through the hook
+        # bus so headless operators/CI get a visible signal instead of a vain
+        # wait. (The notification is best-effort; the decision log is the
+        # durable audit trail.)
+        if context.hook_executor is not None:
+            try:
+                await context.hook_executor.execute(
+                    HookEvent.NOTIFICATION,
+                    {
+                        "event": HookEvent.NOTIFICATION.value,
+                        "notification_type": "iterate_pause",
+                        "reason": (
+                            "no interactive channel available; "
+                            "iterate would pause for review but nothing can answer — stop"
+                        ),
+                    },
+                )
+            except Exception:  # noqa: BLE001 - notifications must never break the loop
+                log.warning("iterate pause headless notification failed", exc_info=True)
         await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "headless default")
         return PAUSE_ACTION_STOP, None
     if select_cb is not None:
@@ -1688,12 +1749,22 @@ async def _handle_iterate_pause_select(
 
     try:
         answer = (
-            await select_cb(
-                prompts.pause_menu_title(round_number, new_findings, pause_reason),
-                prompts.pause_menu_options(),
+            await asyncio.wait_for(
+                select_cb(
+                    prompts.pause_menu_title(round_number, new_findings, pause_reason),
+                    prompts.pause_menu_options(),
+                ),
+                timeout=PAUSE_CHANNEL_TIMEOUT_SECONDS,
             )
             or ""
         ).strip()
+    except asyncio.TimeoutError:
+        # The intervention channel went silent (dropped TUI/web client). A
+        # never-answered pause would hard-lock the query coroutine forever,
+        # so fall back to the safe default and stop the loop.
+        log.warning("iterate pause select timed out after %ss; stopping", PAUSE_CHANNEL_TIMEOUT_SECONDS)
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "select timeout")
+        return PAUSE_ACTION_STOP, None
     except Exception:
         log.exception("iterate pause select failed; stopping the loop")
         await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "select error")
@@ -1709,7 +1780,15 @@ async def _handle_iterate_pause_select(
         dimensions = ""
         if prompt_cb is not None:
             try:
-                dimensions = (await prompt_cb(prompts.narrow_dimensions_question()) or "").strip()
+                dimensions = (
+                    await asyncio.wait_for(
+                        prompt_cb(prompts.narrow_dimensions_question()),
+                        timeout=PAUSE_CHANNEL_TIMEOUT_SECONDS,
+                    )
+                    or ""
+                ).strip()
+            except asyncio.TimeoutError:
+                log.warning("iterate narrow-dimensions prompt timed out; defaulting to resume")
             except Exception:
                 log.warning("iterate narrow-dimensions prompt failed", exc_info=True)
         if not dimensions:
@@ -1738,9 +1817,18 @@ async def _handle_iterate_pause_text(
         return PAUSE_ACTION_STOP, None
     try:
         answer = (
-            await prompt_cb(prompts.pause_menu_question(round_number, new_findings, pause_reason))
+            await asyncio.wait_for(
+                prompt_cb(prompts.pause_menu_question(round_number, new_findings, pause_reason)),
+                timeout=PAUSE_CHANNEL_TIMEOUT_SECONDS,
+            )
             or ""
         ).strip()
+    except asyncio.TimeoutError:
+        # Intervention channel went silent (dropped client / no human). Stop
+        # instead of hard-locking the query coroutine forever.
+        log.warning("iterate pause prompt timed out after %ss; stopping", PAUSE_CHANNEL_TIMEOUT_SECONDS)
+        await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "prompt timeout")
+        return PAUSE_ACTION_STOP, None
     except Exception:
         log.exception("iterate pause prompt failed; stopping the loop")
         await _log_pause_decision(context, round_number, PAUSE_ACTION_STOP, "prompt error")

@@ -131,7 +131,23 @@ class BackgroundTaskManager:
         self._tasks[task_id] = record
         self._output_locks[task_id] = asyncio.Lock()
         self._input_locks[task_id] = asyncio.Lock()
-        await self._start_process(task_id)
+        try:
+            await self._start_process(task_id)
+        except Exception:
+            # A spawn failure (bad command, missing interpreter, cwd gone,
+            # permission denied) must not leave a permanently "running" ghost
+            # record behind: list_tasks would keep showing it and callers
+            # would block on a waiter that never resolves. Mark it failed
+            # once and reap all per-task state so the manager returns to a
+            # clean state.
+            self._tasks[task_id].status = "failed"
+            self._tasks[task_id].ended_at = time.time()
+            self._tasks[task_id].return_code = -1
+            self._waiters.pop(task_id, None)
+            self._output_locks.pop(task_id, None)
+            self._input_locks.pop(task_id, None)
+            self._generations.pop(task_id, None)
+            raise
         return record
 
     async def create_agent_task(
@@ -262,12 +278,21 @@ class BackgroundTaskManager:
                 await stdin.drain()
 
     def read_task_output(self, task_id: str, *, max_bytes: int = 12000) -> str:
-        """Return the tail of a task's output file."""
+        """Return the tail of a task's output file (bounded read, never loads
+        the whole file for files larger than ``max_bytes``)."""
         task = self._require_task(task_id)
-        content = task.output_file.read_text(encoding="utf-8", errors="replace")
-        if len(content) > max_bytes:
-            return content[-max_bytes:]
-        return content
+        try:
+            size = task.output_file.stat().st_size
+        except OSError:
+            return ""
+        if size == 0:
+            return ""
+        with task.output_file.open("r", encoding="utf-8", errors="replace") as handle:
+            if size > max_bytes:
+                handle.seek(-max_bytes, os.SEEK_END)
+                # The seek may land mid-UTF-8-sequence; 'replace' handles it.
+                return handle.read()
+            return handle.read()
 
     def register_completion_listener(self, listener: CompletionListener) -> Callable[[], None]:
         """Register a callback fired whenever a task reaches a terminal state."""
@@ -287,7 +312,13 @@ class BackgroundTaskManager:
     ) -> None:
         reader = asyncio.create_task(self._copy_output(task_id, process))
         return_code = await process.wait()
-        await reader
+        try:
+            await reader
+        except Exception:
+            # Output copy failed (e.g. output file deleted mid-run). Never let
+            # that strand the task as a zombie "running" record — the exit
+            # code still drives the terminal status below.
+            log.exception("Output copy failed for task %s; finalizing on exit code", task_id)
         await _close_process_stdin(process)
 
         current_generation = self._generations.get(task_id)
@@ -312,17 +343,17 @@ class BackgroundTaskManager:
                 return
             async with self._output_locks[task_id]:
                 path = self._tasks[task_id].output_file
+                # Bound the on-disk output under the same lock that guards
+                # every append: a runaway worker must never fill the disk and
+                # the trim must never race a concurrent writer on another
+                # iteration (append rewrites the file in place). Once the file
+                # passes the cap, drop the oldest bytes so it hovers around
+                # ``_OUTPUT_CAP_BYTES``; ``read_task_output`` reads the *tail*,
+                # so the newest diagnostics must survive.
                 with path.open("ab") as handle:
                     handle.write(chunk)
-            # Bound the on-disk output: a runaway worker must never fill the
-            # disk. Once the file passes the cap, drop the oldest bytes so it
-            # hovers around ``_OUTPUT_CAP_BYTES``; ``read_task_output`` reads
-            # the *tail*, so the newest diagnostics must survive.
-            try:
                 if path.stat().st_size > _OUTPUT_CAP_BYTES * 2:
                     _trim_output_front(path)
-            except OSError:
-                pass
 
     def _require_task(self, task_id: str) -> TaskRecord:
         task = self._tasks.get(task_id)

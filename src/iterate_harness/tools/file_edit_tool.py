@@ -47,7 +47,13 @@ class FileEditTool(BaseTool[FileEditToolInput]):
         # Serialize with other write/edit tools on the same file and swap the
         # update in atomically so a crash mid-write can't truncate the file.
         from iterate_harness.utils.file_lock import exclusive_file_lock
-        from iterate_harness.utils.fs import atomic_write_text
+        from iterate_harness.utils.fs import atomic_write_text, is_regular_file
+
+        if not is_regular_file(path):
+            return ToolResult(
+                output=f"Cannot edit non-regular file ({path}) — only regular files may be edited",
+                is_error=True,
+            )
 
         with exclusive_file_lock(path.with_name(path.name + ".lock")):
             original = path.read_text(encoding="utf-8")

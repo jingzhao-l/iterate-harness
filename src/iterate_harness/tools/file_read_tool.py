@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -56,9 +57,20 @@ class FileReadTool(BaseTool[FileReadToolInput]):
             return ToolResult(output=f"Cannot read directory: {path}", is_error=True)
 
         try:
-            size = path.stat().st_size
+            st = path.stat()
         except OSError as exc:
             return ToolResult(output=f"Cannot stat file: {path} ({exc})", is_error=True)
+        if not stat.S_ISREG(st.st_mode):
+            # FIFOs / devices / sockets report st_size == 0, so the size
+            # guard below cannot protect us — read_bytes would BLOCK forever
+            # on a FIFO read end until a writer appears, freezing the whole
+            # agent loop (the event loop itself cannot be preempted by
+            # asyncio.wait_for). Reject non-regular files outright.
+            return ToolResult(
+                output=f"Cannot read non-regular file ({path}) — only regular files may be read",
+                is_error=True,
+            )
+        size = st.st_size
         if size > MAX_READ_BYTES:
             return ToolResult(
                 output=(

@@ -192,3 +192,42 @@ class TestReportFromDictRoundParsing:
         with pytest.raises(ValueError) as excinfo:
             report_from_dict(data)
         assert "rounds[0].round" in str(excinfo.value)
+
+    def test_huge_round_is_clamped_to_sane_cap(self):
+        # Defect 3: an untrusted round number (round: 999999) used to be
+        # passed through verbatim, so aggregate_rounds sized findings_by_round
+        # to ~1M entries. The clamp bounds it into [_MAX_SANE_ROUNDS] while
+        # preserving legitimate resume-run round numbers far above 20.
+        data = {
+            "mode": "dry-run",
+            "maxReviewRounds": 5,
+            "rounds": [
+                {"round": 1, "findings": [_finding_dict(severity="low")]},
+                {"round": 999999, "findings": []},
+            ],
+        }
+        report = report_from_dict(data)
+        assert report.rounds[1].round == 5  # clamped to the resolved cap
+
+    def test_huge_max_review_rounds_is_clamped(self):
+        data = {
+            "mode": "dry-run",
+            "maxReviewRounds": 999999,
+            "rounds": [{"round": 7, "findings": []}],
+        }
+        report = report_from_dict(data)
+        assert report.rounds[0].round == 7  # 7 ≤ sane cap, untouched
+        assert report.max_review_rounds == 100  # _MAX_SANE_ROUNDS
+
+    def test_resume_round_numbers_above_cap_survive_without_cap_field(self):
+        # A resumed run may report round numbers like 3 and 5 with no
+        # maxReviewRounds present: do NOT shrink them to len(rounds).
+        data = {
+            "mode": "dry-run",
+            "rounds": [
+                {"round": 3, "findings": [_finding_dict(severity="low")]},
+                {"round": 5, "findings": []},
+            ],
+        }
+        report = report_from_dict(data)
+        assert [r.round for r in report.rounds] == [3, 5]

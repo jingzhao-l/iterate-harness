@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import subprocess
 from pathlib import Path
 
@@ -54,6 +56,30 @@ async def test_file_write_read_and_edit(tmp_path: Path):
     )
     assert edit_result.is_error is False
     assert "TWO" in (tmp_path / "notes.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX named pipes")
+async def test_file_read_rejects_fifo_instead_of_blocking(tmp_path: Path):
+    """A FIFO (st_size == 0) must be rejected, never read — read_bytes on a
+    FIFO read-end blocks forever and would freeze the event loop."""
+    fifo = tmp_path / "pipe"
+    os.mkfifo(str(fifo))
+    context = ToolExecutionContext(cwd=tmp_path)
+
+    read = await asyncio.wait_for(
+        FileReadTool().execute(FileReadToolInput(path="pipe", offset=1, limit=2), context),
+        timeout=5.0,
+    )
+    assert read.is_error is True
+    assert "non-regular" in read.output
+
+    edit = await asyncio.wait_for(
+        FileEditTool().execute(FileEditToolInput(path="pipe", old_str="x", new_str="y"), context),
+        timeout=5.0,
+    )
+    assert edit.is_error is True
+    assert "non-regular" in edit.output
 
 
 @pytest.mark.asyncio

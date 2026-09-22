@@ -94,6 +94,47 @@ async def test_full_queue_drops_oldest_to_make_room(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_full_queue_keeps_priority_run_state(monkeypatch):
+    """Design §18: run-state events drive the frontend's interaction state
+    machine (paused + waitingFor = dialog). A chat flood must never evict
+    them while a disposable event is available."""
+    monkeypatch.setattr(hub_module, "_QUEUE_CAP", 3)
+    ch = ChatHub()
+    q = await ch.subscribe()
+    await ch.publish("run-state", {"state": "running"})
+    await ch.publish("chat-message", {"text": "a"})
+    await ch.publish("chat-message", {"text": "b"})
+    assert q.qsize() == 3
+
+    # Full queue: the disposable chat messages were oldest, so the second
+    # "b" (oldest room) should be dropped, not the run-state.
+    await ch.publish("chat-message", {"text": "c"})
+    assert q.qsize() == 3
+    events = [q.get_nowait() for _ in range(3)]
+    types = [e.type for e in events]
+    assert "run-state" in types
+    assert types == ["run-state", "chat-message", "chat-message"]
+
+
+@pytest.mark.asyncio
+async def test_full_priority_queue_drops_oldest_priority(monkeypatch):
+    """Extreme case: the queue is entirely run-state events. The oldest must
+    still give way so the newest transition lands (order not guaranteed)."""
+    monkeypatch.setattr(hub_module, "_QUEUE_CAP", 2)
+    ch = ChatHub()
+    q = await ch.subscribe()
+    await ch.publish("run-state", {"state": "running"})
+    await ch.publish("run-state", {"state": "paused"})
+    assert q.qsize() == 2
+
+    await ch.publish("run-state", {"state": "stopped"})
+    assert q.qsize() == 2
+    events = [q.get_nowait() for _ in range(2)]
+    assert all(e.type == "run-state" for e in events)
+    assert [e.data["state"] for e in events] == ["paused", "stopped"]
+
+
+@pytest.mark.asyncio
 async def test_full_subscriber_does_not_block_others(monkeypatch):
     monkeypatch.setattr(hub_module, "_QUEUE_CAP", 1)
     ch = ChatHub()

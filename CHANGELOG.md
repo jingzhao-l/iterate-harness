@@ -2,6 +2,89 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.4.0] - 2026-09-22
+
+### Added
+
+- **迭代暂停无头提示**（`engine/query.py`）：headless/无交互通道会话到达 iterate
+  暂停边界时，先经 hook bus 发出 `NOTIFICATION`（`notification_type=iterate_pause`，
+  说明"无通道可应答，回退安全 STOP"）再执行既有的 headless 默认停——CI/后台
+  运营不再面对无声停止（决策日志仍是持久审计）。
+- **checkpoint 续跑提示**（`engine/query.py`）：正常停止（converged / round cap /
+  budget）的 `StatusEvent` 在存在 `.iterate/checkpoint.json` 时追加
+  "resume later rounds with /iterate resume" 提示，运营者可就近接回断点续跑流程。
+
+### Changed
+
+- **停止信号溯源覆盖**（`web/run_manager.py`）：`_permission_prompt`/`_ask_user_prompt`
+  /`_ask_user_select` 全部加 `_stopping` 短路（立即 deny / 空答 / 默认选项），
+  且 finally 只在 `not self._stopping` 时补发 "running" 状态——停止路径不再反向
+  publish 一个误导性的 running；teardown 用 `asyncio.shield` 包裹
+  `_flush_assistant_buffer`/`close_runtime`/最终 run-state publish/
+  `_clear_stopping_if_owned`，CancelledError 时落位 `_stopping=True`；`_publish_chat`
+  的聊天日志落盘移出事件循环（`asyncio.to_thread`）。
+- **WebUI 状态快照缓存**（`web/events.py`）：`_build_status_payload` 每项目缓存
+  2s（`_STATUS_CACHE_TTL`，线程锁 + 最多 64 项目），多开 SSE 连接不再每个 poll
+  重复读整本 decision-log journal。
+- **hub 优先事件不再被冲刷**（`web/hub.py`）：队列满时的 drop-oldest 改为优先丢弃
+  `run-state` 以外的可弃事件（chat/progress 经 REST 可重同步）；只有队列全是
+  run-state 时才让出最旧者——`paused+waitingFor` 驱动 WebUI 交互状态机，绝不能被
+  chat 洪流静默冲掉。
+- **worktree 删除停留检查**（`web/routes/workspaces.py`）：`remove_workspace` 拒绝
+  删除项目当前活动（round ≥ 该项目最高 round）的 isolate worktree（HTTP 409），
+  防中途删除正在使用的 sandbox/MCP；`_belongs_to_project` 提为列表/删除共用。
+- **react launcher 密钥去向修正**（`ui/react_launcher.py`）：`api_key` 按
+  `api_format` 注入——openai 系置 `OPENAI_API_KEY`，否则 `ANTHROPIC_API_KEY`，
+  对齐 `settings.default_auth_source_for_provider`（此前 openai 端点被错误塞进
+  ANTHROPIC 变量，启动的会话无凭证）。
+- **bridge 日志有界**（`bridge/manager.py`）：复制的 replic be run 日志超
+  `BRIDGE_LOG_MAX_BYTES`（64MiB）按尾 `BRIDGE_LOG_TAIL_BYTES`（16MiB）就地截尾，
+  copy 循环内触发（防磁盘暴涨）。
+- **任务管理器防幽灵/僵尸**（`tasks/manager.py`）：spawn 失败不再留永久 running 的
+  ghost 记录（except 块标记 failed + 清理 waiter/locks/generations 后 re-raise）；
+  output copy 失败不再把任务钉死在 running（try/except 后仍按 exit code 落终态）；
+  `_trim_output_front` 移入 output lock 内、`read_task_output` 改 seek 尾读（不再整读）。
+- **防御快照并发锁**（`defensive/transaction.py`）：`FileTransactionBuffer` 用
+  `threading.Lock` 守卫 `_snapshots`，同路径并发 mutation（并行文件工具/工作线程）
+  不再撕裂快照字典——first-snapshot-wins 原子生效。
+- **权限敏感 read_file carryover 加固**（`engine/query.py`）：`_record_tool_carryover`
+  对模型恶意的 `offset`/`limit` 用 `_coerce_nonneg_int` 安全转 int（畸形值不再把
+  一次**成功**的 read_file 经 containment path 误判为工具错误）。
+
+### Fixed
+
+- **权限/暂停等待有界**（`engine/query.py`）：`permission_prompt` 增加与 pause 菜单
+  一致的 `PAUSE_CHANNEL_TIMEOUT_SECONDS`（300s）有界等待，超时 fail-closed 拒绝——
+  掉线的 UI 不再把 query coroutine 卡死；pause 菜单的 select/text 超时落 STOP 已有。
+- **MaxTurnsExceeded 后工具结果不再丢失**（`engine/query_engine.py`）：tool round 刚
+  结束就达 max_turns 时，`run_query` 已把 tool_result user message 追加进本地
+  `messages` 但没有再发 `AssistantTurnComplete`——新增 `_sync_after_turn` 在同一
+  事件与 `MaxTurnsExceeded` 两个路径都折回 `self._messages`，continuation 不再面对
+  unmatched tool_use（provider 会 400）；coordinator 合成上下文依旧不落历史。
+- **compaction 失败不再吞掉**（`engine/query.py`）：`_stream_compaction` 的
+  `finally:{return}` 曾静默吞掉 `await task` 的异常并保留陈旧
+  `(messages, False)`；改 try/except BaseException——正常路径传播真实失败，消费者
+  早退（取消/生成器关闭）仍先 cancel 共享 messages 上的后台 compaction 任务。
+- **runtime 关闭不再抛**（`ui/runtime.py`）：`close_runtime` 对 docker sandbox /
+  MCP manager / SESSION_END hook 逐项 try/except（teardown 失败不再跳过后续资源与
+  SESSION_END）；`build_runtime` 在 docker 启动失败时先关掉已连的 MCP 再 raise
+  （fail_if_unavailable 语义保留，不再泄漏半成品）；`handle_line` 对未预期的
+  submit 异常也容器化（log + 可见 message + 尽力快照），web 后端请求循环无 except
+  也不再被逃逸异常击穿。
+- **round 号输入钳位**（`iterate/review.py`）：`report_from_dict` 对模型返回的
+  `round`/`maxReviewRounds` clamp 到 `[1, _MAX_SANE_ROUNDS=100]`（合法续跑号码仍过，
+  但 `round: 999999` 不再让 `aggregate_rounds` 分配 ~1M 长 `findings_by_round`）。
+- **grep 回退有界**（`tools/grep_tool.py`）：Python 回退既有 `limit` 又有
+  `timeout_seconds`（`asyncio.wait_for` + `to_thread`），单行超
+  `_MAX_PY_LINE_BYTES`（8MiB）/单文件超 `_MAX_PY_FILE_BYTES`（64MiB）跳过；
+  二进制（`\0`）head 探测后跳过——灾难回溯正则/巨型 minified 不再挂死工具。
+- **sandbox 临时文件跟踪清理**（`sandbox/adapter.py` + `utils/shell.py`）：每次
+  sandbox settings 临时文件都登记进线程安全 set，`remove_runtime_settings` /
+  `clear_stale_runtime_settings` / `atexit` 确保孤儿进程/spawn 失败不再漏临时文件。
+- **iterate_review 只读语义精确化**（`tools/iterate_tools.py`）：`is_read_only`
+  对 `aggregate`（会改 `context.metadata` loop-policy 状态）返回 False，`plan`/
+  `meta-review` 返回 True。
+
 ## [2.3.0] - 2026-09-19
 
 ### Added

@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import atexit
 import json
+import logging
 import shlex
 import shutil
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from iterate_harness.config import Settings, load_settings
 from iterate_harness.platforms import get_platform, get_platform_capabilities
+
+log = logging.getLogger(__name__)
 
 
 class SandboxUnavailableError(RuntimeError):
@@ -132,7 +137,13 @@ def wrap_command_for_sandbox(
 
 
 def _write_runtime_settings(payload: dict[str, Any]) -> Path:
-    """Persist a temporary settings file for one sandboxed child process."""
+    """Persist a temporary settings file for one sandboxed child process.
+
+    The file is tracked so a child that is never reaped (spawn failure,
+    orphaned proc, hard-cancelled waiter) does not leak it into the temp dir:
+    :func:`atexit` and :func:`clear_stale_runtime_settings` both remove
+    leftovers, independent of the caller's own post-exit hook.
+    """
     tmp = tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -153,4 +164,46 @@ def _write_runtime_settings(payload: dict[str, Any]) -> Path:
         Path(tmp.name).chmod(0o600)
     except OSError:
         pass
+    with _created_settings_lock:
+        _created_settings_paths.add(tmp.name)
     return Path(tmp.name)
+
+
+#: Every settings file handed to a sandboxed child since process start, so the
+#: process-wide cleanup can reclaim files whose child was orphaned or never
+#: awaited. Guarded by ``_created_settings_lock`` (subprocess spawn happens
+#: from async code but the file may be created on either the loop or a worker
+#: thread).
+_created_settings_paths: set[str] = set()
+_created_settings_lock = threading.Lock()
+
+
+def remove_runtime_settings(path: Path) -> None:
+    """Drop one settings file (called by the watcher when the child exits)."""
+    key = str(path)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    with _created_settings_lock:
+        _created_settings_paths.discard(key)
+    log.debug("Removed sandbox runtime settings file: %s", path)
+
+
+def clear_stale_runtime_settings() -> None:
+    """Best-effort removal of every tracked settings file still on disk."""
+    with _created_settings_lock:
+        pending = list(_created_settings_paths)
+        _created_settings_paths.clear()
+    for key in pending:
+        try:
+            Path(key).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _atexit_cleanup() -> None:
+    clear_stale_runtime_settings()
+
+
+atexit.register(_atexit_cleanup)

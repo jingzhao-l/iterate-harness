@@ -145,9 +145,16 @@ class IterateValidateTool(BaseTool[BaseModel]):
     input_model = IterateValidateInput
 
     async def execute(self, arguments: BaseModel, context: ToolExecutionContext) -> ToolResult:
+        import asyncio
+
         if not isinstance(arguments, IterateValidateInput):
             return _json_output({"error": "invalid arguments"}, error=True)
-        result = validate_mod.run_validation(
+        # ``run_validation`` shells out to subprocess.run (up to timeout_ms /
+        # 1000s) — synchronous. Awaited directly it would block the event
+        # loop, stalling heartbeats, mailbox forwarding and SSE for the whole
+        # command. Offload to a worker thread.
+        result = await asyncio.to_thread(
+            validate_mod.run_validation,
             arguments.command,
             project_root=context.cwd,
             timeout_ms=arguments.timeout_ms,
@@ -262,6 +269,8 @@ class IterateReviewTool(BaseTool[BaseModel]):
     input_model = IterateReviewInput
 
     def is_read_only(self, arguments: BaseModel) -> bool:
+        if isinstance(arguments, IterateReviewInput):
+            return arguments.operation != "aggregate"
         return True
 
     async def execute(self, arguments: BaseModel, context: ToolExecutionContext) -> ToolResult:

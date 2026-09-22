@@ -39,7 +39,13 @@ class TodoWriteTool(BaseTool[TodoWriteToolInput]):
         # Serialize read-modify-write with concurrent TODO writers and swap
         # the result in atomically (never a truncated checklist).
         from iterate_harness.utils.file_lock import exclusive_file_lock
-        from iterate_harness.utils.fs import atomic_write_text
+        from iterate_harness.utils.fs import atomic_write_text, is_regular_file
+
+        if path.exists() and not is_regular_file(path):
+            return ToolResult(
+                output=f"Cannot update TODO file at non-regular file ({path}) — only regular files may be written",
+                is_error=True,
+            )
 
         path.parent.mkdir(parents=True, exist_ok=True)
         with exclusive_file_lock(path.with_name(path.name + ".lock")):

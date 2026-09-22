@@ -734,6 +734,55 @@ class TestWorkspaces:
         )
         assert response.status_code == 404
 
+    def test_remove_refuses_active_worktree(self, client: TestClient, tmp_path: Path, monkeypatch):
+        """Design §19.3: the active (highest-round) isolate worktree must never
+        be removable — it may be mid-run holding a live sandbox. Older rounds
+        of the same project still pass the staleness gate (and then 404 for
+        the missing on-disk worktree)."""
+        from iterate_harness.swarm.worktree import WorktreeInfo, WorktreeManager
+
+        async def fake_list_worktrees(_self=None):
+            return [
+                WorktreeInfo(
+                    slug="iterate-round-1",
+                    path=tmp_path / ".iterate" / "worktrees" / "iterate-round-1",
+                    branch="worktree-iterate-round-1",
+                    original_path=tmp_path,
+                    created_at=1000.0,
+                ),
+                WorktreeInfo(
+                    slug="iterate-round-2",
+                    path=tmp_path / ".iterate" / "worktrees" / "iterate-round-2",
+                    branch="worktree-iterate-round-2",
+                    original_path=tmp_path,
+                    created_at=2000.0,
+                ),
+            ]
+
+        monkeypatch.setattr(
+            WorktreeManager,
+            "list_worktrees",
+            fake_list_worktrees,
+        )
+
+        # Active (highest) round -> refused with 409.
+        response = client.post(
+            "/api/v1/workspaces/remove",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"slug": "iterate-round-2"},
+        )
+        assert response.status_code == 409
+        assert "active isolate" in response.json()["detail"]
+
+        # Stale round 1 -> staleness gate passes; falls through to the real
+        # removal, which 404s since the worktree is not on disk.
+        response = client.post(
+            "/api/v1/workspaces/remove",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={"slug": "iterate-round-1"},
+        )
+        assert response.status_code == 404
+
 
 class TestFrontendMount:
     """Verify the static-bundle resolution order (api._frontend_dir)."""

@@ -72,6 +72,41 @@ async def test_call_tool_includes_unknown_server_detail_for_unconfigured():
         await manager.call_tool("ghost", "tool", {})
 
 
+# --- bounded awaits: a hung server must never wedge the agent loop ---
+
+
+async def _never_reply(*args, **kwargs):
+    await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_times_out_when_server_hangs(monkeypatch):
+    import iterate_harness.mcp.client as client_mod
+
+    manager = McpClientManager({})
+    mock_session = AsyncMock()
+    mock_session.call_tool.side_effect = _never_reply
+    manager._sessions["hung"] = mock_session
+
+    monkeypatch.setattr(client_mod, "MCP_CALL_TIMEOUT_SECONDS", 0.05)
+    with pytest.raises(McpServerNotConnectedError, match="timed out"):
+        await asyncio.wait_for(manager.call_tool("hung", "tool", {}), timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_read_resource_times_out_when_server_hangs(monkeypatch):
+    import iterate_harness.mcp.client as client_mod
+
+    manager = McpClientManager({})
+    mock_session = AsyncMock()
+    mock_session.read_resource.side_effect = _never_reply
+    manager._sessions["hung"] = mock_session
+
+    monkeypatch.setattr(client_mod, "MCP_RESOURCE_TIMEOUT_SECONDS", 0.05)
+    with pytest.raises(McpServerNotConnectedError, match="timed out"):
+        await asyncio.wait_for(manager.read_resource("hung", "res://data"), timeout=5.0)
+
+
 # --- McpClientManager.read_resource ---
 
 
@@ -160,7 +195,7 @@ async def test_close_failed_stack_suppresses_base_exception_group_cleanup_error(
 
 
 @pytest.mark.asyncio
-async def test_connect_all_marks_http_server_failed_when_initialize_is_cancelled(monkeypatch):
+async def test_connect_all_propagates_cancellation_during_initialize(monkeypatch):
     import iterate_harness.mcp.client as client_module
     from iterate_harness.mcp.types import McpHttpServerConfig
 
@@ -183,16 +218,16 @@ async def test_connect_all_marks_http_server_failed_when_initialize_is_cancelled
         "streamable_http_client",
         lambda *args, **kwargs: _AsyncContextManager((object(), object())),
     )
-    manager._register_connected_session = AsyncMock(
+    monkeypatch.setattr(manager, "_register_connected_session", AsyncMock(
         side_effect=asyncio.CancelledError("simulated cancellation")
-    )
-
-    await manager.connect_all()
-
-    status = manager.list_statuses()[0]
-    assert status.name == "broken-http"
-    assert status.state == "failed"
-    assert "simulated cancellation" in status.detail
+    ))
+    # Cancellation during a connection attempt (shutdown / connect_all being
+    # aborted) must propagate after best-effort stack cleanup — it must never
+    # be silently converted into a "failed" server status that pretends the
+    # attempt completed. This mirrors the general CancelledError contract:
+    # only shutdown wiring swallows cancellation, never normal error paths.
+    with pytest.raises(asyncio.CancelledError):
+        await manager.connect_all()
 
 
 # --- McpToolAdapter catches error and returns ToolResult(is_error=True) ---

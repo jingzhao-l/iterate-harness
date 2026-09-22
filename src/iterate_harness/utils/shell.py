@@ -11,7 +11,7 @@ from pathlib import Path
 
 from iterate_harness.config import Settings, load_settings
 from iterate_harness.platforms import PlatformName, get_platform
-from iterate_harness.sandbox import wrap_command_for_sandbox
+from iterate_harness.sandbox import remove_runtime_settings, wrap_command_for_sandbox
 
 #: Environment variable that restores the legacy login-shell behaviour
 #: (``bash -lc`` with profile/rc sourcing) for POSIX-backed execution.
@@ -125,8 +125,7 @@ async def create_shell_subprocess(
             env=dict(env) if env is not None else None,
         )
     except Exception:
-        if cleanup_path is not None:
-            cleanup_path.unlink(missing_ok=True)
+        remove_runtime_settings(cleanup_path) if cleanup_path is not None else None
         raise
 
     if cleanup_path is not None:

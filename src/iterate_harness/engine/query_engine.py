@@ -16,6 +16,7 @@ from iterate_harness.engine.messages import ConversationMessage, TextBlock, Tool
 from iterate_harness.engine.query import (
     AskUserPrompt,
     AskUserSelect,
+    MaxTurnsExceeded,
     PermissionPrompt,
     QueryContext,
     remember_user_goal,
@@ -334,6 +335,20 @@ class QueryEngine:
         """Replace the in-memory conversation history."""
         self._messages = list(messages)
 
+    def _query_messages(self) -> tuple[list[ConversationMessage], ConversationMessage | None]:
+        """Build the provider message list for one query loop run.
+
+        The coordinator runtime context is synthetic and must be appended at
+        the END of the request, and its presence is negotiated with
+        ``run_query`` (it pops/re-appends the trailing coordinator message to
+        keep provider tool_use/tool_result ordering intact). It must NEVER be
+        persisted into :attr:`self._messages`: folding it back in makes the
+        next submit append another copy, growing the context N copies deep.
+        Return the stable history plus the coordinator message (or None) so
+        callers can separate them.
+        """
+        return list(self._messages), self._build_coordinator_context_message()
+
     def has_pending_continuation(self) -> bool:
         """Return True when the conversation ends with tool results awaiting a follow-up model turn."""
         if not self._messages:
@@ -348,6 +363,27 @@ class QueryEngine:
                 continue
             return bool(msg.tool_uses)
         return False
+
+    def _sync_after_turn(
+        self, query_messages: list[ConversationMessage], coordinator_context: ConversationMessage | None
+    ) -> None:
+        """Fold the final in-flight message list back into ``self._messages``.
+
+        ``run_query`` yields ``AssistantTurnComplete`` *before* appending the
+        tool_results user message and re-appending the synthetic coordinator
+        context to its local ``messages``. On the normal path the next turn's
+        event re-filters, but when the run ends with ``MaxTurnsExceeded``
+        right after a tool round there is no further event — without this
+        sync ``self._messages`` would stay stale, dropping the executed tool
+        results. A continuation from that history would present an unmatched
+        ``tool_use`` block, which providers reject. The coordinator message
+        stays excluded (never persisted).
+        """
+        self._messages = (
+            query_messages
+            if coordinator_context is None
+            else [m for m in query_messages if m is not coordinator_context]
+        )
 
     async def submit_message(self, prompt: str | ConversationMessage) -> AsyncIterator[StreamEvent]:
         """Append a user message and execute the query loop."""
@@ -394,16 +430,29 @@ class QueryEngine:
             reasoning_effort=self._reasoning_effort,
             defensive_kernel=self._new_defensive_kernel(),
         )
-        query_messages = list(self._messages)
-        coordinator_context = self._build_coordinator_context_message()
+        query_messages, coordinator_context = self._query_messages()
         if coordinator_context is not None:
             query_messages.append(coordinator_context)
-        async for event, usage in run_query(context, query_messages):
-            if isinstance(event, AssistantTurnComplete):
-                self._messages = list(query_messages)
-            if usage is not None:
-                self._cost_tracker.add(usage)
-            yield event
+        try:
+            async for event, usage in run_query(context, query_messages):
+                if isinstance(event, AssistantTurnComplete):
+                    # Publish the completed turn atomically. Never hand the live
+                    # list to run_query: it tears ``messages[:]`` in place during
+                    # compaction, so a concurrent reader would observe a partially
+                    # rewritten conversation. Drop the synthetic coordinator
+                    # message so the next submit does not accumulate stale copies.
+                    self._sync_after_turn(query_messages, coordinator_context)
+                if usage is not None:
+                    self._cost_tracker.add(usage)
+                yield event
+        except MaxTurnsExceeded:
+            # The loop stopped right after executing tools: run_query already
+            # appended the tool_result user message to ``query_messages`` but no
+            # further AssistantTurnComplete arrived to fold it in. Sync now so a
+            # continuation (/continue) or snapshot see the completed tool round
+            # instead of an unmatched tool_use block.
+            self._sync_after_turn(query_messages, coordinator_context)
+            raise
 
     async def continue_pending(self, *, max_turns: int | None = None) -> AsyncIterator[StreamEvent]:
         """Continue an interrupted tool loop without appending a new user message."""
@@ -427,14 +476,18 @@ class QueryEngine:
             reasoning_effort=self._reasoning_effort,
             defensive_kernel=self._new_defensive_kernel(),
         )
-        query_messages = list(self._messages)
-        async for event, usage in run_query(context, query_messages):
-            if isinstance(event, AssistantTurnComplete):
-                # Publish the completed turn atomically. Never hand the live
-                # list to run_query: it tears ``messages[:]`` in place during
-                # compaction, so a concurrent reader would observe a partially
-                # rewritten conversation.
-                self._messages = list(query_messages)
-            if usage is not None:
-                self._cost_tracker.add(usage)
-            yield event
+        query_messages, coordinator_context = self._query_messages()
+        if coordinator_context is not None:
+            query_messages.append(coordinator_context)
+        try:
+            async for event, usage in run_query(context, query_messages):
+                if isinstance(event, AssistantTurnComplete):
+                    # Same forwarding rule as submit_message: never persist the
+                    # synthetic coordinator message into the live history.
+                    self._sync_after_turn(query_messages, coordinator_context)
+                if usage is not None:
+                    self._cost_tracker.add(usage)
+                yield event
+        except MaxTurnsExceeded:
+            self._sync_after_turn(query_messages, coordinator_context)
+            raise

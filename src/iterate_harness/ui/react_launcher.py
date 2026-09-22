@@ -170,7 +170,15 @@ async def launch_react_tui(
     # Credentials travel via the environment (inherited by the backend host),
     # never through the argv or the JSON config blob.
     if api_key:
-        env["ANTHROPIC_API_KEY"] = api_key
+        # Pick the environment variable the backend actually reads for the
+        # configured wire format: openai-compatible endpoints resolve the key
+        # from OPENAI_API_KEY, the anthropic-native path from
+        # ANTHROPIC_API_KEY. Planting the key under the wrong name silently
+        # leaves the launched session without credentials.
+        if (api_format or "").strip().lower() == "openai":
+            env["OPENAI_API_KEY"] = api_key
+        else:
+            env["ANTHROPIC_API_KEY"] = api_key
     env["ITERATE_FRONTEND_CONFIG"] = json.dumps(
         {
             "backend_command": build_backend_command(

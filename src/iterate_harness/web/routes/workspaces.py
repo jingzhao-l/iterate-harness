@@ -99,16 +99,12 @@ def _primary_workspace(root: Path) -> WorkspaceView:
 
 def _worktree_view(info: Any, root: Path) -> WorkspaceView:
     """Build a workspace view for one isolate worktree."""
-    try:
-        original = Path(info.original_path).resolve()
-    except (OSError, ValueError):
-        original = Path(info.original_path)
-    belongs_to_project = original == root.resolve()
+    total = _belongs_to_project(info, root)
     return WorkspaceView(
         name=info.slug,
         path=str(info.path),
         kind="worktree",
-        active=belongs_to_project,
+        active=total,
         detail={
             "slug": info.slug,
             "branch": info.branch,
@@ -117,6 +113,15 @@ def _worktree_view(info: Any, root: Path) -> WorkspaceView:
             "round": _round_from_slug(info.slug),
         },
     )
+
+
+def _belongs_to_project(info: Any, root: Path) -> bool:
+    """Return True when a worktree's owning checkout is ``root``."""
+    try:
+        original = Path(info.original_path).resolve()
+    except (OSError, ValueError):
+        original = Path(info.original_path)
+    return original == root.resolve()
 
 
 @router.get("/workspaces", response_model=list[WorkspaceView])
@@ -181,7 +186,34 @@ async def remove_workspace(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # Design §19.3: only a *stale* isolate worktree is removable. The active
+    # (highest-round) worktree of a project may be mid-run with a live Docker
+    # sandbox and MCP sessions — deleting it mid-round tears those down while
+    # the agent still holds them. Refuse unless an older round of the same
+    # project exists to clean up instead. The guard only applies to a
+    # worktree that actually exists (a missing slug still 404s below).
     mgr = WorktreeManager()
+    try:
+        worktrees = await mgr.list_worktrees()
+    except Exception as exc:  # noqa: BLE001 - listing is best-effort
+        raise HTTPException(status_code=500, detail=f"Failed to list worktrees: {exc}") from exc
+    exists_in_project = any(info.slug == slug and _belongs_to_project(info, root) for info in worktrees)
+    if exists_in_project:
+        project_rounds = [
+            _round_from_slug(info.slug)
+            for info in worktrees
+            if _belongs_to_project(info, root)
+        ]
+        target_round = _round_from_slug(slug)
+        if target_round >= max(project_rounds, default=0):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Worktree {slug} is the active isolate of this project; only stale "
+                    "worktrees (superseded by a newer round) may be removed"
+                ),
+            )
+
     removed = await mgr.remove_worktree(slug, repo_path=root)
     if not removed:
         raise HTTPException(status_code=404, detail=f"No worktree found for slug: {slug}")

@@ -151,16 +151,24 @@ def redact_secret(key: str, value: Any) -> Any:
 
 
 def redact_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
-    """Return a deep copy of ``mapping`` with credential keys redacted."""
+    """Return a deep copy of ``mapping`` with credential keys redacted.
+
+    Recursion covers nested dicts AND any depth of nested lists (a list of
+    list-of-dicts must not slip unredacted secrets through).
+    """
     out: dict[str, Any] = {}
     for key, value in mapping.items():
-        if isinstance(value, dict):
-            out[key] = redact_mapping(value)
-        elif isinstance(value, list):
-            out[key] = [redact_mapping(v) if isinstance(v, dict) else v for v in value]
-        else:
-            out[key] = redact_secret(key, value)
+        out[key] = redact_value(key, value)
     return out
+
+
+def redact_value(key: str, value: Any) -> Any:
+    """Redact a single value, recursing through containers."""
+    if isinstance(value, dict):
+        return redact_mapping(value)
+    if isinstance(value, list):
+        return [redact_value(key, item) for item in value]
+    return redact_secret(key, value)
 
 
 class AuditLog:

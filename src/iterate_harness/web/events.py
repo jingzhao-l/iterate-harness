@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -49,8 +50,26 @@ def _resolve_project(project_root: str) -> Path:
     return root
 
 
+#: How long (seconds) a status snapshot stays cached. Multiple SSE
+#: connections (one per open WebUI tab) otherwise each re-read the whole
+#: decision log on every poll — O(connections) full journal reads per 5s.
+_STATUS_CACHE_TTL = 2.0
+_status_cache_lock = threading.Lock()
+_status_cache: dict[Path, tuple[float, dict[str, Any]]] = {}
+
+
 def _build_status_payload(project_root: Path) -> dict[str, Any]:
-    """Build a compact status snapshot for the SSE stream."""
+    """Build a compact status snapshot for the SSE stream.
+
+    The decision log is re-read on every call unless a recent snapshot for the
+    same project is still cached — a run loop appends to it, so always-fresh
+    reads would be wasteful across concurrent SSE connections.
+    """
+    now = time.monotonic()
+    with _status_cache_lock:
+        cached = _status_cache.get(project_root)
+        if cached is not None and now - cached[0] < _STATUS_CACHE_TTL:
+            return cached[1]
     entries = read_entries(project_root) or []
     checkpoint = load_checkpoint(project_root) or {}
     latest_round = max((entry.round for entry in entries), default=0)
@@ -69,7 +88,7 @@ def _build_status_payload(project_root: Path) -> dict[str, Any]:
     cost_usd = as_float(report_data.get("totalCostUsd")) or as_float(
         checkpoint.get("cost_usd", 0.0)
     )
-    return {
+    payload = {
         "entryCount": len(entries),
         "latestRound": latest_round,
         "checkpointExists": bool(checkpoint),
@@ -79,6 +98,13 @@ def _build_status_payload(project_root: Path) -> dict[str, Any]:
         "converged": converged,
         "timestamp": time.time(),
     }
+    with _status_cache_lock:
+        # Keep the cache from growing without bound across projects/sessions.
+        if len(_status_cache) > 64:
+            oldest = min(_status_cache, key=lambda key: _status_cache[key][0])
+            _status_cache.pop(oldest, None)
+        _status_cache[project_root] = (time.monotonic(), payload)
+    return payload
 
 
 def _decision_log_tail(log_path: Path, cursor: int) -> tuple[list[dict[str, Any]], int]:

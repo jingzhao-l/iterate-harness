@@ -34,6 +34,13 @@ class HubEvent:
 #: the frontend re-syncs via REST anyway).
 _QUEUE_CAP = 200
 
+#: Event types whose loss would desynchronize the frontend's interaction
+#: state machine ("paused"+waitingFor drives every permission/select/prompt
+#: dialog, and a dropped transition leaves a modal phantom on screen). These
+#: are prioritized so drop-oldest eviction never removes them while a
+#: disposable event is available.
+_PRIORITY_TYPES = frozenset({"run-state"})
+
 
 class ChatHub:
     """Fan-out hub for live WebUI events."""
@@ -63,15 +70,47 @@ class ChatHub:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                # Drop the oldest event so the newest one always lands.
+                # Full queue: drop the oldest *disposable* event first (chat /
+                # progress re-sync via REST; run-state never drops while a
+                # disposable event exists, so a paused-run prompt can't be
+                # silently lost behind a chat flood). Only when the whole
+                # queue is priority events does the oldest of those give way.
                 try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                try:
+                    self._drop_oldest_disposable(queue)
                     queue.put_nowait(event)
                 except asyncio.QueueFull:
-                    pass
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass
+
+    @staticmethod
+    def _drop_oldest_disposable(queue: asyncio.Queue[HubEvent]) -> None:
+        """Evict the oldest non-priority event; fall back to the oldest event.
+
+        Only called when the queue is full. Drains, rebuilds with one event
+        dropped, and re-queues everything (order preserved apart from the
+        eviction).
+        """
+        items: list[HubEvent] = []
+        while True:
+            try:
+                items.append(queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        drop_index = next(
+            (i for i, item in enumerate(items) if item.type not in _PRIORITY_TYPES),
+            None,
+        )
+        if drop_index is None:
+            drop_index = 0  # Only priority events: evict the oldest anyway.
+        del items[drop_index]
+        for item in items:
+            queue.put_nowait(item)
 
 
 #: Module-level singleton shared by routes + the SSE generator.
