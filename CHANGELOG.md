@@ -2,6 +2,27 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.4.1] - 2026-09-25
+
+### Fixed
+
+- **陈旧客户端版本串**（`tools/web_fetch_tool.py`、`tools/web_search_tool.py`、
+  `commands/registry.py`）：User-Agent 与 `/version`、`/upgrade` 兜底仍硬编码
+  `IterateHarness/0.1.7`/`0.1`——现已改由 `iterate_harness.__version__` 派生
+  （`importlib.metadata` 缺失时的回退也指向 `__version__`），站点与命令输出的
+  版本号不再与实际发布脱节。
+- **LSP 定位兜底逻辑错误**（`services/lsp/__init__.py`）：`extract_symbol_at_position`
+  的第二段正则兜底恒返回行内**第一个**标识符、与光标位置无关（光标落在空白/标点时
+  go-to-definition/hover 会解析到错误符号）——现改为按位置吸附最近的标识符；
+  行内无标识符时返回 `None` 而非误报。
+
+### Added
+
+- **回归测试**（`tests/test_services/test_lsp.py`、
+  `tests/test_tools/test_web_fetch_tool.py`）：新增 LSP 位置提取/吸附/越界用例，
+  并为 web_fetch/web_search 的 User-Agent 增加"必须携带当前 `__version__`"断言，
+  防止版本串再次悄然陈旧。
+
 ## [2.4.0] - 2026-09-22
 
 ### Added

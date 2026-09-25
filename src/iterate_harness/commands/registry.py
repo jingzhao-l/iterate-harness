@@ -24,6 +24,7 @@ from iterate_harness.config.paths import (
     get_project_issue_file,
     get_project_pr_comments_file,
 )
+from iterate_harness import __version__
 from iterate_harness.bridge import get_bridge_manager
 from iterate_harness.bridge.types import WorkSecret
 from iterate_harness.bridge.work_secret import build_sdk_url, decode_work_secret, encode_work_secret
@@ -108,6 +109,19 @@ class CommandContext:
 
 
 CommandHandler = Callable[[str, CommandContext], Awaitable[CommandResult]]
+
+
+def _current_version() -> str:
+    """Installed package version, falling back to the source ``__version__``.
+
+    ``importlib.metadata`` raises ``PackageNotFoundError`` for a source-tree
+    checkout; the package's ``__version__`` (single source of truth, synced at
+    release) is the correct fallback instead of a hardcoded stale string.
+    """
+    try:
+        return importlib.metadata.version("iterate_harness")
+    except importlib.metadata.PackageNotFoundError:
+        return __version__
 
 
 @dataclass
@@ -430,11 +444,7 @@ def create_default_command_registry(
 
     async def _version_handler(_: str, context: CommandContext) -> CommandResult:
         del context
-        try:
-            version = importlib.metadata.version("iterate_harness")
-        except importlib.metadata.PackageNotFoundError:
-            version = "0.1.7"
-        return CommandResult(message=f"IterateHarness {version}")
+        return CommandResult(message=f"IterateHarness {_current_version()}")
 
     async def _context_handler(_: str, context: CommandContext) -> CommandResult:
         settings = load_settings()
@@ -1743,13 +1753,9 @@ def create_default_command_registry(
 
     async def _upgrade_handler(_: str, context: CommandContext) -> CommandResult:
         del context
-        try:
-            version = importlib.metadata.version("iterate_harness")
-        except importlib.metadata.PackageNotFoundError:
-            version = "0.1.7"
         return CommandResult(
             message=(
-                f"Current version: {version}\n"
+                f"Current version: {_current_version()}\n"
                 "Upgrade instructions:\n"
                 "- uv sync --extra dev\n"
                 "- uv pip install -e .\n"

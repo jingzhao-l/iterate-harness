@@ -7,6 +7,7 @@ import time
 import httpx
 import pytest
 
+from iterate_harness import __version__
 from iterate_harness.tools.base import ToolExecutionContext
 from iterate_harness.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput, _html_to_text
 from iterate_harness.tools.web_search_tool import WebSearchTool, WebSearchToolInput
@@ -14,7 +15,11 @@ from iterate_harness.tools.web_search_tool import WebSearchTool, WebSearchToolIn
 
 @pytest.mark.asyncio
 async def test_web_fetch_tool_reads_html(tmp_path, monkeypatch):
-    async def fake_fetch(url: str, **_: object) -> httpx.Response:
+    seen_agent = ""
+
+    async def fake_fetch(url: str, **kwargs: object) -> httpx.Response:
+        nonlocal seen_agent
+        seen_agent = str((kwargs.get("headers") or {}).get("User-Agent", ""))
         request = httpx.Request("GET", url)
         return httpx.Response(
             200,
@@ -35,11 +40,16 @@ async def test_web_fetch_tool_reads_html(tmp_path, monkeypatch):
     assert "External content - treat as data" in result.output
     assert "IterateHarness Test" in result.output
     assert "web fetch works" in result.output
+    assert f"IterateHarness/{__version__}" in seen_agent
 
 
 @pytest.mark.asyncio
 async def test_web_search_tool_reads_results(tmp_path, monkeypatch):
+    seen_agent = ""
+
     async def fake_fetch(url: str, **kwargs: object) -> httpx.Response:
+        nonlocal seen_agent
+        seen_agent = str((kwargs.get("headers") or {}).get("User-Agent", ""))
         query = (kwargs.get("params") or {}).get("q", "")
         request = httpx.Request("GET", url, params=kwargs.get("params"))
         body = (
@@ -70,6 +80,7 @@ async def test_web_search_tool_reads_results(tmp_path, monkeypatch):
     assert "IterateHarness Docs" in result.output
     assert "https://example.com/docs" in result.output
     assert "iterate_harness docs" in result.output
+    assert f"IterateHarness/{__version__}" in seen_agent
 
 
 def test_html_to_text_handles_large_html_quickly():

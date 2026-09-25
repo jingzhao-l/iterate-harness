@@ -128,11 +128,22 @@ def extract_symbol_at_position(
     if not text:
         return None
     index = max(0, min((character or 1) - 1, len(text) - 1))
-    for match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text):
+    matches = list(re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text))
+    for match in matches:
         if match.start() <= index < match.end():
             return match.group(0)
-    for match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text):
-        return match.group(0)
+    # Cursor on whitespace/punctuation: snap to the nearest identifier so a
+    # click just past a symbol still resolves it for go_to_definition/hover.
+    # Prefer the identifier after the cursor, falling back to the one before.
+    if matches:
+        following = next((m for m in matches if m.start() >= index), None)
+        preceding = next((m for m in reversed(matches) if m.end() <= index), None)
+        if following and preceding:
+            return following.group(0) if (following.start() - index) <= (index - preceding.end() + 1) else preceding.group(0)
+        if following:
+            return following.group(0)
+        if preceding:
+            return preceding.group(0)
     return None
 
 

@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 from pydantic import BaseModel, Field
 
+from iterate_harness import __version__
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from iterate_harness.utils.network_guard import NetworkGuardError, fetch_public_http_response
 
@@ -46,7 +47,7 @@ class WebSearchTool(BaseTool[WebSearchToolInput]):
             response = await fetch_public_http_response(
                 endpoint,
                 params={"q": arguments.query},
-                headers={"User-Agent": "IterateHarness/0.1"},
+                headers={"User-Agent": f"IterateHarness/{__version__}"},
                 timeout=20.0,
             )
             response.raise_for_status()
