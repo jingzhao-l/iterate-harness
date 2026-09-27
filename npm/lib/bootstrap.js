@@ -91,6 +91,73 @@ const WHEEL_ASSET_SUFFIX = "-py3-none-any.whl";
 const DEFAULT_ARTIFACT_EXT = ".tar.gz";
 const WHEEL_ARTIFACT_EXT = ".whl";
 
+// Authenticity (defense-in-depth on top of SHA256): every GitHub release also
+// publishes a detached ASCII-armored GPG signature (`<artifact>.asc`) next to
+// the wheel. Verified best-effort when a local `gpg` binary exists.
+const GPG_SIGNATURE_ASSET_SUFFIX = ".asc";
+
+// ASCII-armored GPG public key of the iterate signing identity
+// (uid: jingzhao-l (sign-github) <ET_lin@outlook.com>, key
+// 0929EA31DF4F7429F63FC53189D88B1D043A1298) — the same key embedded in the
+// iterate-skill-installer. Must stay in sync with the GPG_PRIVATE_KEY repo
+// secret used by the release workflow; re-keying the release requires updating
+// this constant in the same release.
+const ITERATE_SIGNING_PUBLIC_KEY = [
+  '-----BEGIN PGP PUBLIC KEY BLOCK-----',
+  '',
+  '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',
+  'YVXa4IEQs7aBxKO+n+T2AvUYiKQ=',
+  '=DYXk',
+  '-----END PGP PUBLIC KEY BLOCK-----',
+].join("\n");
+
 const MIN_PYTHON_MAJOR = 3;
 const MIN_PYTHON_MINOR = 10;
 
@@ -397,6 +464,59 @@ async function verifyDownloadedArtifact(url, filePath, fetchChecksum, noVerify) 
     );
   }
   return true;
+}
+
+// Best-effort GPG authenticity check (defense-in-depth layered on top of the
+// hard SHA256 gate). The GitHub release publishes a detached ASCII-armored
+// signature (`<artifact>.asc`) next to the wheel; when a local `gpg` binary is
+// present we verify the downloaded artifact against the embedded signing key in
+// an isolated GNUPGHOME (never touching the user's keyring or agent). If gpg is
+// absent or the signature asset is missing we degrade to a warning and continue
+// — SHA256 already guarantees integrity; GPG adds authenticity without ever
+// blocking the install. Never throws; the whole check is best-effort.
+async function verifyGpgSignatureBestEffort(url, artifactPath, download) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "iterate-harness-gpg-"));
+  try {
+    const ascPath = path.join(tmpDir, "signature.asc");
+    try {
+      await download(`${url}${GPG_SIGNATURE_ASSET_SUFFIX}`, ascPath);
+    } catch (error) {
+      process.stderr.write(
+        `[iterate-harness] gpg: no signature asset at ${url}${GPG_SIGNATURE_ASSET_SUFFIX} (${error.message}); skipping (SHA256 still enforced)\n`
+      );
+      return;
+    }
+    const gpgHome = path.join(tmpDir, "gnupg");
+    fs.mkdirSync(gpgHome, { recursive: true, mode: 0o700 });
+    const keyPath = path.join(tmpDir, "pubkey.asc");
+    fs.writeFileSync(keyPath, ITERATE_SIGNING_PUBLIC_KEY, "utf8");
+    const imported = spawnSync(
+      "gpg",
+      ["--homedir", gpgHome, "--batch", "--yes", "--quiet", "--no-autostart", "--import", keyPath],
+      { encoding: "utf8" }
+    );
+    if (imported.error) {
+      process.stderr.write(
+        `[iterate-harness] gpg unavailable (${imported.error.message}); skipping signature check (SHA256 still enforced)\n`
+      );
+      return;
+    }
+    const verified = spawnSync(
+      "gpg",
+      ["--homedir", gpgHome, "--batch", "--quiet", "--no-autostart", "--verify", ascPath, artifactPath],
+      { encoding: "utf8" }
+    );
+    if (verified.status === 0) {
+      process.stdout.write("[iterate-harness] ✓ GPG signature verified\n");
+    } else {
+      const detail = (verified.stderr || "").trim() || `gpg exited ${verified.status}`;
+      process.stderr.write(
+        `[iterate-harness] ⚠ GPG signature could NOT be verified (${detail}); SHA256 still enforced, re-run if this persists\n`
+      );
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 // Infer the on-disk extension (for the cache file) from a download URL so
@@ -867,6 +987,9 @@ async function installRemoteArtifact(
   // These are bytes we fetched ourselves, so we own their integrity: check the
   // published SHA256 sidecar before handing the file to pip.
   await verifyDownloadedArtifact(url, cachePath, checksumFetcher, noVerify);
+  // Authenticity (best-effort) on top of the integrity gate (only exists on the
+  // GitHub wheel asset, so layered here rather than inside the SHA256 verifier).
+  await verifyGpgSignatureBestEffort(url, cachePath, downloader);
   await runStepFn(python, pipInstallArgs(cachePath), signal);
 }
 
