@@ -93,12 +93,33 @@ jobs:
           done < /tmp/checksums.txt
           cat *.sha256
 
+      - name: Sign wheel with GPG (best-effort)
+        # Only runs when the repo secrets GPG_PRIVATE_KEY/GPG_PASSPHRASE are
+        # set. Imports the signing key and emits detached ASCII-armored *asc
+        # signatures alongside each wheel, so consumers can verify authenticity
+        # (not just integrity). Skips silently otherwise.
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_INPUT_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          mkdir -p "$HOME/.gnupg" && chmod 700 "$HOME/.gnupg"
+          printf '%s\n' "allow-loopback-pinentry" >> "$HOME/.gnupg/gpg-agent.conf"
+          gpgconf --kill gpg-agent
+          printf '%s\n' "$GPG_INPUT_KEY" | gpg --batch --yes --import
+          for f in dist/*.whl; do
+            gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "$GPG_PASSPHRASE" --detach-sign --armor "$f"
+          done
+          ls -la dist/*.asc
+
       - name: Upload wheel and checksum to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.whl
             dist/*.whl.sha256
+            dist/*.whl.asc
 
       - name: Publish wheel to PyPI (iff token configured)
         # Primary install channel for the npm wrapper is the official PyPI
