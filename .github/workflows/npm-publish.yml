@@ -1,0 +1,51 @@
+name: npm publish (iterate-harness)
+
+# Publishes the iterate-harness npm wrapper from this (independent) repository.
+#
+# The registration in package.json points at THIS repo so that npm Provenance
+# binds the published package to a build in jingzhao-l/iterate-harness:
+#
+#   package         -> repo(workflow file)
+#   iterate-harness -> jingzhao-l/iterate-harness(.github/workflows/npm-publish.yml)
+#
+# Ordering note: the wrapper's install hook pip-resolves the `iterate-harness`
+# wheel from PyPI / the GitHub release. If this workflow races the
+# build-wheel-upload job (also triggered on `release: published`), an install
+# started right at that instant may briefly fall back to the lazy
+# `ih` first-run bootstrap, which retries on demand — installs never hard-fail
+# on a missing wheel. For a clean full release, run `build-wheel-upload` first
+# or dispatch this job manually after the wheel is confirmed on PyPI.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read    # read the tagged tree; writes nothing back
+  id-token: write   # OIDC token for `npm publish --provenance`
+
+concurrency:
+  group: npm-publish-iterate-harness
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish with provenance
+        working-directory: npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
