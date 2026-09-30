@@ -25,14 +25,20 @@ on:
   # so operators can dispatch this workflow on an existing tag instead:
   #   gh workflow run release.yml --ref v1.12.11
   workflow_dispatch:
-  # Third entry point, and the one that actually works unattended:
-  # `release-on-tag.yml` calls this workflow as a reusable workflow when a `v*`
-  # tag is pushed. A `uses:` call is a normal job rather than an event, so it is
-  # not blocked by the rule that a GITHUB_TOKEN may not start other workflows
-  # (the API `workflows/…/dispatches` fallback 403s for exactly that reason).
-  # The `release` event did not fire at all for v2.5.0 even after its Release
-  # was created, so the tag push now calls the build directly.
-  workflow_call:
+  # The path that actually works unattended, and the one v2.5.0 had to use:
+  # pushing a `v*` tag. The first step of the job below creates the Release
+  # (idempotently); the rest builds, signs, uploads and publishes it.
+  #
+  # It has to live here because the alternatives need credentials this workflow
+  # does not have: a Release created with GITHUB_TOKEN does NOT emit
+  # `release: published` (GitHub suppresses workflow triggers caused by
+  # GITHUB_TOKEN), so the event trigger above stays silent whenever the Release
+  # is machine-created — and dispatching this workflow over REST
+  # (`gh workflow run`, or `actions/workflows/release.yml/dispatches`) returns
+  # 403 for the same reason. Pushing a tag needs no token at all.
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -42,6 +48,37 @@ jobs:
     name: Build wheel and upload to release
     runs-on: ubuntu-latest
     steps:
+      - name: Create the GitHub Release for the tag
+        # Tag-push path only; on `release`/dispatch the Release already exists.
+        # Idempotent, so re-pushing a tag re-runs the build without replacing a
+        # Release someone may have edited. Notes come from the annotated tag
+        # message (the text written when tagging) so publishing never needs a
+        # second copy of them; lightweight tags fall back to --generate-notes.
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "release for $TAG already exists — keeping it"
+            exit 0
+          fi
+
+          notes=""
+          if sha="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null)"; then
+            if [ "$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type')" = "tag" ]; then
+              notes="$(gh api "repos/$REPO/git/tags/$sha" --jq '.message' 2>/dev/null || true)"
+            fi
+          fi
+
+          if [ -n "$notes" ]; then
+            gh release create "$TAG" --repo "$REPO" --title "iterate-harness $TAG" --notes "$notes"
+          else
+            gh release create "$TAG" --repo "$REPO" --title "iterate-harness $TAG" --generate-notes
+          fi
+
       - name: Checkout tagged tree
         uses: actions/checkout@v4
         with:
@@ -102,15 +139,21 @@ jobs:
           cat *.sha256
 
       - name: Sign wheel with GPG (best-effort)
-        # Only runs when the repo secrets GPG_PRIVATE_KEY/GPG_PASSPHRASE are
-        # set. Imports the signing key and emits detached ASCII-armored *asc
-        # signatures alongside each wheel, so consumers can verify authenticity
-        # (not just integrity). Skips silently otherwise.
-        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        # Emits detached ASCII-armored *asc* signatures alongside each wheel, so
+        # consumers can verify authenticity (not just integrity). Skips silently
+        # when the repo secrets are not configured.
+        # NOTE: gate inside the run script, not with `if: ${{ secrets.X }}` — the
+        # `secrets` context is not usable in `if:` (fd72b39: doing that made the
+        # PyPI step silently never run), and reintroducing it here is what kept
+        # this workflow from running at all.
         env:
           GPG_INPUT_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
+          if [ -z "$GPG_INPUT_KEY" ]; then
+            echo "GPG_PRIVATE_KEY secret not configured; skipping wheel signing"
+            exit 0
+          fi
           mkdir -p "$HOME/.gnupg" && chmod 700 "$HOME/.gnupg"
           printf '%s\n' "allow-loopback-pinentry" >> "$HOME/.gnupg/gpg-agent.conf"
           gpgconf --kill gpg-agent
