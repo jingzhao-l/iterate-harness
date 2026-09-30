@@ -73,6 +73,48 @@ async def test_prompt_hook_can_block(tmp_path: Path):
     assert result.reason == "blocked by policy"
 
 
+@pytest.mark.asyncio
+async def test_prompt_hook_timeout_degrades_to_failure(tmp_path: Path):
+    """Regression: a prompt/agent hook is an inline LLM call in front of a
+    tool call. A hung model stream used to take the whole turn down; it must
+    now be bounded by ``timeout_seconds`` and degrade to a contained failure.
+    """
+    import asyncio
+
+    class HangingApiClient:
+        async def stream_message(self, request):
+            del request
+            await asyncio.sleep(3600)
+            yield ApiMessageCompleteEvent(
+                message=ConversationMessage(role="assistant", content=[TextBlock(text="{}")]),
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                stop_reason=None,
+            )
+
+    registry = HookRegistry()
+    registry.register(
+        HookEvent.PRE_TOOL_USE,
+        PromptHookDefinition(prompt="Check tool", matcher="bash", timeout_seconds=1),
+    )
+    executor = HookExecutor(
+        registry,
+        HookExecutionContext(cwd=tmp_path, api_client=HangingApiClient(), default_model="claude-test"),
+    )
+
+    import time
+
+    start = time.monotonic()
+    result = await executor.execute(
+        HookEvent.PRE_TOOL_USE,
+        {"tool_name": "bash", "tool_input": {"command": "sleep"}},
+    )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 10, "hook must not hang past its timeout"
+    assert result.results[0].success is False
+    assert "timed out" in result.results[0].reason or "hook failed" in result.results[0].reason
+
+
 # ---------------------------------------------------------------------------
 # _inject_arguments shell escaping
 # ---------------------------------------------------------------------------

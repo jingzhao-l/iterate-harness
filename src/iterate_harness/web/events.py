@@ -32,6 +32,7 @@ from ..iterate.checkpoint import load_checkpoint
 from ..iterate.decision_log import read_entries
 from ._coerce import as_finite, as_float, as_int
 from .hub import hub
+from .security import allowed_roots, root_is_allowed
 
 router = APIRouter(tags=["events"])
 
@@ -47,6 +48,19 @@ def _resolve_project(project_root: str) -> Path:
     root = Path(project_root) if project_root else Path.cwd()
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
+    if not root.is_dir():
+        raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
+    # ``project_root`` is caller-controlled, so containment inside the root is
+    # not enough on its own: without this the parameter *selects* the root, and
+    # a valid token granted read/write over any directory on the machine.
+    if not root_is_allowed(root):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Project root is outside the roots this WebUI serves: {root}. "
+                f"Allowed: {', '.join(sorted(allowed_roots())) or '(none)'}"
+            ),
+        )
     return root
 
 
@@ -159,8 +173,31 @@ def _decision_log_tail(log_path: Path, cursor: int) -> tuple[list[dict[str, Any]
         return [], 0
 
 
+def _sse_frame(event_type: str, data: Any, event_id: int | None = None) -> str:
+    """Render one Server-Sent Event frame.
+
+    ``id:`` is emitted for every event so a reconnecting ``EventSource`` sends
+    the last id it saw back in ``Last-Event-ID``, which lets the stream (and
+    the client) reason about gaps instead of silently restarting from nothing.
+    The frame order (``id`` → ``event`` → ``data``) matches the SSE spec; the
+    id is a plain integer counter maintained by :func:`_event_generator`.
+    """
+    lines: list[str] = []
+    if event_id is not None:
+        lines.append(f"id: {event_id}")
+    lines.append(f"event: {event_type}")
+    lines.append(f"data: {json.dumps(data, ensure_ascii=False)}")
+    return "\n".join(lines) + "\n\n"
+
+
 async def _event_generator(project_root: Path, stream_all: bool) -> Any:
-    """Async generator interleaving hub events with periodic file snapshots."""
+    """Async generator interleaving hub events with periodic file snapshots.
+
+    Each emitted event carries a monotonically increasing ``id:`` so a
+    reconnecting ``EventSource`` can send ``Last-Event-ID`` back and both sides
+    can detect a gap (and so the browser can resume rather than treat the
+    stream as wholly new).
+    """
     log_path = project_root / ".iterate" / "decision-log.jsonl"
     try:
         cursor = 0 if not log_path.exists() else log_path.stat().st_size
@@ -169,8 +206,12 @@ async def _event_generator(project_root: Path, stream_all: bool) -> Any:
         # stat() calls (or mid-stream by a concurrent cleanup); re-anchor at 0
         # rather than letting the whole SSE stream die with an OSError.
         cursor = 0
-    queue = await hub.subscribe()
+    # Scoped subscription: this generator reports one project, so it must only
+    # ever see that project's live events. An unscoped subscription made a tab
+    # watching project B mirror project A's run state and chat.
+    queue = await hub.subscribe(str(project_root))
     last_flush = 0.0
+    event_id = 0
     try:
         while True:
             # 1) Drain live hub events (chat / run-state / progress) promptly.
@@ -178,23 +219,28 @@ async def _event_generator(project_root: Path, stream_all: bool) -> Any:
             #    steady event stream can never starve the status push.
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=_HUB_WAKEUP)
-                yield f"event: {event.type}\ndata: {json.dumps(event.data, ensure_ascii=False)}\n\n"
+                event_id += 1
+                yield _sse_frame(event.type, event.data, event_id)
             except asyncio.TimeoutError:
                 pass
 
-            # 2) Periodic status snapshot + decision-log tail.
+            # 2) Periodic status snapshot + decision-log tail. Both read the
+            #    whole journal and parse it, so they run on a worker thread: a
+            #    big decision log made this generator block the event loop,
+            #    which froze *every* connection's live events during the read.
             now = time.monotonic()
             if now - last_flush >= _POLL_INTERVAL:
                 last_flush = now
-                status = _build_status_payload(project_root)
-                yield f"event: status\ndata: {json.dumps(status, ensure_ascii=False)}\n\n"
+                status = await asyncio.to_thread(_build_status_payload, project_root)
+                event_id += 1
+                yield _sse_frame("status", status, event_id)
                 if stream_all:
-                    entries, cursor = _decision_log_tail(log_path, cursor)
+                    entries, cursor = await asyncio.to_thread(
+                        _decision_log_tail, log_path, cursor
+                    )
                     if entries:
-                        yield (
-                            "event: decision-log\n"
-                            f"data: {json.dumps(entries, ensure_ascii=False)}\n\n"
-                        )
+                        event_id += 1
+                        yield _sse_frame("decision-log", entries, event_id)
     finally:
         await hub.unsubscribe(queue)
 

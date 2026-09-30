@@ -98,19 +98,34 @@ def serve_report(
     if not report_dir.is_dir():
         raise NotADirectoryError(f"Report directory not found: {report_dir}")
 
+    served: list[str] = []
+
     class _BoundReportHandler(_ReportHandler):
+        # ``served`` is a per-call list bound as a closure cell below, so the
+        # oneshot path can tell "a request was actually handled" from "the
+        # server just hit its idle timeout".
         pass
+
     _BoundReportHandler._report_directory = str(report_dir)
     handler_class = _BoundReportHandler
-    handler_class.extensions_map.update(
-        {
-            ".html": "text/html; charset=utf-8",
-            ".css": "text/css; charset=utf-8",
-            ".js": "application/javascript; charset=utf-8",
-            ".svg": "image/svg+xml",
-            ".json": "application/json; charset=utf-8",
-        }
-    )
+    # ``SimpleHTTPRequestHandler.extensions_map`` is a *shared mutable class
+    # attribute*: ``handler_class.extensions_map.update(...)`` writes through
+    # to the stdlib base, permanently changing MIME types for every other
+    # SimpleHTTPRequestHandler in the process (a second report server, a test,
+    # an unrelated tool). Bind a fresh dict to the subclass instead.
+    handler_class.extensions_map = {
+        **_ReportHandler.extensions_map,
+        ".html": "text/html; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".js": "application/javascript; charset=utf-8",
+        ".svg": "image/svg+xml",
+        ".json": "application/json; charset=utf-8",
+    }
+    def _tracking_do_GET(self: _ReportHandler) -> None:
+        served.append(self.path)
+        return _ReportHandler.do_GET(self)
+
+    handler_class.do_GET = _tracking_do_GET  # type: ignore[method-assign]
 
     server = http.server.HTTPServer(
         ("127.0.0.1", port),
@@ -137,9 +152,19 @@ def serve_report(
     try:
         if oneshot:
             server.handle_request()
-            print("Request served; stopping (pass --serve-persist for a persistent server).")
-        else:
-            server.serve_forever()
+            if served:
+                print(
+                    "Request served; stopping "
+                    "(pass --serve-persist for a persistent server)."
+                )
+            else:
+                # ``handle_request`` also returns on ``server.timeout`` with no
+                # request at all. The old message claimed a request had been
+                # served, so a headless/remote run looked successful.
+                print(
+                    f"No request received within {_SERVER_TIMEOUT:.0f}s; "
+                    "stopping (pass --serve-persist for a persistent server)."
+                )
     except KeyboardInterrupt:
         print("\nReport server stopped.")
     finally:

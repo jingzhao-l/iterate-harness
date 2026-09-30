@@ -20,6 +20,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,8 +37,18 @@ _LOOPBACK_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 AUDIT_DIR = ".iterate"
 AUDIT_FILE = "web-audit.jsonl"
 
-#: Prefixes a value must not carry for it to be considered a secret.
-_SECRET_SUFFIXES = ("key", "token", "secret", "password", "credential")
+#: Key *words* that mark a value as a credential. Matched on token boundaries
+#: (underscore / camelCase / dot), not as a raw substring: the previous
+#: ``"key" in lowered`` test redacted ``tokenBudget``, ``maxTokens``,
+#: ``keyword_filters`` and even ``monkey``, so a user's non-secret YAML came
+#: back masked in the config editor and in any copy of it.
+_SECRET_WORDS = ("key", "token", "secret", "password", "passwd", "credential", "apikey")
+
+#: A key is a credential when any of its words matches a secret word.
+_SECRET_KEY_PATTERN = re.compile(
+    r"(?:^|[^a-z0-9])(" + "|".join(_SECRET_WORDS) + r")s?(?:[^a-z0-9]|$)",
+    re.IGNORECASE,
+)
 
 #: Prefix produced by :func:`redact_secret` for redacted credential values.
 #: The config write-back restores the original value whenever it sees this
@@ -133,6 +144,68 @@ def resolve_within(base: str | Path, candidate: str, *parts: str) -> Path:
     return resolved
 
 
+#: Roots the WebUI is allowed to read/write, populated by
+#: :func:`iterate_harness.web.api.create_app` from the ``project_root`` the
+#: server was started with. ``None`` means "not pinned" (any existing
+#: directory), which is only the case when the app is embedded without a
+#: fixed project — a token in hand then grants read/write over the whole
+#: filesystem, since every route takes ``project_root`` as a parameter and
+#: ``resolve_within`` only guards traversal *inside* the chosen root.
+_ALLOWED_ROOTS: set[str] = set()
+#: Escape hatch: opt back out of root pinning (embedding / tooling).
+ALLOW_ANY_ROOT_ENV = "ITERATE_HARNESS_WEBUI_ALLOW_ANY_ROOT"
+
+
+def set_allowed_roots(roots: list[str | Path] | None) -> None:
+    """Pin the set of project roots the API may operate on."""
+    if not roots:
+        _ALLOWED_ROOTS.clear()
+        return
+    _ALLOWED_ROOTS.clear()
+    for root in roots:
+        try:
+            _ALLOWED_ROOTS.add(str(Path(root).resolve()))
+        except (OSError, RuntimeError):  # pragma: no cover - exotic paths
+            continue
+
+
+def allowed_roots() -> frozenset[str]:
+    """Return the pinned roots (empty = unpinned)."""
+    return frozenset(_ALLOWED_ROOTS)
+
+
+def root_is_allowed(root: Path) -> bool:
+    """True when ``root`` may be operated on by the WebUI."""
+    if not _ALLOWED_ROOTS:
+        return True
+    if os.environ.get(ALLOW_ANY_ROOT_ENV) == "1":
+        return True
+    try:
+        resolved = str(root.resolve())
+    except (OSError, RuntimeError):  # pragma: no cover - exotic paths
+        resolved = str(root)
+    if resolved in _ALLOWED_ROOTS:
+        return True
+    # Allow a subdirectory (a worktree of the configured root) but never a
+    # sibling, a parent, or a symlink that escapes.
+    return any(
+        resolved == base or resolved.startswith(base + os.sep)
+        for base in _ALLOWED_ROOTS
+    )
+
+
+def _is_secret_key(key: str) -> bool:
+    """True when ``key`` names a credential (word-boundary match).
+
+    Camel case is normalized first so ``apiKey`` / ``maxTokens`` are judged on
+    their words: ``apiKey`` is a secret, ``maxTokens`` is a budget.
+    """
+    if not key:
+        return False
+    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    return _SECRET_KEY_PATTERN.search(normalized) is not None
+
+
 def redact_secret(key: str, value: Any) -> Any:
     """Return a safe-to-echo representation of a config value.
 
@@ -142,8 +215,7 @@ def redact_secret(key: str, value: Any) -> Any:
     its ``<redacted:`` prefix so the config write-back restores the original
     value when the (redacted) editor saves.
     """
-    lowered = (key or "").lower()
-    if any(suffix in lowered for suffix in _SECRET_SUFFIXES) and isinstance(value, str):
+    if _is_secret_key(key) and isinstance(value, str):
         if not value:
             return ""
         return "<redacted:redacted>"

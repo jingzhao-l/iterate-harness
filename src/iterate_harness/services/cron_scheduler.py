@@ -345,12 +345,37 @@ async def run_scheduler_loop(*, once: bool = False) -> None:
                 # Track in-flight tasks so they can be cancelled on shutdown
                 tasks = {asyncio.create_task(execute_job(job)) for job in due}
                 in_flight.update(tasks)
+                # A plain ``await gather(...)`` is uninterruptible: the tick
+                # loop could not observe the shutdown signal until every due
+                # job finished, so a SIGTERM during a 20-minute run left the
+                # scheduler alive and its child unreaped until the external
+                # SIGKILL landed. Race the jobs against the shutdown event and
+                # cancel the stragglers the moment it fires.
+                gather_task = asyncio.ensure_future(
+                    asyncio.gather(*tasks, return_exceptions=True)
+                )
+                shutdown_task = asyncio.ensure_future(shutdown.wait())
                 try:
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    done, _pending = await asyncio.wait(
+                        {gather_task, shutdown_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if shutdown_task in done and not gather_task.done():
+                        logger.info(
+                            "Shutdown requested with %d job(s) still running; cancelling",
+                            sum(1 for t in tasks if not t.done()),
+                        )
+                        for task in tasks:
+                            task.cancel()
+                    results = await gather_task
                 finally:
+                    shutdown_task.cancel()
                     in_flight.difference_update(tasks)
                 for result in results:
                     if isinstance(result, BaseException):
+                        if isinstance(result, asyncio.CancelledError):
+                            logger.info("Cron job cancelled during shutdown")
+                            continue
                         logger.error("Unexpected error executing cron job: %s", result)
 
             if once:

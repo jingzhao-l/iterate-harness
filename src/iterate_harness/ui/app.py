@@ -218,8 +218,15 @@ async def run_print_mode(
     verbose: bool | None = None,
     allowed_tools: Iterable[str] | None = None,
     disallowed_tools: Iterable[str] | None = None,
+    admin_opt_in: bool = False,
 ) -> None:
-    """Non-interactive mode: submit prompt, stream output, exit."""
+    """Non-interactive mode: submit prompt, stream output, exit.
+
+    This is the model/orchestrator-driven surface: the prompt arrives as an
+    argument rather than from a human typing at the console.  Local-management
+    slash commands (``remote_invocable=False``) are therefore refused unless
+    ``admin_opt_in=True`` explicitly opts in.
+    """
     from iterate_harness.engine.stream_events import (
         AssistantTextDelta,
         AssistantTurnComplete,
@@ -372,6 +379,8 @@ async def run_print_mode(
             print_system=_print_system,
             render_event=_render_event,
             clear_output=_clear_output,
+            remote_context=True,
+            remote_admin_opt_in_requested=admin_opt_in,
         )
         if is_coordinator_mode():
             await drain_coordinator_async_agents(

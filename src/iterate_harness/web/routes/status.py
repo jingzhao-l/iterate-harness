@@ -18,7 +18,7 @@ from ...iterate.config_loader import load_effective_config
 from ...iterate.decision_log import DecisionLogEntry, read_entries
 from ...iterate.last_state import summarize_last_run
 from .._coerce import as_finite, as_float, as_int, as_list
-from ..security import read_audit_entries
+from ..security import allowed_roots, read_audit_entries, root_is_allowed
 from ..schemas import StatusResponse
 
 router = APIRouter(tags=["status"])
@@ -144,6 +144,19 @@ def get_status(project_root: str = "") -> StatusResponse:
     root = Path(project_root) if project_root else Path.cwd()
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
+    if not root.is_dir():
+        raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
+    # ``project_root`` is caller-controlled, so containment inside the root is
+    # not enough on its own: without this the parameter *selects* the root, and
+    # a valid token granted read/write over any directory on the machine.
+    if not root_is_allowed(root):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Project root is outside the roots this WebUI serves: {root}. "
+                f"Allowed: {', '.join(sorted(allowed_roots())) or '(none)'}"
+            ),
+        )
 
     entries = read_entries(root)
     last_run = summarize_last_run(str(root))

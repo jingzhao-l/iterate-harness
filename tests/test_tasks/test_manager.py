@@ -231,3 +231,132 @@ async def test_completion_listener_fires_when_task_finishes(tmp_path: Path, monk
     await asyncio.wait_for(done.wait(), timeout=30)
 
     assert seen == [(task.id, "completed", 0)]
+
+
+# ---------------------------------------------------------------------------
+# In-process task registration (swarm in-process backend bridge)
+# ---------------------------------------------------------------------------
+
+
+async def _noop_abort() -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_register_in_process_task_record(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    manager = BackgroundTaskManager()
+
+    record = manager.register_in_process_task(
+        "in_process_abc",
+        task_type="in_process_teammate",
+        description="teammate",
+        cwd=str(tmp_path),
+        prompt="do the thing",
+        agent_id="worker@test",
+        team="test",
+        abort=_noop_abort,
+    )
+
+    assert manager.get_task("in_process_abc") is record
+    assert record.status == "running"
+    assert record.type == "in_process_teammate"
+    assert record.prompt == "do the thing"
+    assert record.metadata["agent_id"] == "worker@test"
+    assert record.metadata["team"] == "test"
+    # No subprocess artifacts are created for an in-process task.
+    assert "in_process_abc" not in manager._processes  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_write_to_task_in_process_routes_to_mailbox(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    manager = BackgroundTaskManager()
+    manager.register_in_process_task(
+        "in_process_abc",
+        task_type="in_process_teammate",
+        description="teammate",
+        cwd=str(tmp_path),
+        agent_id="worker@test",
+        team="test",
+        abort=_noop_abort,
+    )
+
+    await manager.write_to_task("in_process_abc", "do the thing")
+
+    from iterate_harness.swarm.mailbox import TeammateMailbox
+
+    mailbox = TeammateMailbox(team_name="test", agent_id="worker@test")
+    messages = await mailbox.read_all(unread_only=False)
+    assert any(m.payload.get("content") == "do the thing" for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_stop_task_in_process_calls_abort_and_finalizes(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    manager = BackgroundTaskManager()
+    cancelled: list[bool] = []
+
+    async def _abort() -> None:
+        cancelled.append(True)
+
+    manager.register_in_process_task(
+        "in_process_abc",
+        task_type="in_process_teammate",
+        description="teammate",
+        cwd=str(tmp_path),
+        agent_id="worker@test",
+        team="test",
+        abort=_abort,
+    )
+
+    record = await manager.stop_task("in_process_abc")
+    assert record.status == "killed"
+    assert cancelled == [True]
+    assert record.ended_at is not None
+
+
+@pytest.mark.asyncio
+async def test_mark_in_process_terminal_fires_listener_and_keeps_killed(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    manager = BackgroundTaskManager()
+    manager.register_in_process_task(
+        "in_process_abc",
+        task_type="in_process_teammate",
+        description="teammate",
+        cwd=str(tmp_path),
+        agent_id="worker@test",
+        team="test",
+        abort=_noop_abort,
+    )
+    fired: list[str] = []
+
+    async def _listener(task) -> None:
+        fired.append(task.status)
+
+    manager.register_completion_listener(_listener)
+
+    await manager.mark_in_process_terminal("in_process_abc", status="completed", return_code=0)
+    record = manager.get_task("in_process_abc")
+    assert record is not None
+    assert record.status == "completed"
+    assert record.return_code == 0
+    assert fired == ["completed"]
+
+    # A deliberate stop must not be overwritten by the task's own exit path.
+    manager.register_in_process_task(
+        "in_process_stopped",
+        task_type="in_process_teammate",
+        description="teammate2",
+        cwd=str(tmp_path),
+        agent_id="worker2@test",
+        team="test",
+        abort=_noop_abort,
+    )
+    await manager.stop_task("in_process_stopped")
+    await manager.mark_in_process_terminal("in_process_stopped", status="completed", return_code=0)
+    stopped = manager.get_task("in_process_stopped")
+    assert stopped is not None
+    assert stopped.status == "killed"

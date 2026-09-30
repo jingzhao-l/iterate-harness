@@ -271,14 +271,25 @@ class OpenAICompatibleClient:
         last_error: Exception | None = None
 
         for attempt in range(MAX_RETRIES + 1):
+            emitted = False
             try:
                 async for event in self._stream_once(request):
+                    emitted = True
                     yield event
                 return
             except IterateHarnessApiError:
                 raise
             except Exception as exc:
                 last_error = exc
+                if emitted:
+                    # Already streamed to the caller: replaying would duplicate
+                    # the visible text and orphan the tool_call/tool message
+                    # pair the provider requires, so the *next* request fails.
+                    log.error(
+                        "OpenAI API stream failed after events were emitted; not retrying: %s",
+                        exc,
+                    )
+                    raise self._translate_error(exc) from exc
                 if attempt >= MAX_RETRIES or not self._is_retryable(exc):
                     raise self._translate_error(exc) from exc
 

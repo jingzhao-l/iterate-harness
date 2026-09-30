@@ -154,8 +154,10 @@ def load_session_snapshot(cwd: str | Path) -> dict[str, Any] | None:
         return None
     try:
         return _sanitize_snapshot_payload(payload)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, KeyError, AttributeError):
         # Corrupt message entries (wrong shape/types) must not crash a resume.
+        # ``AttributeError``/``KeyError`` cover a top-level JSON array/scalar
+        # and a payload whose keys are not what we wrote.
         log.warning("Skipping malformed session snapshot %s", path, exc_info=True)
         return None
 
@@ -277,7 +279,16 @@ def load_session_by_id(cwd: str | Path, session_id: str) -> dict[str, Any] | Non
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             log.warning("Skipping unreadable session file %s", path, exc_info=True)
             return None
-        return _sanitize_snapshot_payload(payload)
+        # A named session file that decodes but has the wrong shape used to
+        # propagate whatever ``_sanitize_snapshot_payload`` raised (KeyError /
+        # AttributeError / pydantic ValidationError), killing the resume
+        # request instead of degrading to "no such session". ``latest.json``
+        # below already catches this; the named path must too.
+        try:
+            return _sanitize_snapshot_payload(payload)
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            log.warning("Skipping malformed session file %s: %s", path, exc, exc_info=True)
+            return None
     # Fallback to latest.json if session_id matches
     latest = session_dir / "latest.json"
     try:
@@ -288,6 +299,9 @@ def load_session_by_id(cwd: str | Path, session_id: str) -> dict[str, Any] | Non
         data = _sanitize_snapshot_payload(json.loads(raw))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         log.warning("Skipping unreadable latest session file %s", latest, exc_info=True)
+        return None
+    except (ValueError, TypeError, KeyError, AttributeError):
+        log.warning("Skipping malformed latest session file %s", latest, exc_info=True)
         return None
     if data.get("session_id") == session_id or session_id == "latest":
         return data

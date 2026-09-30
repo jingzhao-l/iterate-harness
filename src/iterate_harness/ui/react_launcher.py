@@ -175,7 +175,7 @@ async def launch_react_tui(
         # from OPENAI_API_KEY, the anthropic-native path from
         # ANTHROPIC_API_KEY. Planting the key under the wrong name silently
         # leaves the launched session without credentials.
-        if (api_format or "").strip().lower() == "openai":
+        if (api_format or "").strip().lower() in ("openai", "openai_compat"):
             env["OPENAI_API_KEY"] = api_key
         else:
             env["ANTHROPIC_API_KEY"] = api_key

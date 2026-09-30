@@ -32,7 +32,7 @@ interface WebUiState {
   // watch this to refetch while a loop is running live.
   logRevision: number;
   // Live SSE connection state (design §17 UX: visible indicator in the sidebar).
-  connectionState: "connecting" | "connected" | "reconnecting" | "disconnected";
+  connectionState: "connecting" | "connected" | "reconnecting" | "disconnected" | "unauthorized";
   // Number of open modal dialogs. Global keyboard shortcuts (App g-buffer,
   // "/" toggle) are suppressed while any modal is open so typing inside a
   // dialog can never trigger navigation behind it.
@@ -51,7 +51,7 @@ interface WebUiState {
   clearError: () => void;
   bumpLogRevision: () => void;
   setConnectionState: (
-    state: "connecting" | "connected" | "reconnecting" | "disconnected",
+    state: "connecting" | "connected" | "reconnecting" | "disconnected" | "unauthorized",
   ) => void;
   setModalOpen: (open: boolean) => void;
   setChatStatus: (status: ChatRunStatus | null) => void;
@@ -349,6 +349,28 @@ export function subscribeToStatus(projectRoot: string): () => void {
   let closed = false;
   let everConnected = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let authProbe: Promise<boolean> | null = null;
+
+  // Distinguish "the stream dropped" from "the token is no longer accepted".
+  //
+  // EventSource exposes no status code for a failed connection, so a 401 from
+  // the auth middleware is indistinguishable from a network blip: the browser
+  // just retries the same bad URL forever and the sidebar sits on "重连中…"
+  // with no reason given. Probe the REST API once per failure burst (it *can*
+  // set the Authorization header) and, on 401/403, stop retrying and say why.
+  const tokenRejected = async (): Promise<boolean> => {
+    const token = webuiToken();
+    if (!token) return false; // auth disabled server-side: a 401 is impossible
+    authProbe ??= fetch("/api/v1/status", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => response.status === 401 || response.status === 403)
+      .catch(() => false)
+      .finally(() => {
+        authProbe = null;
+      });
+    return authProbe;
+  };
 
   const connect = (): void => {
     if (closed) return;
@@ -414,11 +436,26 @@ export function subscribeToStatus(projectRoot: string): () => void {
     source.onerror = (): void => {
       // EventSource auto-reconnects; schedule a poll fallback as well.
       source?.close();
+      source = null;
       if (closed) return;
       useWebUi.getState().setConnectionState("reconnecting");
       startPolling();
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(connect, 3000);
+      void tokenRejected().then((rejected) => {
+        if (closed || !rejected) {
+          reconnectTimer = setTimeout(connect, 3000);
+          return;
+        }
+        // The token was rotated (or the server restarted with a fresh one):
+        // retrying cannot succeed, and the poll fallback below would spam 401
+        // toasts forever. Park the console in a terminal state that names the
+        // fix — restart `ih web serve` and reopen the URL it prints.
+        stopPolling();
+        useWebUi.getState().setConnectionState("unauthorized");
+        useWebUi
+          .getState()
+          .pushToast("error", "访问令牌已失效：请重新运行 `ih web serve` 并用新链接打开控制台。");
+      });
     };
   };
 

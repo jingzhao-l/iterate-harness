@@ -40,16 +40,30 @@ class FileWriteTool(BaseTool[FileWriteToolInput]):
             if not allowed:
                 return ToolResult(output=f"Sandbox: {reason}", is_error=True)
 
-        if arguments.create_directories:
-            path.parent.mkdir(parents=True, exist_ok=True)
+        # ``create_directories`` is honoured end to end: with it off, a write to
+        # a missing directory fails loudly instead of the atomic writer
+        # silently creating the tree the caller asked not to create.
+        if not arguments.create_directories and not path.parent.is_dir():
+            return ToolResult(
+                output=(
+                    f"Parent directory does not exist: {path.parent} "
+                    "(pass create_directories=true to create it)"
+                ),
+                is_error=True,
+            )
         # Atomic temp-file + os.replace write: a crash mid-write can never leave
         # a truncated file, and concurrent write/edit tools serialize on the
         # lock so read-modify-write races can't corrupt shared files.
-        from iterate_harness.utils.file_lock import exclusive_file_lock
+        from iterate_harness.utils.file_lock import exclusive_file_lock, sidecar_lock_path
         from iterate_harness.utils.fs import atomic_write_text
 
-        with exclusive_file_lock(path.with_name(path.name + ".lock")):
-            atomic_write_text(path, arguments.content, encoding="utf-8")
+        with exclusive_file_lock(sidecar_lock_path(path)):
+            atomic_write_text(
+                path,
+                arguments.content,
+                encoding="utf-8",
+                create_parents=arguments.create_directories,
+            )
         return ToolResult(output=f"Wrote {path}")
 
 

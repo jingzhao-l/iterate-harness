@@ -2,6 +2,101 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.5.0] - 2026-09-30
+
+### Added
+
+- **`dimension_context` 工具**（`iterate/dimension_context.py`）：kernel 契约
+  `dimension_context` 的 Python 实现——把维度定义/证据要求注入给评审与协调链路，
+  配套 `tests/test_iterate/test_dimension_context.py`。
+- **in-process 队友真正接进任务工具**（`swarm/in_process.py`、`tools/agent_tool.py`、
+  `tools/send_message_tool.py`、`tasks/manager.py`）：`AgentTool` 按 `mode` 选后端
+  （`in_process_teammate` → 进程内，缺失时回落子进程；`local_agent` /
+  `remote_agent` → 恒子进程），spawn 时在 `BackgroundTaskManager` 注册可轮询
+  `TaskRecord`，终态经 `mark_in_process_terminal` 发布（保留既有 `killed`，
+  避免监听器重复触发），`stop_task` 走 `shutdown(agent_id, force=False)`，
+  `write_to_task` 落到队友的文件邮箱，`SendMessageTool` 先查 in-process
+  `is_active(name@team)`——此前这条路径注册了却无人消费。
+- **发布产物 GPG 校验链**（`.github/workflows/npm-publish.yml`、`tools/gpg-signing.sh`）：
+  release tarball 增加 `.asc` 验签（best-effort、防御纵深），npm publish 走
+  provenance；`tools/gpg-signing.sh audit` 能点名 `secrets.GPG_PRIVATE_KEY` 为空
+  导致整个签名步静默消失的位置。
+- **回归测试**（`tests/test_tasks/test_manager.py`、`tests/test_tools/test_task_tools.py`、
+  `tests/test_web/test_web_ux_hardening.py`、`frontend/web/src/__tests__/sseReconnect.test.ts`、
+  `npm/test/postinstall.test.js`）：进程内队友注册/终态/停机/邮箱、console+辅助干预
+  通道的 7 个 WebUI 缺口、SSE 重连与 401 判定（8 例）、npm postinstall 改为
+  hermetic（`ITERATE_HARNESS_INSTALL_URL` + fake-python 夹具，不再真装）。
+
+### Fixed
+
+- **WebUI 操作台与辅助干预通道的 7 处真实缺口**（`web/api.py`、`web/events.py`、
+  `web/hub.py`、`web/routes/config.py`、`web/routes/chat.py`、`web/run_manager.py`、
+  `web/schemas.py` + 前端 `store.ts`/`api.ts`/`ConfigPage.tsx`/`RunStatusCard.tsx`）：
+  - SSE 每帧补单调 `id:`（`_sse_frame`），重连时 `Last-Event-ID` 才有意义；
+  - hub 订阅登记所属事件循环，`subscribe()` 顺带回收已关闭回路上的僵尸队列
+    （`_reap_locked`），另加 `_MAX_SUBSCRIBERS=64` 兜底淘汰最老订阅——连接被硬拆
+    而没跑到生成器 `finally` 时，队列不再被后续每次 publish 一直扇出；
+  - `GET /config` 返回文件内容哈希 `version`，`PUT /config` 接受 `expectedVersion`，
+    不一致直接 409：编辑器打开期间 YAML 被手改不再被静默覆盖（校验先于并发判定，
+    409 不留备份文件、不写审计）；写入成功后 `detail.version` 回传新版本；
+  - `POST /chat/reset` 补齐 `confirm=true` + `run.reset` 审计，并在 reset 前抓取
+    `run_id`（`reset()` 会清空它），否则审计里只剩一句无法追溯的取消；
+  - 注册 `@app.exception_handler(Exception)`：任何路由冒泡都走 `{"detail": ...}`
+    JSON 契约（此前是 Starlette 的非 JSON text/plain 500，前端 `response.json()`
+    解码失败只剩 "HTTP 500"）；已注册的 `RunManagerError → 409` 仍按类特异性优先；
+  - `?token=` 仅在 `/api/v1/events` 生效，其余路由强制 `Authorization: Bearer`
+    （token 不再随普通 URL 进访问日志/浏览器历史/Referer）；
+  - `_publish_tool` 改为落盘 `web-chat.jsonl`（此前只广播不持久化），连接抖动或
+    刷新后重建 transcript 时不再丢掉已经看过的工具调用卡片；
+  - 前端：EventSource 拿不到失败响应状态码，令牌被拒与断网无法区分，原会永远重连
+    且侧栏停在「重连中…」；现每次失败突发用一次 `/api/v1/status`（能带
+    Authorization 头）探测，401/403 直接落到终态 `unauthorized` + 给出
+    「重跑 `ih web serve`」的 toast（探测失败/未启用鉴权时保持原重连节奏）。
+- **`pausing` / `stopping` 在前端不可见**（`RunStatusCard.tsx`、`styles.css`、
+  `types.ts`）：这两个待定态既没有标签也没有样式，`npm run typecheck` 一直是红的，
+  运行时标签渲染成 `undefined`——点了「暂停」看不出有没有被受理；现补中文标签、
+  复用既有配色并用 `state-pending` 脉冲区分「已受理、等待轮次边界」。
+- **`glob_tool` 回退遍历无界**（`tools/glob_tool.py`）：回退分支对整个根目录做
+  `rglob` 再排序，项目大时会把内存吃光；改为 `islice(root.glob(pattern), limit)`
+  后排序（O(limit)），回归用例断言的是"命中集合 + 长度"而非"全局最小 N 个"。
+- **交互式会话被默认 200 轮硬截断**（`ui/runtime.py`）：`engine_max_turns` 原来
+  恒取 `settings.max_turns`，控制台里手工探索会被静默打断；现改为
+  `max_turns if max_turns is not None else (settings.max_turns if enforce_max_turns else None)`
+  ——交互式默认无界，`--print` 与显式上限仍然生效（顺带修复 `9b2d326` 引入、
+  此前就红的两条 `test_react_backend`）。
+- **引擎轮次收敛时序**（`engine/query.py`、`coordinator/`）：轮次末尾才同步折叠
+  （不再提前 tail fold）、协调器工具结果补齐尾部重排、图像预处理不再就地改写入参、
+  reactive-compaction 重试不再吃掉一个 turn 槽位。
+- **hooks 装载器**（`hooks/executor.py`）：结构化 hook 接受裸条目（不再要求
+  `{hooks: [...]}` 包装），camelCase 事件键经 `_coerce_hook_event_key` 归一化
+  （此前直接 ValueError）；prompt/agent hook 超时降级为可控失败而非抛穿。
+- **iterate 运行锁与落盘**（`iterate/run_lock.py`、`iterate/onboarding.py`、
+  `iterate/personalization.py`）：新增 `<data_dir>/locks/` 下的磁盘租约 run-lock
+  （WebUI 与控制台互斥，同一 project 不会两个循环），onboarding/personalization
+  改原子写，report/validate 输出有界，worktree 清理、scope-chunk 校验补齐。
+- **后台任务僵尸竞态**（`tasks/manager.py`、`tools/`）：`_ensure_writable_process`
+  加竞态守卫，状态轮询更健壮，协调器工具名改为注册表里的真名。
+- **配置合并与工具面**（`config/settings.py`、`commands/registry.py`、
+  `services/`）：`denied_tools` 是 `disallowed_tools` 的别名却写进 `Settings` 顶层
+  （stray attr，永不生效），现路由到 `permission.denied_tools` 并由 agent tool
+  转发给 spawn 配置；cron 关闭时取消 in-flight 任务；session 文件损坏容忍；
+  config 工具补 scope/强制转换/脱敏测试。
+- **杂项正确性**（`301e14e`）：provider 用 `rsplit` 解析 provider-id（URL 里的
+  `https://` 曾被切成两半）、bridge `max_active` 上限 + `work_secret` 走
+  `urlsplit`、skills loader UTF-8 守卫、react launcher 读取 `OPENAI_API_KEY`。
+- **收件箱轮询解码**（`swarm/mailbox.py`、`swarm/permission_sync.py`）：
+  `send_permission_response_via_mailbox` 的文本信封现在可被 `poll_permission_response`
+  经 `_decode_permission_response_payload` 解码（此前回答写了但读不出来）；
+  time-out warning 打印真实 task id。
+- **远端调用闸门**（`commands/registry.py`、`cli.py`）：`remote_invocation_allowed()`
+  在模型驱动调用里真正生效，`/login`、`/config`、`/permissions`、`/bridge`
+  远端一律拒绝，`--admin-opt-in` 显式放行管理员命令。
+- **console/frontend 契约一致性**（`8bce462`）：WebUI chat status 经 run-lock 租约
+  暴露"由外部控制台驱动"的运行（此前两个进程各跑各的却都显示空闲），
+  run-manager 进程生命周期收紧，dashboard 与后端类型对齐。
+- **guard 越界目标**（`b437933`）：pre-check 目标逃出 project root 时直接拒绝
+  （此前只在执行期才拦）。
+
 ## [2.4.1] - 2026-09-25
 
 ### Fixed

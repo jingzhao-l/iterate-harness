@@ -35,6 +35,10 @@ const SEVERITY_LABELS: Record<string, string> = {
 // Findings table rows per page — the backend returns the full findings list,
 // so we cap the rendered rows to keep long runs fluid (frontend pagination).
 const FINDINGS_PAGE_SIZE = 50;
+//: How many findings one API call may return (mirrors the backend's
+//: MAX_FINDINGS_PAGE). Larger sets are flagged in the UI rather than
+//: silently clipped.
+const FINDINGS_FETCH_LIMIT = 500;
 
 function asString(value: unknown): string {
   if (value === null || value === undefined) return "—";
@@ -177,6 +181,7 @@ export default function Runs(): React.JSX.Element {
 
   const [findings, setFindings] = useState<Finding[]>([]);
   const [findingsTotal, setFindingsTotal] = useState(0);
+  const [findingsTruncated, setFindingsTruncated] = useState(false);
   const [findingsLoading, setFindingsLoading] = useState(true);
   const [findingsError, setFindingsError] = useState<string | null>(null);
   const [severityFilter, setSeverityFilter] = useState("");
@@ -262,6 +267,35 @@ export default function Runs(): React.JSX.Element {
     [projectRoot],
   );
 
+  // Undo one decision. Approve/reject are persisted server-side, so without
+  // this a mis-click was irreversible short of wiping the whole journal.
+  const dismissTriage = useCallback(
+    (finding: Finding): void => {
+      const key = triageKey(finding);
+      setTriageBusyKey(key);
+      setTriageError(null);
+      api
+        .dismissTriageFinding(
+          finding.file ?? "",
+          finding.line ?? null,
+          finding.dimension ?? "",
+          projectRoot,
+        )
+        .then(() => {
+          setTriage((prev) => {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          });
+        })
+        .catch((error) => {
+          setTriageError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => setTriageBusyKey(null));
+    },
+    [projectRoot],
+  );
+
   const clearTriage = useCallback((): void => {
     setClearBusy(true);
     setTriageError(null);
@@ -330,15 +364,22 @@ export default function Runs(): React.JSX.Element {
           projectRoot,
           severityFilter || undefined,
           dimensionFilter || undefined,
+          FINDINGS_FETCH_LIMIT,
         );
         if (!cancelled) {
           setFindings(response.findings);
           setFindingsTotal(response.total);
+          // Surface the cap instead of pretending the page is the whole set:
+          // the header showed the *unpaginated* total while the pager could
+          // only reach the first 500 rows, so anything past that was invisible
+          // and silently untriaged.
+          setFindingsTruncated(response.truncated === true);
         }
       } catch (error) {
         if (!cancelled) {
           setFindings([]);
           setFindingsTotal(0);
+          setFindingsTruncated(false);
           setFindingsError(error instanceof Error ? error.message : String(error));
         }
       } finally {
@@ -497,6 +538,13 @@ export default function Runs(): React.JSX.Element {
         </span>
       </div>
 
+      {findingsTruncated && (
+        <p className="muted">
+          ⚠️ 共 {findingsTotal} 个 finding，当前仅加载了前 {FINDINGS_FETCH_LIMIT}{" "}
+          个。请按严重度/维度筛选后再逐批处理。
+        </p>
+      )}
+
       {triageError && <p className="form-error">{triageError}</p>}
 
       <section className="panel">
@@ -551,11 +599,22 @@ export default function Runs(): React.JSX.Element {
                       <td>
                         <div className="triage-actions">
                           {decision ? (
-                            <span
-                              className={`badge ${decision.decision === "approve" ? "green" : "neutral"}`}
-                              title={`${decision.decision === "approve" ? "已批准" : "已拒绝"} · ${decision.timestamp}`}
-                            >
-                              {decision.decision === "approve" ? "已批准" : "已拒绝"}
+                            <span className="triage-actions">
+                              <span
+                                className={`badge ${decision.decision === "approve" ? "green" : "neutral"}`}
+                                title={`${decision.decision === "approve" ? "已批准" : "已拒绝"} · ${decision.timestamp}`}
+                              >
+                                {decision.decision === "approve" ? "已批准" : "已拒绝"}
+                              </span>
+                              <button
+                                className="btn"
+                                style={{ padding: "1px 7px", fontSize: 11 }}
+                                disabled={busy}
+                                onClick={() => dismissTriage(finding)}
+                                title="撤销该审批决定"
+                              >
+                                ✕
+                              </button>
                             </span>
                           ) : (
                             <>

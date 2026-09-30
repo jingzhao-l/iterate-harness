@@ -563,7 +563,7 @@ _BUILTIN_AGENTS: list[AgentDefinition] = [
             "moderate exploration, or \"very thorough\" for comprehensive analysis across "
             "multiple locations and naming conventions."
         ),
-        disallowed_tools=["agent", "exit_plan_mode", "file_edit", "file_write", "notebook_edit"],
+        disallowed_tools=["agent", "exit_plan_mode", "edit_file", "write_file", "notebook_edit"],
         system_prompt=_EXPLORE_SYSTEM_PROMPT,
         model="inherit",
         omit_claude_md=True,
@@ -578,7 +578,7 @@ _BUILTIN_AGENTS: list[AgentDefinition] = [
             "need to plan the implementation strategy for a task. Returns step-by-step plans, "
             "identifies critical files, and considers architectural trade-offs."
         ),
-        disallowed_tools=["agent", "exit_plan_mode", "file_edit", "file_write", "notebook_edit"],
+        disallowed_tools=["agent", "exit_plan_mode", "edit_file", "write_file", "notebook_edit"],
         system_prompt=_PLAN_SYSTEM_PROMPT,
         model="inherit",
         omit_claude_md=True,
@@ -607,7 +607,7 @@ _BUILTIN_AGENTS: list[AgentDefinition] = [
             "changed, and approach taken. The agent runs builds, tests, linters, and checks "
             "to produce a PASS/FAIL/PARTIAL verdict with evidence."
         ),
-        disallowed_tools=["agent", "exit_plan_mode", "file_edit", "file_write", "notebook_edit"],
+        disallowed_tools=["agent", "exit_plan_mode", "edit_file", "write_file", "notebook_edit"],
         system_prompt=_VERIFICATION_SYSTEM_PROMPT,
         critical_system_reminder=_VERIFICATION_CRITICAL_REMINDER,
         color="red",

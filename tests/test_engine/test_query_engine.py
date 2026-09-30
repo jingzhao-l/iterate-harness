@@ -12,7 +12,7 @@ from iterate_harness.api.client import ApiMessageCompleteEvent, ApiRetryEvent, A
 from iterate_harness.api.errors import RequestFailure
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.config.settings import PermissionSettings, Settings
-from iterate_harness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from iterate_harness.engine.messages import ConversationMessage, ImageBlock, TextBlock, ToolUseBlock
 from iterate_harness.engine.query_engine import QueryEngine
 from iterate_harness.prompts.context import build_runtime_system_prompt
 from iterate_harness.engine.stream_events import (
@@ -20,10 +20,12 @@ from iterate_harness.engine.stream_events import (
     AssistantTurnComplete,
     CompactProgressEvent,
     ErrorEvent,
+    ReviewProgressEvent,
     StatusEvent,
     ToolExecutionCompleted,
     ToolExecutionStarted,
 )
+from iterate_harness.iterate.loop_policy import LoopDecision
 from iterate_harness.permissions import PermissionChecker, PermissionMode
 from iterate_harness.tasks import get_task_manager
 from iterate_harness.tools import create_default_tool_registry
@@ -1629,3 +1631,337 @@ async def test_query_engine_drops_empty_assistant_messages(tmp_path: Path):
     assert not any(isinstance(event, AssistantTurnComplete) for event in events)
     assert len(engine.messages) == 1
     assert engine.messages[0].role == "user"
+
+
+class _StopAfterRoundPolicy:
+    """Duck-typed iterate policy that stops the loop after one reviewed round."""
+
+    def __init__(self, progress: ReviewProgressEvent) -> None:
+        self._progress = progress
+
+    def clear_pause(self) -> None:
+        pass
+
+    def on_turn_end(self, tool_metadata, usage, model) -> LoopDecision:
+        return LoopDecision(
+            stop_reason="converged",
+            inject_message="review the applied fix batch",
+            progress=self._progress,
+        )
+
+
+class _InjectThenStopPolicy:
+    """Policy that injects a round instruction, then stops on the next round."""
+
+    def __init__(self, progress: ReviewProgressEvent) -> None:
+        self._progress = progress
+        self._rounds = 0
+
+    def on_turn_end(self, tool_metadata, usage, model) -> LoopDecision:
+        self._rounds += 1
+        if self._rounds == 1:
+            return LoopDecision(
+                stop_reason=None,
+                inject_message="round 1: fix the reported issues",
+                progress=self._progress,
+            )
+        return LoopDecision(stop_reason="converged")
+
+
+@pytest.mark.asyncio
+async def test_query_engine_folds_tool_results_after_iterate_normal_stop(tmp_path: Path, monkeypatch):
+    """Regression (review finding #1): when the iterate loop stops *normally*
+    (converged / round cap) right after a tool round, the executed tool results
+    must still be folded into ``engine.messages``. run_query appends them after
+    the final ``AssistantTurnComplete`` event, so only the end-of-stream sync
+    (not the per-event one) can persist them — without it live history ends on
+    an unmatched ``tool_use`` tail that a later /continue cannot resubmit."""
+    monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
+    sample = tmp_path / "hello.txt"
+    sample.write_text("alpha\n", encoding="utf-8")
+
+    engine = QueryEngine(
+        api_client=FakeApiClient(
+            [
+                _FakeResponse(
+                    message=ConversationMessage(
+                        role="assistant",
+                        content=[
+                            TextBlock(text="I will inspect the file."),
+                            ToolUseBlock(id="toolu_stop_1", name="read_file", input={"path": str(sample)}),
+                        ],
+                    ),
+                    usage=UsageSnapshot(input_tokens=2, output_tokens=2),
+                )
+            ]
+        ),
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt="system",
+        iterate_policy=_StopAfterRoundPolicy(
+            ReviewProgressEvent(
+                round=1,
+                new_findings=1,
+                total_findings=1,
+                per_dimension={},
+                converged=True,
+                input_tokens=2,
+                output_tokens=2,
+                cost_usd=0.0,
+                mode="dry-run",
+            )
+        ),
+    )
+
+    events = [event async for event in engine.submit_message("review the code")]
+    assert any(isinstance(event, ReviewProgressEvent) for event in events)
+    assert any(isinstance(event, StatusEvent) and "iterate loop stopped" in event.message for event in events)
+
+    # The executed tool result must be persisted (no unmatched tool_use tail).
+    user_tool_messages = [
+        msg for msg in engine.messages if msg.role == "user" and any(isinstance(b, ToolResultBlock) for b in msg.content)
+    ]
+    assert user_tool_messages, "tool results must be folded into live history after a normal iterate stop"
+    assert any(b.tool_use_id == "toolu_stop_1" for b in user_tool_messages[0].content)
+    assert not engine.messages[-1].tool_uses, "history must not end on an unmatched tool_use block"
+
+
+@pytest.mark.asyncio
+async def test_query_engine_error_return_folds_tool_results_and_never_coordinator(tmp_path: Path, monkeypatch):
+    """Regression: an error-return path of run_query (turn 2 raises a network
+    error right after turn 1 executed a tool) must (a) fold turn 1's executed
+    tool results into live history, and (b) never persist the synthetic
+    coordinator context — even though on the failed turn the coordinator was
+    never popped, it must be excluded by the sync."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("CLAUDE_CODE_COORDINATOR_MODE", "1")
+
+    class ToolThenNetworkErrorApiClient:
+        def __init__(self) -> None:
+            self._calls = 0
+
+        async def stream_message(self, request):
+            self._calls += 1
+            if self._calls == 1:
+                yield ApiMessageCompleteEvent(
+                    message=ConversationMessage(
+                        role="assistant",
+                        content=[
+                            TextBlock(text="Inspecting."),
+                            ToolUseBlock(id="toolu_err_1", name="read_file", input={"path": str(tmp_path / "x.txt")}),
+                        ],
+                    ),
+                    usage=UsageSnapshot(input_tokens=2, output_tokens=2),
+                    stop_reason=None,
+                )
+                return
+            raise RequestFailure("connection reset by peer while streaming")
+
+    system_prompt = build_runtime_system_prompt(Settings(), cwd=tmp_path, latest_user_prompt="inspect")
+    engine = QueryEngine(
+        api_client=ToolThenNetworkErrorApiClient(),
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt=system_prompt,
+    )
+
+    events = [event async for event in engine.submit_message("inspect")]
+    assert any(isinstance(event, ErrorEvent) and "Network error" in event.message for event in events)
+
+    # Turn 1's tool results are folded in despite the error return.
+    user_tool_messages = [
+        msg for msg in engine.messages if msg.role == "user" and any(isinstance(b, ToolResultBlock) for b in msg.content)
+    ]
+    assert user_tool_messages
+    # Coordinator synthetic context must never reach live history.
+    coordinator_live = [m for m in engine.messages if m.role == "user" and "Coordinator User Context" in m.text]
+    assert coordinator_live == []
+
+
+@pytest.mark.asyncio
+async def test_query_engine_coordinator_stays_trailing_when_iterate_injects(tmp_path: Path, monkeypatch):
+    """Regression (review finding #2): with an iterate loop active in
+    coordinator mode, the synthetic coordinator context must remain the
+    TRAILING user message of each provider request. When an iterate inject
+    message is appended after the coordinator, the next turn's pop misses it,
+    and the subsequent sync folds the embedded copy into live history —
+    making every following submit send one more accumulated copy."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("CLAUDE_CODE_COORDINATOR_MODE", "1")
+    monkeypatch.setattr("iterate_harness.services.compact.try_session_memory_compaction", lambda *args, **kwargs: None)
+    monkeypatch.setattr("iterate_harness.services.compact.should_autocompact", lambda *args, **kwargs: False)
+
+    sample = tmp_path / "hello.txt"
+    sample.write_text("alpha\n", encoding="utf-8")
+
+    class TwoToolRoundsApiClient:
+        def __init__(self) -> None:
+            # Snapshots of the messages list taken at stream time: the request
+            # object holds a live reference that run_query mutates afterwards.
+            self.requests = []
+
+        async def stream_message(self, request):
+            self.requests.append(list(request.messages))
+            call_index = len(self.requests)
+            if call_index == 1:
+                yield ApiMessageCompleteEvent(
+                    message=ConversationMessage(
+                        role="assistant",
+                        content=[
+                            TextBlock(text="round 1."),
+                            ToolUseBlock(id="toolu_c1", name="read_file", input={"path": str(sample)}),
+                        ],
+                    ),
+                    usage=UsageSnapshot(input_tokens=2, output_tokens=2),
+                    stop_reason=None,
+                )
+                return
+            yield ApiMessageCompleteEvent(
+                message=ConversationMessage(
+                    role="assistant",
+                    content=[
+                        TextBlock(text="round 2."),
+                        ToolUseBlock(id="toolu_c2", name="read_file", input={"path": str(sample)}),
+                    ],
+                ),
+                usage=UsageSnapshot(input_tokens=2, output_tokens=2),
+                stop_reason=None,
+            )
+
+    progress = ReviewProgressEvent(
+        round=1, new_findings=1, total_findings=1, per_dimension={},
+        converged=False, input_tokens=2, output_tokens=2, cost_usd=0.0, mode="dry-run",
+    )
+    client = TwoToolRoundsApiClient()
+    engine = QueryEngine(
+        api_client=client,
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
+        cwd=tmp_path,
+        model="claude-test",
+        # Trigger the pop/re-append negotiation: the pop requires the system
+        # prompt to start with the coordinator marker.
+        system_prompt="You are a **coordinator**. Workers spawned via the agent tool have access to these tools.",
+        iterate_policy=_InjectThenStopPolicy(progress),
+    )
+
+    events = [event async for event in engine.submit_message("inspect")]
+    assert any(
+        isinstance(event, StatusEvent) and "iterate loop stopped: converged" in event.message for event in events
+    )
+    # Round 2 executed its tool round before the stop.
+    assert any(isinstance(event, AssistantTurnComplete) for event in events)
+
+    # Each request carries exactly ONE coordinator context, always as the
+    # TRAILING user message (never interleaved between a tool_use and its
+    # tool_result), even when a round instruction was injected mid-loop.
+    assert len(client.requests) == 2
+    for snapshot in client.requests:
+        coordinators = [m for m in snapshot if m.role == "user" and "Coordinator User Context" in m.text]
+        assert len(coordinators) == 1, "coordinator context must not accumulate across turns"
+        assert coordinators[0] is snapshot[-1], "coordinator context must stay the trailing message"
+    # tool_use/tool_result adjacency must hold within each request snapshot.
+    for i, msg in enumerate(client.requests[1]):
+        if msg.role == "assistant" and msg.tool_uses and i + 1 < len(client.requests[1]):
+            assert any(isinstance(block, ToolResultBlock) for block in client.requests[1][i + 1].content)
+    # Live history keeps the executed tool rounds and never the coordinator.
+    instr = [m for m in engine.messages if m.role == "user" and "round 1" in m.text]
+    assert instr, "iterate inject instruction should be folded into live history"
+    assert [m for m in engine.messages if "Coordinator User Context" in m.text] == []
+
+
+@pytest.mark.asyncio
+async def test_query_engine_reactive_compact_retry_does_not_consume_turn_slot(tmp_path: Path, monkeypatch):
+    """Regression (review finding #4): a reactive-compaction retry replays the
+    SAME logical turn, so it must not consume an extra turn slot. With
+    ``max_turns=1`` a prompt-too-long error followed by a successful compacted
+    retry must complete instead of raising ``MaxTurnsExceeded``."""
+    monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
+    monkeypatch.setattr("iterate_harness.services.compact.try_session_memory_compaction", lambda *args, **kwargs: None)
+    monkeypatch.setattr("iterate_harness.services.compact.should_autocompact", lambda *args, **kwargs: False)
+
+    engine = QueryEngine(
+        api_client=PromptTooLongThenSuccessApiClient(),
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt="system",
+        max_turns=1,
+    )
+    engine.load_messages(
+        [
+            ConversationMessage(role="user", content=[TextBlock(text="one")]),
+            ConversationMessage(role="assistant", content=[TextBlock(text="two")]),
+            ConversationMessage(role="user", content=[TextBlock(text="three")]),
+            ConversationMessage(role="assistant", content=[TextBlock(text="four")]),
+            ConversationMessage(role="user", content=[TextBlock(text="five")]),
+            ConversationMessage(role="assistant", content=[TextBlock(text="six")]),
+            ConversationMessage(role="user", content=[TextBlock(text="seven")]),
+            ConversationMessage(role="assistant", content=[TextBlock(text="eight")]),
+        ]
+    )
+
+    events = [event async for event in engine.submit_message("nine")]
+    assert any(
+        isinstance(event, CompactProgressEvent)
+        and event.trigger == "reactive"
+        and event.phase == "compact_start"
+        for event in events
+    )
+    assert isinstance(events[-1], AssistantTurnComplete)
+    assert events[-1].message.text == "after reactive compact"
+
+
+@pytest.mark.asyncio
+async def test_query_engine_image_preprocessing_keeps_shared_history_intact(tmp_path: Path, monkeypatch):
+    """Regression (review finding #3): image preprocessing must replace blocks
+    on the *query* copy, never mutate the shared ``ConversationMessage`` objects
+    in the engine's durable history — otherwise a later reply/snapshot sees the
+    image silently destroyed."""
+    monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
+    registry = create_default_tool_registry()
+    image_tool = registry.get("image_to_text")
+
+    async def _fake_describe(arguments, context):
+        del context
+        return ToolResult(output="An orange cat on a sofa.")
+
+    monkeypatch.setattr(image_tool, "execute", _fake_describe)
+
+    recorder = RecordingApiClient("described")
+    engine = QueryEngine(
+        api_client=recorder,
+        tool_registry=registry,
+        permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt="system",
+        tool_metadata={"vision_model_config": {"model": "gpt-4o"}},
+    )
+    image_block = ImageBlock(media_type="image/png", data="aGVsbG8=", source_path="unused.png")
+    original_user = ConversationMessage(role="user", content=[TextBlock(text="here is a picture:"), image_block])
+    engine.load_messages(
+        [
+            original_user,
+            ConversationMessage(role="assistant", content=[TextBlock(text="I see it.")]),
+        ]
+    )
+
+    events = [event async for event in engine.submit_message("describe the image")]
+
+    assert not any(isinstance(event, ErrorEvent) for event in events)
+    # The preprocessing rewrote copies; the ORIGINAL message object that is
+    # shared with any pre-run snapshot must not be mutated in place — its
+    # ImageBlock is preserved even though the run replaced it in history.
+    assert isinstance(original_user.content[1], ImageBlock), "shared history must not be mutated by preprocessing"
+    assert original_user.content[1] is image_block
+    # The provider request carried the text description instead.
+    assert recorder.requests
+    request_user = recorder.requests[0].messages[0]
+    assert isinstance(request_user.content[1], TextBlock)
+    assert "orange cat" in request_user.content[1].text

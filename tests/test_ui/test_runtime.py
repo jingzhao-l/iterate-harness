@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from iterate_harness.api.usage import UsageSnapshot
-from iterate_harness.commands import CommandResult
+from iterate_harness.commands import CommandResult, SlashCommand
 from iterate_harness.ui.runtime import RuntimeBundle, handle_line
 
 
@@ -223,3 +223,75 @@ async def test_handle_line_snapshots_current_model_without_submit_model(tmp_path
 
     assert engine.submitted == ["plain continuation"]
     assert backend.snapshots[-1]["model"] == "original-model"
+
+
+@pytest.mark.asyncio
+async def test_handle_line_remote_context_refuses_local_only_command(tmp_path: Path):
+    """remote_invocable=False commands must not run under a remote context,
+    but a real opt-in request unlocks them and interactive consoles keep full
+    access."""
+    bundle, engine, backend = _build_bundle(tmp_path)
+    calls: list[str] = []
+
+    async def _login_handler(_args, _context):
+        calls.append("ran")
+        return CommandResult()
+
+    local_only = SlashCommand(
+        name="login",
+        description="Store an API key",
+        handler=_login_handler,
+        remote_invocable=False,
+        remote_admin_opt_in=True,
+    )
+
+    class _RemoteCommands:
+        def lookup(self, _line):
+            return (local_only, "")
+
+    bundle.commands = _RemoteCommands()
+
+    printed: list[str] = []
+
+    async def _print_system(message: str) -> None:
+        printed.append(message)
+
+    async def _render_event(_event) -> None:
+        return None
+
+    async def _clear_output() -> None:
+        return None
+
+    should_continue = await handle_line(
+        bundle,
+        "/login",
+        print_system=_print_system,
+        render_event=_render_event,
+        clear_output=_clear_output,
+        remote_context=True,
+    )
+    assert should_continue is True
+    assert calls == []  # handler must never run
+    assert any("opt in" in message for message in printed)
+
+    # Explicit admin opt-in lets the remote caller proceed.
+    should_continue = await handle_line(
+        bundle,
+        "/login",
+        print_system=_print_system,
+        render_event=_render_event,
+        clear_output=_clear_output,
+        remote_context=True,
+        remote_admin_opt_in_requested=True,
+    )
+    assert calls == ["ran"]
+
+    # Interactive (local) consoles are never refused.
+    should_continue = await handle_line(
+        bundle,
+        "/login",
+        print_system=_print_system,
+        render_event=_render_event,
+        clear_output=_clear_output,
+    )
+    assert calls == ["ran", "ran"]

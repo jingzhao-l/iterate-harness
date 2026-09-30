@@ -19,12 +19,19 @@ import re
 import shutil
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 from iterate_harness.swarm.mailbox import get_team_dir
 from iterate_harness.swarm.types import BackendType
+from iterate_harness.utils.file_lock import (
+    SwarmLockError,
+    exclusive_file_lock,
+    sidecar_lock_path,
+)
+from iterate_harness.utils.fs import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -264,11 +271,17 @@ class TeamFile:
     # ------------------------------------------------------------------
 
     def save(self, path: Path) -> None:
-        """Atomically write this team file to *path*."""
+        """Atomically write this team file to *path*.
+
+        The previous ``path.with_suffix(".json.tmp")`` + ``rename`` used one
+        *fixed* temp name: two teammates registering at the same moment wrote
+        the same temp file, and whichever renamed first shipped the other's
+        half-written json — so ``team.json`` became unparseable and every
+        later ``get_team``/``list_teams`` returned ``None``. The atomic writer
+        uses a unique sibling and ``os.replace``s it in.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
-        tmp.rename(path)
+        atomic_write_text(path, json.dumps(self.to_dict(), indent=2), encoding="utf-8")
 
     @classmethod
     def load(cls, path: Path) -> "TeamFile":
@@ -289,9 +302,29 @@ class TeamFile:
 _TEAM_FILE_NAME = "team.json"
 
 
+@contextmanager
+def _team_write_lock(path: Path) -> Iterator[None]:
+    """Serialise read-modify-write on one team.json across processes.
+
+    Falls back to a plain yield when the platform has no file locking, so a
+    team stays usable on an exotic host at the cost of the mutual exclusion.
+    """
+    try:
+        with exclusive_file_lock(sidecar_lock_path(path)):
+            yield
+    except SwarmLockError:
+        yield
+
+
 def _team_file_path(name: str) -> Path:
-    """Return the path to the team.json for *name*."""
-    return get_team_dir(name) / _TEAM_FILE_NAME
+    """Return the path to the team.json for *name*.
+
+    ``create=False``: this is a pure path computation shared by readers and
+    writers, and :meth:`TeamFile.save` already creates the parent. Making it
+    mkdir meant that merely *looking* for a team's config created the team's
+    whole directory tree.
+    """
+    return get_team_dir(name, create=False) / _TEAM_FILE_NAME
 
 
 def get_team_file_path(team_name: str) -> Path:
@@ -883,9 +916,14 @@ class TeamLifecycleManager:
             ValueError: if the team does not exist.
         """
         path = _team_file_path(team_name)
-        team = self._require_team(team_name, path)
-        team.members[member.agent_id] = member
-        team.save(path)
+        # Read-modify-write must be atomic. Teammates register concurrently
+        # (every ``Agent`` tool call), and without the lock two of them would
+        # both load the same roster and the second save would erase the
+        # first's member.
+        with _team_write_lock(path):
+            team = self._require_team(team_name, path)
+            team.members[member.agent_id] = member
+            team.save(path)
         return team
 
     def remove_member(self, team_name: str, agent_id: str) -> TeamFile:
@@ -895,13 +933,14 @@ class TeamLifecycleManager:
             ValueError: if the team or member does not exist.
         """
         path = _team_file_path(team_name)
-        team = self._require_team(team_name, path)
-        if agent_id not in team.members:
-            raise ValueError(
-                f"Agent '{agent_id}' is not a member of team '{team_name}'"
-            )
-        del team.members[agent_id]
-        team.save(path)
+        with _team_write_lock(path):
+            team = self._require_team(team_name, path)
+            if agent_id not in team.members:
+                raise ValueError(
+                    f"Agent '{agent_id}' is not a member of team '{team_name}'"
+                )
+            del team.members[agent_id]
+            team.save(path)
         return team
 
     # ------------------------------------------------------------------

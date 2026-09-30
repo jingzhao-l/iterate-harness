@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from iterate_harness.swarm.permission_sync import (
+    PermissionResolution,
     SwarmPermissionResponse,
     _is_read_only,
     create_permission_request,
@@ -15,6 +16,7 @@ from iterate_harness.swarm.permission_sync import (
     poll_permission_response,
     send_permission_request,
     send_permission_response,
+    send_permission_response_via_mailbox,
 )
 
 
@@ -180,3 +182,51 @@ async def test_poll_permission_response_finds_matching_message(tmp_path, monkeyp
     assert result is not None
     assert result.allowed is True
     assert result.request_id == "req-abc"
+
+
+async def test_poll_permission_response_decodes_text_envelope_approval(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_AGENT_NAME", "leader")
+
+    # Regression: send_permission_response_via_mailbox writes a TS-style text
+    # envelope (JSON inside the "text" field). poll_permission_response used to
+    # look for request_id only in the top-level payload, so an approval sent
+    # through this flow was never matched and the worker timed out.
+    resolution = PermissionResolution(
+        decision="approved",
+        resolved_by="leader",
+        feedback=None,
+        updated_input={"command": "echo hi"},
+        permission_updates=[{"tool": "echo*", "allow": True}],
+    )
+    assert await send_permission_response_via_mailbox(
+        "worker1", resolution, "req-text", team_name="myteam"
+    )
+
+    result = await poll_permission_response("myteam", "worker1", "req-text", timeout=2.0)
+    assert result is not None
+    assert result.request_id == "req-text"
+    assert result.allowed is True
+    assert result.feedback is None
+    assert result.updated_rules == [{"tool": "echo*", "allow": True}]
+
+
+async def test_poll_permission_response_decodes_text_envelope_rejection(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_AGENT_NAME", "leader")
+
+    resolution = PermissionResolution(
+        decision="rejected",
+        resolved_by="leader",
+        feedback="cannot write to secrets",
+    )
+    assert await send_permission_response_via_mailbox(
+        "worker1", resolution, "req-rej", team_name="myteam"
+    )
+
+    result = await poll_permission_response("myteam", "worker1", "req-rej", timeout=2.0)
+    assert result is not None
+    assert result.allowed is False
+    assert result.feedback == "cannot write to secrets"
+    # The matched message is marked read so a later poll does not re-deliver it.
+    assert await poll_permission_response("myteam", "worker1", "req-rej", timeout=0.1) is None

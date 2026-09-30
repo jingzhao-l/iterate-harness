@@ -11,13 +11,17 @@ confirmation dialog before sending it).
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ..security import AuditLog
+from ..security import AuditLog, allowed_roots, root_is_allowed
 from ..schemas import OperationResult, WorkspaceRemoveRequest, WorkspaceView
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["workspaces"])
 
@@ -26,6 +30,17 @@ def _resolve_project(project_root: str) -> Path:
     root = Path(project_root) if project_root else Path.cwd()
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
+    # ``project_root`` is caller-controlled, so containment inside the root is
+    # not enough on its own: without this the parameter *selects* the root, and
+    # a valid token granted read/write over any directory on the machine.
+    if not root_is_allowed(root):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Project root is outside the roots this WebUI serves: {root}. "
+                f"Allowed: {', '.join(sorted(allowed_roots())) or '(none)'}"
+            ),
+        )
     return root
 
 
@@ -137,13 +152,22 @@ async def list_workspaces(
     from ...swarm.worktree import WorktreeManager
 
     root = _resolve_project(project_root)
-    views: list[WorkspaceView] = [_primary_workspace(root)]
+    # Off the loop: _primary_workspace runs four synchronous ``git`` calls
+    # (up to 15s each on a large worktree) plus a full decision-log read. On
+    # the event loop that froze every SSE connection — a page load silently
+    # stopped the live run's event feed, which is the one thing this channel
+    # exists to do.
+    views: list[WorkspaceView] = [await asyncio.to_thread(_primary_workspace, root)]
 
     mgr = WorktreeManager()
     try:
         worktrees = await mgr.list_worktrees()
     except Exception as exc:  # noqa: BLE001 - listing is best-effort
-        raise HTTPException(status_code=500, detail=f"Failed to list worktrees: {exc}") from exc
+        log.warning("workspace listing failed: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to list worktrees (see the server log for details)",
+        ) from exc
 
     # Only worktrees that belong to this project are shown; a worktree is
     # "stale" (removable) when a newer round of the same project exists, so
@@ -196,7 +220,11 @@ async def remove_workspace(
     try:
         worktrees = await mgr.list_worktrees()
     except Exception as exc:  # noqa: BLE001 - listing is best-effort
-        raise HTTPException(status_code=500, detail=f"Failed to list worktrees: {exc}") from exc
+        log.warning("worktree listing failed during remove: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to list worktrees (see the server log for details)",
+        ) from exc
     exists_in_project = any(info.slug == slug and _belongs_to_project(info, root) for info in worktrees)
     if exists_in_project:
         project_rounds = [

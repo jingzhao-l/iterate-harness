@@ -4,11 +4,17 @@
 
 import type { ChatRunStatus, ChatRunState } from "../types";
 
+// `pausing` / `stopping` are the *pending-transition* states: a pause only
+// takes effect at the next round boundary and a stop is still cancelling, so
+// the badge has to say "requested" — otherwise the operator clicks 暂停 and the
+// card still reads 运行中 with no sign the click registered.
 const STATE_LABELS: Record<ChatRunState, string> = {
   idle: "空闲",
   starting: "启动中",
   running: "运行中",
   paused: "等待输入",
+  pausing: "暂停中…",
+  stopping: "停止中…",
   stopped: "已停止",
 };
 
@@ -17,6 +23,8 @@ const STATE_CLASS: Record<ChatRunState, string> = {
   starting: "state-starting",
   running: "state-running",
   paused: "state-paused",
+  pausing: "state-paused",
+  stopping: "state-stopped",
   stopped: "state-stopped",
 };
 
@@ -71,11 +79,15 @@ export default function RunStatusCard({
     status.waiting_for === "permission" ||
     status.waiting_for === "user_select" ||
     status.waiting_for === "user_prompt";
+  // A pending transition pulses so the badge reads as "in flight", not settled.
+  const pending = status.state === "pausing" || status.state === "stopping";
 
   return (
     <section className={`panel run-status ${STATE_CLASS[status.state]}`}>
       <div className="run-status-head">
-        <span className={`state-badge ${STATE_CLASS[status.state]}`}>
+        <span
+          className={`state-badge ${STATE_CLASS[status.state]}${pending ? " state-pending" : ""}`}
+        >
           {STATE_LABELS[status.state]}
         </span>
         {waiting && <span className="waiting-tag">需要你的输入</span>}

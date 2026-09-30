@@ -7,13 +7,14 @@ rollback.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Query
 
 from ...config.settings import load_settings
 from ...iterate.config_loader import (
@@ -22,7 +23,7 @@ from ...iterate.config_loader import (
     load_effective_config,
     validate_config,
 )
-from ..security import AuditLog, REDACTION_PREFIX, redact_mapping
+from ..security import AuditLog, REDACTION_PREFIX, redact_mapping, allowed_roots, root_is_allowed
 from ..schemas import ConfigView, OperationResult
 
 router = APIRouter(tags=["config"])
@@ -31,6 +32,27 @@ log = logging.getLogger(__name__)
 
 #: Backup suffix for the previous config file before a write.
 _BACKUP_SUFFIX = ".bak.webui"
+
+#: Number of hex characters of the config content hash carried as ``version``.
+#: 16 hex chars (64 bits) is ample for detecting a concurrent edit and keeps
+#: the value short enough to pass around as a query parameter / form field.
+_VERSION_CHARS = 16
+
+
+def _config_version(config_path: Path) -> str:
+    """Return a short content hash of the on-disk config file.
+
+    The version is derived from the *raw bytes* of the file, not the parsed
+    mapping, so any change — including formatting-only edits and comments the
+    loader discards — is detected and a stale editor is rejected rather than
+    silently reverting the other change. A missing file hashes to the digest of
+    empty input, so "no config yet" still carries a stable version token.
+    """
+    try:
+        raw = config_path.read_bytes()
+    except OSError:
+        raw = b""
+    return hashlib.sha256(raw).hexdigest()[:_VERSION_CHARS]
 
 
 def _restore_redacted(
@@ -84,6 +106,17 @@ def _resolve_project(project_root: str) -> Path:
     root = Path(project_root) if project_root else Path.cwd()
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
+    # ``project_root`` is caller-controlled, so containment inside the root is
+    # not enough on its own: without this the parameter *selects* the root, and
+    # a valid token granted read/write over any directory on the machine.
+    if not root_is_allowed(root):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Project root is outside the roots this WebUI serves: {root}. "
+                f"Allowed: {', '.join(sorted(allowed_roots())) or '(none)'}"
+            ),
+        )
     return root
 
 
@@ -95,6 +128,9 @@ def get_config(project_root: str = "") -> ConfigView:
     raw = load_config(root) or {}
     # Redact the raw config so any credential-like keys are never echoed.
     raw_redacted = redact_mapping(raw)
+    # Content hash of the file the editor is about to overwrite; PUT compares it
+    # so a concurrent edit is rejected instead of clobbered.
+    version = _config_version(root / CONFIG_FILENAME)
 
     # Provider settings from the harness config.
     settings = load_settings()
@@ -131,6 +167,7 @@ def get_config(project_root: str = "") -> ConfigView:
         ),
         providers=profiles,
         active_profile=active,
+        version=version,
     )
 
 
@@ -139,11 +176,26 @@ def update_config(
     config: dict[str, Any] = Body(..., description="New config content"),
     project_root: str = "",
     confirm: bool = False,
+    expected_version: str = Query(
+        "",
+        alias="expectedVersion",
+        description=(
+            "Content hash returned by GET /config for the version being "
+            "overwritten. When it no longer matches the file on disk the write "
+            "is rejected with 409 (concurrent edit)."
+        ),
+    ),
 ) -> OperationResult:
     """Validate and write ``iterate.config.yaml`` (mutating, audited).
 
     Before writing, the current file is backed up to ``<path>.bak.webui``.
     If the write fails, the backup is restored. Requires ``confirm=true``.
+
+    ``expectedVersion`` enables optimistic concurrency: the editor sends the
+    ``version`` it loaded, and a mismatch (someone else edited the file while
+    the form was open) is rejected with ``409`` instead of overwriting their
+    change. Omitting it keeps the last-write-wins behavior for API clients
+    that do not round-trip the version.
     """
     root = _resolve_project(project_root)
     if not confirm:
@@ -168,6 +220,21 @@ def update_config(
     import yaml  # type: ignore[import-untyped]  # pyyaml ships no stubs
 
     config_path = root / CONFIG_FILENAME
+
+    # Optimistic concurrency: compare the version the editor loaded against the
+    # current on-disk content *before* touching anything (so a rejected write
+    # leaves no backup file and no audit entry). Checked after ``confirm`` and
+    # validation so a malformed draft is reported as a 422 rather than a 409.
+    current_version = _config_version(config_path)
+    if expected_version and expected_version != current_version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Config changed on disk since it was loaded "
+                f"(expected {expected_version}, found {current_version}). "
+                "Reload the config, re-apply your change, and save again."
+            ),
+        )
 
     # Backup the existing config.
     if config_path.exists():
@@ -197,16 +264,19 @@ def update_config(
             detail += f"; rollback also failed: {rollback_error}"
         raise HTTPException(status_code=500, detail=detail) from exc
 
+    new_version = _config_version(config_path)
     AuditLog(root).record(
         "config.update",
         str(config_path),
-        summary={"keys": list(config.keys())},
+        summary={"keys": list(config.keys()), "version": new_version},
     )
     return OperationResult(
         status="ok",
         message=f"Config written to {config_path.name}",
         target=str(config_path),
-        detail={"keys": list(config.keys())},
+        # The new version lets a client that holds the editor state continue
+        # saving without a round-trip GET to refresh its concurrency token.
+        detail={"keys": list(config.keys()), "version": new_version},
     )
 
 

@@ -313,6 +313,23 @@ class TeammateSpawnConfig:
     """Task mode the teammate should run in (``code`` / ``iterate``, design
     §20.5). Forwarded as ``--task-mode`` so workers inherit the leader's
     defensive kernel behaviour instead of defaulting to the iterate loop."""
+    allowed_tools: list[str] | None = None
+    """Explicit allow-list forwarded to the teammate's tool registry.
+
+    ``None`` means "inherit the parent's full registry". A list restricts the
+    teammate to exactly those tools. This existed on
+    :class:`~iterate_harness.coordinator.agent_definitions.AgentDefinition`
+    but had no way to reach the spawned process, so a definition's
+    ``tools=[...]`` was silently dropped.
+    """
+
+    denied_tools: list[str] | None = None
+    """Explicit deny-list forwarded to the teammate's permission checker.
+
+    Names must match the *registry* names (``edit_file`` / ``write_file`` /
+    ``read_file``), not the file basenames — a deny list naming ``file_edit``
+    matches nothing and grants everything.
+    """
 
 
 # ---------------------------------------------------------------------------

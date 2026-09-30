@@ -48,6 +48,18 @@ class GrepTool(BaseTool[GrepToolInput]):
 
     async def execute(self, arguments: GrepToolInput, context: ToolExecutionContext) -> ToolResult:
         root = _resolve_path(context.cwd, arguments.root) if arguments.root else context.cwd
+        if not root.exists():
+            # Say so instead of reporting "(no matches)": a typo'd root must
+            # never look like "the code isn't there", and the rg path would
+            # otherwise surface a raw FileNotFoundError from the spawn.
+            return ToolResult(
+                output=f"Search root does not exist: {root}", is_error=True
+            )
+        if not (root.is_dir() or root.is_file()):
+            return ToolResult(
+                output=f"Search root is neither a file nor a directory: {root}",
+                is_error=True,
+            )
         if root.is_file():
             display_base = _display_base(root, context.cwd)
             matches = await _rg_grep_file(

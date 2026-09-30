@@ -50,7 +50,13 @@ def is_regular_file(path: str | os.PathLike[str]) -> bool:
         return False
 
 
-def atomic_write_bytes(path: str | os.PathLike[str], data: bytes, *, mode: int | None = None) -> None:
+def atomic_write_bytes(
+    path: str | os.PathLike[str],
+    data: bytes,
+    *,
+    mode: int | None = None,
+    create_parents: bool = True,
+) -> None:
     """Write ``data`` to ``path`` atomically.
 
     When ``mode`` is given, the final file is created with that POSIX mode
@@ -58,9 +64,18 @@ def atomic_write_bytes(path: str | os.PathLike[str], data: bytes, *, mode: int |
     existing file's mode is preserved; for new files the current umask
     determines the mode, matching the historical behaviour of
     :meth:`pathlib.Path.write_text`.
+
+    ``create_parents=False`` honours a caller's explicit "do not create
+    directories" intent instead of silently creating them, so an option like
+    the write tool's ``create_directories`` is not dead.
     """
     dst = Path(path)
-    dst.parent.mkdir(parents=True, exist_ok=True)
+    if not dst.parent.is_dir():
+        if not create_parents:
+            raise FileNotFoundError(
+                2, "No such file or directory", str(dst.parent)
+            )
+        dst.parent.mkdir(parents=True, exist_ok=True)
     target_mode = _resolve_target_mode(dst, mode)
 
     fd, tmp_name = tempfile.mkstemp(
@@ -86,9 +101,12 @@ def atomic_write_text(
     *,
     encoding: str = "utf-8",
     mode: int | None = None,
+    create_parents: bool = True,
 ) -> None:
     """Text variant of :func:`atomic_write_bytes`."""
-    atomic_write_bytes(path, data.encode(encoding), mode=mode)
+    atomic_write_bytes(
+        path, data.encode(encoding), mode=mode, create_parents=create_parents
+    )
 
 
 def _resolve_target_mode(path: Path, explicit_mode: int | None) -> int:

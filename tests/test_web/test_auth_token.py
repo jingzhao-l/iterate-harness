@@ -50,10 +50,41 @@ def test_api_accepts_bearer_header(client: TestClient, tmp_path: Path):
     assert response.status_code == 200
 
 
-def test_api_accepts_query_param_token(client: TestClient, tmp_path: Path):
-    # The SSE stream cannot set custom headers, so ?token= must also work.
-    response = _status(client, tmp_path, params={"token": _SECRET})
-    assert response.status_code == 200
+def test_api_accepts_query_param_token_on_events_only(client: TestClient, tmp_path: Path):
+    """``?token=`` is accepted *only* on the SSE stream.
+
+    ``EventSource`` cannot set an ``Authorization`` header, so the stream is the
+    one endpoint that must read the token from the URL. Honouring it on every
+    route meant a token pasted into an ordinary request URL (proxy access log,
+    browser history, Referer) authenticated the call.
+    """
+    # A non-events route rejects the query token…
+    rejected = _status(client, tmp_path, params={"token": _SECRET})
+    assert rejected.status_code == 401
+    # …while /events accepts it. Point it at a missing root so the request
+    # settles immediately: reaching the route's own 404 (not the 401 guard)
+    # proves authentication passed without opening a stream.
+    accepted = client.get(
+        "/api/v1/events",
+        params={"token": _SECRET, "project_root": str(tmp_path / "nope")},
+    )
+    assert accepted.status_code == 404
+
+
+def test_events_rejects_wrong_query_token(client: TestClient, tmp_path: Path):
+    response = client.get(
+        "/api/v1/events",
+        params={"token": "wrong", "project_root": str(tmp_path)},
+    )
+    assert response.status_code == 401
+
+
+def test_events_trailing_slash_still_accepts_query_token(client: TestClient, tmp_path: Path):
+    response = client.get(
+        "/api/v1/events/",
+        params={"token": _SECRET, "project_root": str(tmp_path / "nope")},
+    )
+    assert response.status_code == 404
 
 
 def test_mutating_route_is_also_guarded(client: TestClient, tmp_path: Path):

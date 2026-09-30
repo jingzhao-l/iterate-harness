@@ -130,7 +130,11 @@ def is_model_multimodal(model: str) -> bool:
     fallback tool is used rather than silently failing.
     """
     normalized = model.strip().lower()
-    # Strip provider prefix like "anthropic/" or "openai/"
+    # Strip the provider/vender prefix: "anthropic/claude-…",
+    # "openai/gpt-…" or a routed "openrouter/anthropic/claude-…". ``rsplit``
+    # keeps only the leaf; ``split("/", 1)`` left "anthropic/claude-…"
+    # intact for routed ids, so every multimodal pattern missed and the
+    # vision path silently fell back to the text-only tool.
     if "/" in normalized:
-        normalized = normalized.split("/", 1)[-1]
+        normalized = normalized.rsplit("/", 1)[-1]
     return any(pattern.search(normalized) is not None for pattern in _MULTIMODAL_MODEL_PATTERNS)

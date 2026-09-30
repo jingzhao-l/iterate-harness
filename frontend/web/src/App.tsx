@@ -47,6 +47,7 @@ const CONN_LABELS: Record<string, string> = {
   connected: "实时流已连接",
   reconnecting: "重连中…",
   disconnected: "已断开",
+  unauthorized: "令牌失效",
 };
 
 // Sidebar control to select the project root the whole console operates on

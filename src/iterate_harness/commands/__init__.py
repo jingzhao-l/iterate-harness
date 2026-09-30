@@ -8,6 +8,7 @@ from iterate_harness.commands.registry import (
     SlashCommand,
     create_default_command_registry,
     lookup_skill_slash_command,
+    remote_invocation_allowed,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "SlashCommand",
     "create_default_command_registry",
     "lookup_skill_slash_command",
+    "remote_invocation_allowed",
 ]

@@ -301,7 +301,17 @@ class WorktreeManager:
             code, repo_git_dir, _ = await _run_git("rev-parse", "--git-dir", cwd=repo_path)
             if code != 0 or not repo_git_dir:
                 return False
-            marker_file = git_marker.read_text(encoding="utf-8").strip()
+            try:
+                marker_file = git_marker.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeDecodeError):
+                # A marker we cannot decode is a marker we cannot prove is
+                # ours. Refuse rather than raising out of stale cleanup.
+                logger.warning(
+                    "[worktree] Refusing stale-cleanup of %s: .git marker is not "
+                    "readable text",
+                    worktree_path,
+                )
+                return False
             if not marker_file.startswith("gitdir:"):
                 return False
             marker_target = Path(marker_file[len("gitdir:"):].strip())

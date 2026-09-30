@@ -75,7 +75,13 @@ export default function ConfigPage(): React.JSX.Element {
     setBusy(true);
     try {
       const parsed = yamlLoad(draft);
-      const result = await api.saveConfig((parsed ?? {}) as Record<string, unknown>, projectRoot);
+      // ``view.version`` is the content hash this draft was built from, so a
+      // concurrent edit is rejected with 409 instead of being clobbered.
+      const result = await api.saveConfig(
+        (parsed ?? {}) as Record<string, unknown>,
+        projectRoot,
+        view?.version,
+      );
       pushToast(result.status === "ok" ? "success" : "error", result.message);
       if (result.status === "ok") {
         const refreshed = await api.config(projectRoot);
@@ -84,6 +90,14 @@ export default function ConfigPage(): React.JSX.Element {
         setDirty(false);
       }
     } catch (error) {
+      // 409 = the file changed on disk while this editor was open (a hand-edit
+      // in the operator's editor, or another tab). Reload so they see the
+      // current content and can re-apply their change; never overwrite blindly.
+      if (error instanceof ApiError && error.status === 409) {
+        pushToast("error", "配置已被其他客户端修改，正在重新加载，请重新应用你的改动。");
+        await load();
+        return;
+      }
       const message =
         error instanceof ApiError ? String(error.detail ?? error.message) : String(error);
       pushToast("error", message);

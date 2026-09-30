@@ -106,11 +106,19 @@ def validate_team_name(team_name: str) -> str:
     return team_name
 
 
-def get_team_dir(team_name: str) -> Path:
-    """Return ~/.iterate-harness/teams/<team_name>/"""
+def get_team_dir(team_name: str, *, create: bool = True) -> Path:
+    """Return ``~/.iterate-harness/teams/<team_name>/``.
+
+    ``create=False`` computes the path without touching the filesystem. This
+    is required for *read* paths: the previous version always ran ``mkdir``,
+    so merely listing a team's mailbox (or checking whether it exists) created
+    the whole directory tree, and a read-only or permission-denied home raised
+    from a read path that had no business needing write access.
+    """
     validate_team_name(team_name)
     base = Path.home() / ".iterate-harness" / "teams" / team_name
-    base.mkdir(parents=True, exist_ok=True)
+    if create:
+        base.mkdir(parents=True, exist_ok=True)
     return base
 
 

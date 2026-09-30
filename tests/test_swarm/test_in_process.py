@@ -108,6 +108,59 @@ def test_build_query_context_resolves_full_wiring(monkeypatch, tmp_path):
     assert context.max_tokens > 0
 
 
+def test_build_query_context_applies_allowed_and_denied_tool_posture(monkeypatch, tmp_path):
+    """Regression: the spawn config's allowed/denied tool lists used to have
+    NO consumer — an in-process teammate declared \u201cread-only\u201d got the full
+    registry and the parent's permission settings, so it could still write.
+    They must be merged into the teammate's settings and enforced by its
+    permission checker."""
+
+    class _FakeApiClient:
+        pass
+
+    monkeypatch.setattr(
+        "iterate_harness.ui.runtime._resolve_api_client_from_settings",
+        lambda settings: _FakeApiClient(),
+    )
+    monkeypatch.setattr(
+        "iterate_harness.config.settings.Settings.materialize_active_profile",
+        lambda self: self,
+    )
+    config = TeammateSpawnConfig(
+        name="readonly-worker",
+        team="team",
+        prompt="inspect only",
+        cwd=str(tmp_path),
+        parent_session_id="s",
+        allowed_tools=["edit_file"],
+        denied_tools=["write_file", "bash"],
+    )
+    context = build_teammate_query_context(config)
+    assert context is not None
+    checker = context.permission_checker
+
+    # Allow-listed mutating tool is granted immediately (no confirmation),
+    # even though the effective mode is not full_auto.
+    edit = checker.evaluate("edit_file", is_read_only=False, file_path=str(tmp_path / "a.py"))
+    assert edit.allowed is True
+    assert "explicitly allowed" in edit.reason
+    # Deny-listed tools are blocked outright.
+    write = checker.evaluate("write_file", is_read_only=False, file_path=str(tmp_path / "out.txt"))
+    assert write.allowed is False
+    assert "explicitly denied" in write.reason
+    bash = checker.evaluate("bash", is_read_only=False, command="whoami")
+    assert bash.allowed is False
+    assert "explicitly denied" in bash.reason
+    # An ordinary mutating tool that is neither listed nor read-only must NOT
+    # silently pass -- the allow-list is a strict scope, not a hint.
+    from iterate_harness.tools.task_create_tool import TaskCreateTool
+
+    other = checker.evaluate(
+        TaskCreateTool.name, is_read_only=False, command="touch /tmp/leak"
+    )
+    assert other.allowed is False
+
+
 def test_build_query_context_task_mode_code_inherits_kernel(monkeypatch, tmp_path):
     class _FakeApiClient:
         pass

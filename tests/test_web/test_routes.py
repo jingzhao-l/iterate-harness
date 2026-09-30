@@ -19,6 +19,7 @@ from iterate_harness.iterate.types import DecisionLogEntry
 from iterate_harness.web import api as api_module
 from iterate_harness.web import events as events_module
 from iterate_harness.web.api import create_app
+from iterate_harness.web.routes import config as config_routes
 from iterate_harness.web.routes.config import REDACTION_PREFIX, _restore_redacted
 
 #: A config dict that passes ``validate_config``.
@@ -197,19 +198,81 @@ class TestRuns:
         body = client.get("/api/v1/runs/findings", params={"project_root": str(tmp_path)}).json()
         # a.py sql-injection deduped across rounds → 3 unique findings
         assert body["total"] == 3
-        assert body["page"] == 3
+        # ``page`` used to be ``len(page)`` — a count under a name that reads
+        # like a page index. It is now ``returned``/``truncated`` so a client
+        # can tell "this is the whole set" from "this is the first 500".
+        assert "page" not in body
+        assert body["returned"] == 3
+        assert body["offset"] == 0
+        assert body["truncated"] is False
 
         high = client.get(
             "/api/v1/runs/findings",
             params={"project_root": str(tmp_path), "severity": "high"},
         ).json()
         assert high["total"] == 1
+        assert high["truncated"] is False
 
         dim = client.get(
             "/api/v1/runs/findings",
             params={"project_root": str(tmp_path), "dimension": "code_review"},
         ).json()
         assert dim["total"] == 2
+
+    def test_findings_reports_truncation_and_offset(self, client: TestClient, tmp_path: Path):
+        """A paginated response must admit that rows are missing.
+
+        The console previously advertised the *unpaginated* total while its
+        pager could only reach the first ``limit`` rows, so a large backlog
+        was silently untriaged past the cut.
+        """
+        log = tmp_path / ".iterate" / "decision-log.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "timestamp": "2026-01-01T00:00:00Z",
+            "round": 1,
+            "type": "review_result",
+            "data": {
+                "findings": [
+                    {
+                        "file": f"src/mod_{i}.py",
+                        "line": i + 1,
+                        "dimension": "code_review",
+                        "severity": "medium",
+                    }
+                    for i in range(7)
+                ]
+            },
+        }
+        log.write_text(
+            json.dumps(payload) + "\n" + json.dumps(payload) + "\n", encoding="utf-8"
+        )
+
+        first = client.get(
+            "/api/v1/runs/findings",
+            params={"project_root": str(tmp_path), "limit": 3, "offset": 0},
+        ).json()
+        assert first["total"] == 7
+        assert first["returned"] == 3
+        assert first["truncated"] is True
+
+        last = client.get(
+            "/api/v1/runs/findings",
+            params={"project_root": str(tmp_path), "limit": 3, "offset": 6},
+        ).json()
+        assert last["returned"] == 1
+        assert last["truncated"] is False
+
+        middle = client.get(
+            "/api/v1/runs/findings",
+            params={"project_root": str(tmp_path), "limit": 3, "offset": 3},
+        ).json()
+        assert middle["returned"] == 3
+        assert middle["truncated"] is True
+        # Pages must not overlap: the 4th row is neither in page 1 nor page 3.
+        assert [f["line"] for f in first["findings"]] == [1, 2, 3]
+        assert [f["line"] for f in middle["findings"]] == [4, 5, 6]
+        assert [f["line"] for f in last["findings"]] == [7]
 
     def test_latest_report(self, client: TestClient, tmp_path: Path):
         populate_log(tmp_path)
@@ -360,6 +423,134 @@ class TestConfig:
         raw = body["raw"]
         assert raw["provider"]["api_key"] != "sk-super-secret-123456"
         assert "sk-super-secret" not in str(raw)
+
+    def test_get_config_returns_version(self, client: TestClient, tmp_path: Path):
+        """GET /config carries a content hash used for optimistic concurrency."""
+        body = client.get("/api/v1/config", params={"project_root": str(tmp_path)}).json()
+        # A missing file still hashes to a stable token (digest of empty input).
+        assert body["version"] == config_routes._config_version(
+            tmp_path / "iterate.config.yaml"
+        )
+
+        client.put(
+            "/api/v1/config",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json=VALID_CONFIG,
+        )
+        after = client.get("/api/v1/config", params={"project_root": str(tmp_path)}).json()
+        assert after["version"] != body["version"]
+
+    def test_put_config_rejects_stale_version(self, client: TestClient, tmp_path: Path):
+        """A config edited elsewhere while the form was open must not be
+        silently overwritten by the stale draft (lost-update guard)."""
+        first = client.put(
+            "/api/v1/config",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json=VALID_CONFIG,
+        )
+        assert first.status_code == 200
+        version = client.get("/api/v1/config", params={"project_root": str(tmp_path)}).json()[
+            "version"
+        ]
+
+        # Someone edits the YAML by hand after the editor loaded it.
+        path = tmp_path / "iterate.config.yaml"
+        path.write_text(path.read_text(encoding="utf-8") + "\n# hand edit\n", encoding="utf-8")
+
+        stale = client.put(
+            "/api/v1/config",
+            params={
+                "project_root": str(tmp_path),
+                "confirm": "true",
+                "expectedVersion": version,
+            },
+            json={**VALID_CONFIG, "max_rounds": 3},
+        )
+        assert stale.status_code == 409
+        assert "changed on disk" in stale.json()["detail"]
+        # The other edit survives — nothing was clobbered.
+        assert "# hand edit" in path.read_text(encoding="utf-8")
+
+    def test_put_config_accepts_current_version(self, client: TestClient, tmp_path: Path):
+        client.put(
+            "/api/v1/config",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json=VALID_CONFIG,
+        )
+        version = client.get("/api/v1/config", params={"project_root": str(tmp_path)}).json()[
+            "version"
+        ]
+        ok = client.put(
+            "/api/v1/config",
+            params={
+                "project_root": str(tmp_path),
+                "confirm": "true",
+                "expectedVersion": version,
+            },
+            json={**VALID_CONFIG, "max_rounds": 3},
+        )
+        assert ok.status_code == 200
+        # The result carries the new version so a client can keep saving
+        # without a round-trip GET.
+        assert ok.json()["detail"]["version"] == config_routes._config_version(
+            tmp_path / "iterate.config.yaml"
+        )
+
+    def test_put_config_omitting_version_keeps_last_write_wins(
+        self, client: TestClient, tmp_path: Path
+    ):
+        client.put(
+            "/api/v1/config",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json=VALID_CONFIG,
+        )
+        response = client.put(
+            "/api/v1/config",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json={**VALID_CONFIG, "max_rounds": 7},
+        )
+        assert response.status_code == 200
+
+    def test_put_config_stale_version_leaves_no_backup_or_audit(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """A rejected write must be side-effect free: no backup file churn and
+        no ``config.update`` audit entry for a change that never happened."""
+        client.put(
+            "/api/v1/config",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+            json=VALID_CONFIG,
+        )
+        audit_path = tmp_path / ".iterate" / "web-audit.jsonl"
+        before = audit_path.read_text(encoding="utf-8").count("config.update")
+        response = client.put(
+            "/api/v1/config",
+            params={
+                "project_root": str(tmp_path),
+                "confirm": "true",
+                "expectedVersion": "deadbeefdeadbeef",
+            },
+            json={**VALID_CONFIG, "max_rounds": 3},
+        )
+        assert response.status_code == 409
+        assert audit_path.read_text(encoding="utf-8").count("config.update") == before
+
+    def test_put_config_reports_validation_before_conflict(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """A malformed draft is a 422 (fix your input) even when the version is
+        also stale — otherwise the operator chases a conflict they cannot act
+        on instead of the validation error in their YAML."""
+        response = client.put(
+            "/api/v1/config",
+            params={
+                "project_root": str(tmp_path),
+                "confirm": "true",
+                "expectedVersion": "deadbeefdeadbeef",
+            },
+            json={"dimensions": []},
+        )
+        assert response.status_code == 422
 
     def test_put_config_preserves_redacted_secrets(self, client: TestClient, tmp_path: Path):
         """Saving the redacted editor draft must not clobber real credentials.
@@ -528,7 +719,11 @@ class TestEvents:
         monkeypatch.setattr(events_module, "_POLL_INTERVAL", 0.0)
         gen = events_module._event_generator(tmp_path, stream_all=True)
         first = await anext(gen)
-        assert first.startswith("event: status\n")
+        # Every frame is "id: <n>\nevent: <type>\ndata: <json>" so a
+        # reconnecting EventSource can send Last-Event-ID back.
+        assert "event: status" in first
+        assert "id: " in first
+        assert first.endswith("\n\n")
 
 
 class TestFindingsTriage:

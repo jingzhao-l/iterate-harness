@@ -7,6 +7,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -340,6 +341,30 @@ def _coerce_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _resolve_plugin_path(root: Path, relative: str) -> Path | None:
+    """Resolve a manifest-declared path, refusing anything outside ``root``.
+
+    A plugin manifest is data. Its ``commands`` / ``agents`` entries were
+    joined onto the plugin directory and ``.resolve()``d with no containment
+    check, so ``"../../../../tmp/evil"`` (or a symlink pointing out) loaded and
+    *executed* files from anywhere on the box — for hooks that means running
+    an arbitrary command. Every manifest-declared path goes through here.
+    """
+    candidate = Path(relative).expanduser()
+    if candidate.is_absolute():
+        return None
+    resolved_root = root.resolve()
+    resolved = (resolved_root / candidate).resolve()
+    if resolved != resolved_root and not resolved.is_relative_to(resolved_root):
+        logger.warning(
+            "Plugin path %r escapes the plugin root %s; refusing to load it",
+            relative,
+            resolved_root,
+        )
+        return None
+    return resolved
+
+
 def _load_plugin_commands(path: Path, manifest: PluginManifest) -> list[PluginCommandDefinition]:
     commands: list[PluginCommandDefinition] = []
     seen: set[Path] = set()
@@ -360,7 +385,9 @@ def _load_plugin_commands(path: Path, manifest: PluginManifest) -> list[PluginCo
             source = metadata.get("source")
             content = metadata.get("content")
             if isinstance(source, str):
-                command_path = (path / source).resolve()
+                command_path = _resolve_plugin_path(path, source)
+                if command_path is None:
+                    continue
                 if command_path.is_dir():
                     commands.extend(
                         _load_commands_from_directory(
@@ -392,7 +419,9 @@ def _load_plugin_commands(path: Path, manifest: PluginManifest) -> list[PluginCo
                 )
     else:
         for raw_path in _coerce_path_list(manifest_commands):
-            command_path = (path / raw_path).resolve()
+            command_path = _resolve_plugin_path(path, raw_path)
+            if command_path is None:
+                continue
             if command_path.is_dir():
                 commands.extend(
                     _load_commands_from_directory(
@@ -505,7 +534,9 @@ def _load_plugin_agents(path: Path, manifest: PluginManifest) -> list[AgentDefin
     default_agents_dir = path / "agents"
     agents.extend(_load_agents_from_directory(default_agents_dir, plugin_name=manifest.name, seen=seen))
     for raw_path in _coerce_path_list(manifest.agents):
-        agent_path = (path / raw_path).resolve()
+        agent_path = _resolve_plugin_path(path, raw_path)
+        if agent_path is None:
+            continue
         if agent_path.is_dir():
             agents.extend(_load_agents_from_directory(agent_path, plugin_name=manifest.name, seen=seen))
         elif agent_path.is_file() and agent_path.suffix.lower() == ".md":
@@ -641,6 +672,29 @@ def _load_single_agent_file(
     )
 
 
+def _coerce_hook_event_key(raw: str) -> str | None:
+    """Normalize a hooks.json event key to the canonical ``HookEvent`` value.
+
+    Plugin marketplaces write camelCase event names (``PreToolUse``,
+    ``SessionStart``), while :class:`~iterate_harness.hooks.events.HookEvent`
+    values are snake_case (``pre_tool_use``). ``hooks`` dicts are keyed by the
+    raw manifest key and consumers build ``HookEvent(raw_key)`` — without
+    normalization every camelCase key raises ValueError and the hook is
+    silently dropped (a shipped guard rail that never runs). Returns ``None``
+    when the key names no known event after normalization.
+    """
+    from iterate_harness.hooks.events import HookEvent
+
+    if not isinstance(raw, str):
+        return None
+    snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw).lower()
+    snake = snake.replace("-", "_").strip("_")
+    try:
+        return HookEvent(snake).value
+    except ValueError:
+        return None
+
+
 def _load_plugin_hooks(path: Path) -> dict[str, list[object]]:
     """Load hooks from a flat hooks.json file."""
     if not path.exists():
@@ -662,7 +716,10 @@ def _load_plugin_hooks(path: Path) -> dict[str, list[object]]:
         return {}
     parsed: dict[str, list[object]] = {}
     for event, hooks in raw.items():
-        parsed[event] = []
+        event_key = _coerce_hook_event_key(event)
+        if event_key is None:
+            continue
+        parsed[event_key] = []
         if not isinstance(hooks, list):
             continue
         for hook in hooks:
@@ -671,25 +728,43 @@ def _load_plugin_hooks(path: Path) -> dict[str, list[object]]:
             try:
                 hook_type = hook.get("type")
                 if hook_type == "command":
-                    parsed[event].append(CommandHookDefinition.model_validate(hook))
+                    parsed[event_key].append(CommandHookDefinition.model_validate(hook))
                 elif hook_type == "prompt":
-                    parsed[event].append(PromptHookDefinition.model_validate(hook))
+                    parsed[event_key].append(PromptHookDefinition.model_validate(hook))
                 elif hook_type == "http":
-                    parsed[event].append(HttpHookDefinition.model_validate(hook))
+                    parsed[event_key].append(HttpHookDefinition.model_validate(hook))
                 elif hook_type == "agent":
-                    parsed[event].append(AgentHookDefinition.model_validate(hook))
+                    parsed[event_key].append(AgentHookDefinition.model_validate(hook))
             except Exception:  # noqa: BLE001 - one bad hook must not kill the plugin
                 logger.debug("Skipping malformed %r hook in %s", hook.get("type"), path, exc_info=True)
     return parsed
 
 
 def _load_plugin_hooks_structured(path: Path, plugin_root: Path) -> dict[str, list[object]]:
-    """Load hooks from structured hooks.json format."""
+    """Load hooks from the structured (``{"hooks": {...}}``) hooks.json format.
+
+    Returns real :mod:`~iterate_harness.hooks.schemas` definitions. It used to
+    hand back plain ``dict`` objects, and the consumer filters hooks with
+    ``isinstance(hook, HookDefinition)`` — so every hook in the structured
+    format was silently dropped, and a plugin could ship a guard rail that
+    never ran.
+    """
+    from iterate_harness.hooks.schemas import (
+        AgentHookDefinition,
+        CommandHookDefinition,
+        HttpHookDefinition,
+        PromptHookDefinition,
+    )
+
     if not path.exists():
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        logger.warning("Skipping unreadable structured hooks file %s", path, exc_info=True)
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning("Skipping structured hooks file %s: top level is not an object", path)
         return {}
     hooks_data = raw.get("hooks", raw)
     if not isinstance(hooks_data, dict):
@@ -698,19 +773,64 @@ def _load_plugin_hooks_structured(path: Path, plugin_root: Path) -> dict[str, li
     for event, entries in hooks_data.items():
         if not isinstance(entries, list):
             continue
-        parsed[event] = []
+        bucket: list[object] = []
+
+        def _append_hook(hook: dict[str, Any], matcher: str) -> None:
+            try:
+                spec = dict(hook)
+                if matcher:
+                    spec.setdefault("matcher", matcher)
+                cmd = spec.get("command")
+                if isinstance(cmd, str):
+                    spec["command"] = cmd.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin_root))
+                timeout = spec.get("timeout")
+                if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+                    # ``timeout`` (seconds) in the structured format is
+                    # ``timeout_seconds`` here; clamp to the schema's range
+                    # so a hostile 10**9 does not fail validation (and lose
+                    # the hook) instead of being rejected.
+                    spec["timeout_seconds"] = max(1, min(int(timeout), 1200))
+                # ``timeout`` in seconds and ``timeoutSeconds`` in the
+                # schema are the same value under two spellings; drop the
+                # alias so validation does not reject the extra field.
+                spec.pop("timeout", None)
+                hook_type = spec.get("type", "command")
+                if hook_type == "command":
+                    bucket.append(CommandHookDefinition.model_validate(spec))
+                elif hook_type == "prompt":
+                    bucket.append(PromptHookDefinition.model_validate(spec))
+                elif hook_type == "http":
+                    bucket.append(HttpHookDefinition.model_validate(spec))
+                elif hook_type == "agent":
+                    bucket.append(AgentHookDefinition.model_validate(spec))
+                else:
+                    logger.debug("Skipping hook with unknown type %r in %s", hook_type, path)
+            except Exception:  # noqa: BLE001 - one bad hook must not kill the plugin
+                logger.debug("Skipping malformed %r hook in %s", hook.get("type"), path, exc_info=True)
+
         for entry in entries:
-            hook_list = entry.get("hooks", [])
+            if not isinstance(entry, dict):
+                continue
+            hook_list = entry.get("hooks")
             matcher = entry.get("matcher", "")
-            for hook in hook_list:
-                cmd = hook.get("command", "")
-                cmd = cmd.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin_root))
-                parsed[event].append({
-                    "type": hook.get("type", "command"),
-                    "command": cmd,
-                    "matcher": matcher,
-                    "timeout": hook.get("timeout"),
-                })
+            if isinstance(hook_list, list):
+                # Wrapped shape: {"matcher": ..., "hooks": [hook, ...]}.
+                if hook_list:
+                    for hook in hook_list:
+                        if isinstance(hook, dict):
+                            _append_hook(hook, matcher)
+                elif "type" in entry:
+                    # Empty ``hooks`` list plus ``type``: treat the whole
+                    # entry as a single hook instead of a group wrapper.
+                    _append_hook(entry, "")
+                continue
+            if "type" in entry:
+                # Bare shape: the entry IS a hook.
+                _append_hook(entry, "")
+        if bucket:
+            event_key = _coerce_hook_event_key(event)
+            if event_key is not None:
+                parsed[event_key] = bucket
     return parsed
 
 
@@ -736,8 +856,11 @@ def _load_plugin_tools(path: Path, manifest: PluginManifest) -> list[BaseTool[An
     """Discover and instantiate BaseTool subclasses from a plugin's tools/ directory."""
     from iterate_harness.tools.base import BaseTool
 
-    tools_dir = path / manifest.tools_dir
-    if not tools_dir.is_dir():
+    # ``tools_dir`` is also manifest-declared: an escape would make the
+    # loader import arbitrary Python and instantiate whatever BaseTool
+    # subclasses it finds.
+    tools_dir = _resolve_plugin_path(path, manifest.tools_dir)
+    if tools_dir is None or not tools_dir.is_dir():
         return []
 
     tools: list[BaseTool[Any]] = []

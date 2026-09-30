@@ -13,6 +13,9 @@ from iterate_harness import __version__
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from iterate_harness.utils.network_guard import NetworkGuardError, fetch_public_http_response
 
+#: Hard cap on the search result page we download (memory guard).
+MAX_SEARCH_BODY_BYTES = 2 * 1024 * 1024
+
 
 class WebSearchToolInput(BaseModel):
     """Arguments for a web search."""
@@ -49,6 +52,9 @@ class WebSearchTool(BaseTool[WebSearchToolInput]):
                 params={"q": arguments.query},
                 headers={"User-Agent": f"IterateHarness/{__version__}"},
                 timeout=20.0,
+                # Cap the download: without this a hostile or simply enormous
+                # result page is buffered in full before it is even parsed.
+                max_bytes=MAX_SEARCH_BODY_BYTES,
             )
             response.raise_for_status()
         except (httpx.HTTPError, NetworkGuardError) as exc:
@@ -83,7 +89,7 @@ def _parse_search_results(body: str, *, limit: int) -> list[dict[str, str]]:
         body,
         flags=re.IGNORECASE | re.DOTALL,
     )
-    for index, match in enumerate(anchor_matches):
+    for match in anchor_matches:
         attrs = match.group("attrs")
         class_match = re.search(r'class="(?P<class>[^"]+)"', attrs, flags=re.IGNORECASE)
         if class_match is None:
@@ -96,7 +102,11 @@ def _parse_search_results(body: str, *, limit: int) -> list[dict[str, str]]:
             continue
         title = _clean_html(match.group("title"))
         url = _normalize_result_url(href_match.group("href"))
-        snippet = snippets[index] if index < len(snippets) else ""
+        # Pair the snippet by *result* index, not by anchor index: any unrelated
+        # <a> (nav, pagination) or extra/missing snippet div would otherwise
+        # shift every snippet and hand the model misattributed text.
+        snippet_index = len(results)
+        snippet = snippets[snippet_index] if snippet_index < len(snippets) else ""
         if title and url:
             results.append({"title": title, "url": url, "snippet": snippet})
         if len(results) >= limit:

@@ -145,6 +145,40 @@ def test_load_session_snapshot_returns_none_when_file_missing(tmp_path: Path, mo
     assert load_session_snapshot(project) is None
 
 
+def test_load_session_snapshot_tolerates_corrupt_json_file(tmp_path: Path, monkeypatch):
+    """A truncated/corrupt session file on disk must not crash resume or list:
+    ``load_session_snapshot`` returns None and ``list_session_snapshots`` skips
+    the file, so one bad snapshot can never brick the whole session UI."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    project = tmp_path / "corrupt-repo"
+    project.mkdir()
+    target_dir = get_project_session_dir(project)
+
+    # Corrupt latest.json (truncated mid-document) plus a corrupt history file.
+    (target_dir / "latest.json").write_text('{"cwd": "', encoding="utf-8")
+    (target_dir / "session-broken.json").write_text("\x00\x01\x02 not json", encoding="utf-8")
+
+    assert load_session_snapshot(project) is None
+
+    # Also a well-formed sibling history so listing still yields something good.
+    base = {
+        "cwd": str(project),
+        "session_id": "good",
+        "created_at": 1.0,
+        "model": "claude-test",
+        "system_prompt": "system",
+        "messages": [],
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+        "tool_metadata": {},
+    }
+    (target_dir / "session-good.json").write_text(json.dumps(base), encoding="utf-8")
+    sessions = list_session_snapshots(project, limit=10)
+    assert [s["session_id"] for s in sessions] == ["good"], "corrupt files must be skipped, good ones kept"
+
+    # And load_session_by_id for the corrupt id returns None rather than raising.
+    assert load_session_by_id(project, "broken") is None
+
+
 def test_load_session_by_id_returns_none_for_missing_session(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     project = tmp_path / "empty-repo"

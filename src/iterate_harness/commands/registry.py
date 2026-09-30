@@ -136,6 +136,47 @@ class SlashCommand:
     aliases: tuple[str, ...] = ()
 
 
+def remote_invocation_allowed(
+    command: SlashCommand,
+    *,
+    admin_opt_in_requested: bool = False,
+) -> tuple[bool, str]:
+    """Decide whether *command* may run in a remote (model-driven) context.
+
+    Local-management commands (``bridge``, ``login``, ``logout``, ``config``,
+    ``permissions``, ``plan``, ``provider``) are marked ``remote_invocable=False``
+    so an orchestrating model cannot quietly change the machine's credentials,
+    permission mode, or provider without a human at the console. Commands with
+    ``remote_admin_opt_in=True`` additionally require the remote caller to pass
+    an explicit administrator opt-in request.
+
+    Args:
+        command: The resolved ``SlashCommand``.
+        admin_opt_in_requested: True when the remote invocation explicitly
+            requests the ``remote_admin_opt_in`` allowance.
+
+    Returns:
+        ``(allowed, detail)``. When refused, *detail* is a human-readable reason
+        the caller should surface before skipping the handler.
+    """
+    if command.remote_invocable:
+        return True, ""
+    if command.remote_admin_opt_in and admin_opt_in_requested:
+        return True, ""
+    if command.remote_admin_opt_in:
+        return (
+            False,
+            f"/{command.name} affects local configuration and is not invocable in a "
+            "remote context unless the caller explicitly opts in "
+            "(`remote_admin_opt_in`); this invocation did not opt in.",
+        )
+    return (
+        False,
+        f"/{command.name} is not invocable in a remote context "
+        "(remote_invocable=False).",
+    )
+
+
 class CommandRegistry:
     """Map slash commands to handlers."""
 

@@ -105,7 +105,10 @@ class TestStart:
             "mode": "review",
             "changed": False,
             "ref": "HEAD",
-            "permission_mode": "full_auto",
+            # The WebUI must not silently escalate the permission posture: an
+            # omitted body defers to the configured mode instead of the old
+            # hard-coded "full_auto" (write-without-asking).
+            "permission_mode": "default",
         }
 
     def test_start_forwards_permission_mode(self, client: TestClient, tmp_path, monkeypatch):
@@ -144,9 +147,32 @@ class TestStatus:
         for key in (
             "mode", "project_root", "round", "new_findings", "total_findings",
             "cost_usd", "converged", "question", "options", "permission",
-            "error", "message",
+            "permission_mode", "driver", "error", "message",
         ):
             assert key in payload
+        assert payload["driver"] is None
+
+    def test_status_surfaces_foreign_console_driver(self, client: TestClient, tmp_path):
+        """Idle must not be reported for a project the console is iterating."""
+        import time
+
+        from iterate_harness.iterate.run_lock import lease_path
+
+        (tmp_path / ".iterate").mkdir(parents=True)
+        lease_path(tmp_path).write_text(
+            '{"holder": "console:999@another-host", "role": "console",'
+            ' "pid": 999, "host": "another-host", "acquired_at": %f}' % time.time(),
+            encoding="utf-8",
+        )
+        run_manager.project_root = str(tmp_path)
+        body = client.get("/api/v1/chat/status")
+        assert body.status_code == 200
+        payload = body.json()
+        assert payload["state"] == "idle"
+        driver = payload["driver"]
+        assert driver is not None
+        assert driver["role"] == "console"
+        assert driver["pid"] == 999
 
 
 class TestHistory:
@@ -216,7 +242,45 @@ class TestControl:
 
 
 class TestReset:
-    def test_reset_returns_idle(self, client: TestClient):
-        body = client.post("/api/v1/chat/reset")
+    def test_reset_requires_confirm(self, client: TestClient, tmp_path):
+        """Reset tears down a live run, so it is a secondary-confirm operation
+        like every other mutating route (a stray click / replayed request must
+        not kill the loop)."""
+        body = client.post("/api/v1/chat/reset", params={"project_root": str(tmp_path)})
+        assert body.status_code == 422
+        assert "confirm=true" in body.json()["detail"]
+
+    def test_reset_returns_idle(self, client: TestClient, tmp_path):
+        body = client.post(
+            "/api/v1/chat/reset",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+        )
         assert body.status_code == 200
-        assert body.json() == {"ok": True, "status": "idle"}
+        assert body.json() == {"ok": True, "status": "idle", "cancelledRunId": ""}
+
+    def test_reset_is_audited(self, client: TestClient, tmp_path):
+        body = client.post(
+            "/api/v1/chat/reset",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+        )
+        assert body.status_code == 200
+        audit = (tmp_path / ".iterate" / "web-audit.jsonl").read_text(encoding="utf-8")
+        assert "run.reset" in audit
+
+    def test_reset_audited_entry_names_the_cancelled_run(self, client: TestClient, tmp_path, monkeypatch):
+        """The audit entry must identify the run it tore down — ``reset()``
+        clears ``run_id``, so the id has to be captured before the reset."""
+        monkeypatch.setattr(run_manager_module.run_manager, "run_id", "run-cancelled-1")
+        client.post(
+            "/api/v1/chat/reset",
+            params={"project_root": str(tmp_path), "confirm": "true"},
+        )
+        audit = (tmp_path / ".iterate" / "web-audit.jsonl").read_text(encoding="utf-8")
+        assert "run-cancelled-1" in audit
+
+    def test_reset_unknown_project_root_404(self, client: TestClient, tmp_path):
+        body = client.post(
+            "/api/v1/chat/reset",
+            params={"project_root": str(tmp_path / "nope"), "confirm": "true"},
+        )
+        assert body.status_code == 404

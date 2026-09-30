@@ -68,9 +68,29 @@ def _is_loopback_base(api_base_url: str) -> bool:
 
 
 def build_sdk_url(api_base_url: str, session_id: str) -> str:
-    """Build a session ingress WebSocket URL."""
+    """Build a session ingress WebSocket URL.
+
+    The base URL is *parsed*, not string-sliced. The old
+    ``replace("https://", "").replace("http://", "").rstrip("/")`` produced
+    garbage for a base that carried a path, a query, or a fragment: it
+    stripped only the literal substrings (so ``HTTPS://host`` survived intact
+    and got prefixed with another ``wss://``), and it left ``?query`` glued to
+    the host. ``urlsplit`` gives the netloc and lets the caller supply a
+    prefix path of its own.
+    """
     is_local = _is_loopback_base(api_base_url)
     protocol = "ws" if is_local else "wss"
     version = "v2" if is_local else "v1"
-    host = api_base_url.replace("https://", "").replace("http://", "").rstrip("/")
-    return f"{protocol}://{host}/{version}/session_ingress/ws/{session_id}"
+    try:
+        parts = urlsplit(api_base_url if "//" in api_base_url else f"//{api_base_url}")
+    except ValueError:
+        parts = None
+    if parts is not None and parts.netloc:
+        netloc = parts.netloc
+        base_path = parts.path.rstrip("/")
+    else:
+        # Unparseable / scheme-less input: fall back to the previous best
+        # effort so a slightly odd base still yields a usable URL.
+        netloc = api_base_url.replace("https://", "").replace("http://", "").rstrip("/")
+        base_path = ""
+    return f"{protocol}://{netloc}{base_path}/{version}/session_ingress/ws/{session_id}"

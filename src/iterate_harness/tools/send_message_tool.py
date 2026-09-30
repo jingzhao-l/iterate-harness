@@ -42,12 +42,30 @@ class SendMessageTool(BaseTool[SendMessageToolInput]):
     async def _send_swarm_message(self, agent_id: str, message: str) -> ToolResult:
         """Route a message to a swarm agent via the backend."""
         registry = get_backend_registry()
-        # Use subprocess backend to match AgentTool's spawn path.
-        # The SubprocessBackend tracks agent_id -> task_id mappings so
-        # send_message resolves correctly for any agent spawned by AgentTool.
-        executor = registry.get_executor("subprocess")
-
         teammate_msg = TeammateMessage(text=message, from_agent="coordinator")
+
+        # The in-process backend delivers through the file-based mailbox; try
+        # it first when the agent is active there (AgentTool's
+        # in_process_teammate mode), then fall through to the subprocess path.
+        in_process_executor = None
+        try:
+            in_process_executor = registry.get_executor("in_process")
+        except KeyError:
+            in_process_executor = None
+        if in_process_executor is not None and getattr(
+            in_process_executor, "is_active", lambda _agent: False
+        )(agent_id):
+            try:
+                await in_process_executor.send_message(agent_id, teammate_msg)
+            except Exception as exc:
+                logger.error("Failed to send message to %s: %s", agent_id, exc)
+                return ToolResult(output=str(exc), is_error=True)
+            return ToolResult(output=f"Sent message to agent {agent_id}")
+
+        # Subprocess path: SubprocessBackend tracks agent_id -> task_id
+        # mappings so send_message resolves correctly for any agent spawned by
+        # AgentTool's local_agent / remote_agent modes.
+        executor = registry.get_executor("subprocess")
         try:
             await executor.send_message(agent_id, teammate_msg)
         except ValueError as exc:

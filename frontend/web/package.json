@@ -1,7 +1,7 @@
 {
   "name": "@iterate_harness/web",
   "private": true,
-  "version": "2.2.6",
+  "version": "2.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from itertools import islice
 from pathlib import Path
 
 from pydantic import AliasChoices, BaseModel, Field
@@ -175,7 +176,12 @@ async def _glob(root: Path, pattern: str, *, limit: int, project_root: Path) -> 
         lines.sort()
         return lines
 
-    # Fallback: non-recursive patterns are usually cheap; keep Python semantics.
+    # Fallback: non-recursive patterns are usually cheap; keep Python semantics,
+    # but bound the walk. ``sorted()`` over the raw generator materializes EVERY
+    # match (hundreds of thousands of entries on a big workspace) before the
+    # slice trims it. Iterating only the first ``limit`` matches keeps the cost
+    # O(limit) and mirrors the rg-backed path, which also returns the first N
+    # matches of traversal order, then sorts for deterministic output.
     from iterate_harness.sandbox.session import is_docker_sandbox_active
 
     if is_docker_sandbox_active():
@@ -185,7 +191,8 @@ async def _glob(root: Path, pattern: str, *, limit: int, project_root: Path) -> 
         if not allowed:
             return [f"(error: search root '{root}' is outside the sandbox boundary: {reason})"]
 
-    return sorted(
+    matches = [
         str(path.relative_to(root))
-        for path in root.glob(pattern)
-    )[:limit]
+        for path in islice(root.glob(pattern), limit)
+    ]
+    return sorted(matches)

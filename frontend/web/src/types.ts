@@ -82,8 +82,12 @@ export interface Finding {
 
 export interface FindingsResponse {
   findings: Finding[];
+  /** Total findings on disk *before* pagination/filtering. */
   total: number;
+  /** Number of findings actually returned in this page (not a page number). */
   page: number;
+  /** True when `total` exceeds the rows returned, so rows are missing. */
+  truncated: boolean;
 }
 
 export interface CheckpointView {
@@ -114,6 +118,9 @@ export interface ConfigView {
   effective: Record<string, unknown>;
   providers: Record<string, Record<string, unknown>>;
   active_profile: string;
+  // Content hash of the on-disk config, echoed by GET /config and sent back on
+  // PUT so a concurrent edit is rejected (409) instead of silently clobbered.
+  version: string;
 }
 
 export interface ReportView {
@@ -188,7 +195,17 @@ export interface ChatMessage {
   timestamp: string;
 }
 
-export type ChatRunState = "idle" | "starting" | "running" | "paused" | "stopped";
+// "pausing"/"stopping" are pending transitions: the click registered, the
+// effect lands at the next round boundary. Without them the badge kept
+// reading "运行中" and the only acknowledgement was a 3-second toast.
+export type ChatRunState =
+  | "idle"
+  | "starting"
+  | "running"
+  | "paused"
+  | "pausing"
+  | "stopping"
+  | "stopped";
 export type WaitingKind = "none" | "user_prompt" | "user_select" | "permission";
 
 // Mirrors the backend ChatRunStatus (GET /chat/status, snake_case).
@@ -206,14 +223,34 @@ export interface ChatRunStatus {
   question: string | null;
   options: Array<{ value: string; label: string; description?: string }> | null;
   permission: { tool?: string; reason?: string } | null;
+  /** The permission posture this run is under. Surfaced so the operator can
+   * see whether the loop writes without asking. */
+  permission_mode?: PermissionMode;
+  /** Set when another process (usually the console) holds this project's run
+   * lease. Without it the dashboard read "空闲 · 等待启动" for a project the
+   * TUI was actively iterating, and invited a second writer. */
+  driver?: RunDriver | null;
   error: string | null;
   message: string;
 }
 
+export interface RunDriver {
+  role: string;
+  pid: number;
+  host: string;
+  acquired_at: number;
+}
+
+export type PermissionMode = "full_auto" | "plan" | "default";
+
+// "default" defers to the CLI/configured posture; "full_auto" does not ask
+// before writing. It is explicit here because the WebUI previously hard-coded
+// full_auto, so every WebUI run silently wrote without asking.
 export interface StartRequest {
   mode: "review" | "run" | "resume";
   changed: boolean;
   ref: string;
+  permission_mode?: PermissionMode;
 }
 
 // Partial hub events (camelCase) used to patch the store live.

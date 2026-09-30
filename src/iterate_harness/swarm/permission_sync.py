@@ -1047,6 +1047,14 @@ async def poll_permission_response(
     *request_id* is found, the message is marked read and the decoded
     :class:`SwarmPermissionResponse` is returned.
 
+    Both wire shapes are accepted: the structured payload written by
+    :func:`send_permission_response` and the text-envelope JSON written by
+    :func:`send_permission_response_via_mailbox` (whose ``text`` field carries
+    the serialised ``permission_response`` payload).  The old code only looked
+    at ``msg.type`` + top-level ``payload`` keys, so a leader answering with
+    the text-envelope flow produced a message whose ``request_id`` was nested
+    inside the ``text`` JSON — the worker polled until timeout every time.
+
     Args:
         team_name: The swarm team name.
         worker_id: The worker's agent ID (owns this mailbox).
@@ -1062,18 +1070,56 @@ async def poll_permission_response(
     while time.monotonic() < deadline:
         messages = await worker_mailbox.read_all(unread_only=True)
         for msg in messages:
-            if msg.type == "permission_response":
-                payload = msg.payload
-                if payload.get("request_id") == request_id:
-                    await worker_mailbox.mark_read(msg.id)
-                    return SwarmPermissionResponse(
-                        request_id=payload["request_id"],
-                        allowed=bool(payload.get("allowed", False)),
-                        feedback=payload.get("feedback"),
-                        updated_rules=payload.get("updated_rules", []),
-                    )
+            payload = _decode_permission_response_payload(msg)
+            if payload is None:
+                continue
+            if payload.get("request_id") != request_id:
+                continue
+            await worker_mailbox.mark_read(msg.id)
+            # Structured shape carries `allowed`; the text-envelope shape
+            # carries `subtype` ("success" | "error") instead.
+            allowed = bool(payload.get("allowed", payload.get("subtype") == "success"))
+            feedback = payload.get("feedback")
+            if feedback is None and payload.get("subtype") == "error":
+                feedback = payload.get("error")
+            response_obj = payload.get("response")
+            if not isinstance(response_obj, dict):
+                response_obj = {}
+            updated_rules = payload.get("updated_rules") or response_obj.get("permission_updates") or []
+            return SwarmPermissionResponse(
+                request_id=str(payload["request_id"]),
+                allowed=allowed,
+                feedback=str(feedback) if feedback is not None else None,
+                updated_rules=list(updated_rules),
+            )
         await asyncio.sleep(0.5)
 
+    return None
+
+
+def _decode_permission_response_payload(msg: MailboxMessage) -> dict[str, Any] | None:
+    """Return the ``permission_response`` payload dict from *msg* (either shape).
+
+    ``write_to_mailbox`` saves the TS-style text envelope with the serialised
+    JSON payload in the ``text`` field (and sets the detected ``msg.type``);
+    ``TeammateMailbox.write`` stores the structured payload directly.  Only
+    permission-response-bearing messages decode to a dict — plain chat text
+    returns ``None``.
+    """
+    if not isinstance(msg, MailboxMessage):
+        return None
+    payload = msg.payload
+    text = payload.get("text") if isinstance(payload, dict) else None
+    if isinstance(text, str) and text.strip():
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if isinstance(parsed, dict) and parsed.get("type") == "permission_response":
+            return parsed
+        return None
+    if msg.type == "permission_response":
+        return payload
     return None
 
 

@@ -21,7 +21,7 @@ import copy
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
@@ -35,6 +35,7 @@ from .types import (
     IterateConfig,
     ReviewerConfig,
     ReviewScopeConfig,
+    Scope,
     ThresholdsConfig,
     ValidationConfig,
 )
@@ -392,15 +393,32 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
 
     review_raw = data.get("review")
     review = defaults.review
-    if isinstance(review_raw, dict) and isinstance(review_raw.get("scope"), str):
-        review = ReviewScopeConfig(scope=review_raw["scope"])
+    if isinstance(review_raw, dict):
+        scope = review_raw.get("scope")
+        # Validate against the Literal: an unknown value used to be stored
+        # verbatim and then compared against "changed-only" downstream, so a
+        # typo silently widened the review from the changed files to the whole
+        # repository — the expensive, wrong-direction failure.
+        if isinstance(scope, str) and scope in ("full", "changed-only"):
+            review = ReviewScopeConfig(scope=cast(Scope, scope))
+        elif scope is not None:
+            log.warning(
+                "Ignoring invalid review.scope %r (expected 'full' or 'changed-only')", scope
+            )
 
     atomic_raw = data.get("atomic")
     if isinstance(atomic_raw, dict):
+        # Defensive int parsing: these went straight into the dataclass, so a
+        # yaml typo (``max_lines: "120"``) raised TypeError deep inside the
+        # fix-scope planner, where the error was swallowed and the whole
+        # atomic-edit pass was skipped without a word.
         atomic = AtomicConfig(
-            max_lines=atomic_raw.get("max_lines", defaults.atomic.max_lines),
-            max_adjacent_methods=atomic_raw.get(
-                "max_adjacent_methods", defaults.atomic.max_adjacent_methods
+            max_lines=_parse_scope_chunk_size(
+                atomic_raw.get("max_lines"), defaults.atomic.max_lines
+            ),
+            max_adjacent_methods=_parse_scope_chunk_size(
+                atomic_raw.get("max_adjacent_methods"),
+                defaults.atomic.max_adjacent_methods,
             ),
         )
     else:

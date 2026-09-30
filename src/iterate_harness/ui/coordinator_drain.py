@@ -108,16 +108,28 @@ async def wait_for_completed_async_agent_entries(
         if loop.time() >= deadline:
             # Deadline exceeded: mark still-pending entries as timed-out so
             # the caller's drain loop can make progress and the frontend is
-            # notified of the stalled workers.
-            for entry in pending_async_agent_entries(tool_metadata):
-                if not bool(entry.get("notification_sent")):
-                    entry["notification_sent"] = True
-                    entry["status"] = "timed_out"
-            log.warning(
-                "Background agent tasks timed out after %.0fs: %s",
-                max_wait_seconds,
-                [e.get("task_id") for e in pending if not e.get("notification_sent")],
-            )
+            # notified of the stalled workers. Capture the task ids BEFORE
+            # marking them; the previous code filtered on
+            # `not notification_sent` after the loop had already set the flag,
+            # so the warning always logged an empty list.
+            timed_out = [
+                entry
+                for entry in _async_agent_task_entries(tool_metadata)
+                if not bool(entry.get("notification_sent"))
+            ]
+            task_ids = [
+                str(entry.get("task_id") or "").strip()
+                for entry in timed_out
+            ]
+            for entry in timed_out:
+                entry["notification_sent"] = True
+                entry["status"] = "timed_out"
+            if task_ids:
+                log.warning(
+                    "Background agent tasks timed out after %.0fs: %s",
+                    max_wait_seconds,
+                    task_ids,
+                )
             return []
         await asyncio.sleep(poll_interval_seconds)
 

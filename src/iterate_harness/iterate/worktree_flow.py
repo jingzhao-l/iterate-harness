@@ -200,9 +200,24 @@ async def exit_session(
                         log.exception("iterate worktree %s: merge --abort failed", session.branch)
                     raise
     finally:
-        removed = await mgr.remove_worktree(session.slug)
-        if not removed:
-            log.warning("iterate worktree %s was not removed (may be stale)", session.slug)
+        # Cleanup must never mask the reason we are cleaning up. A raise from
+        # ``remove_worktree`` (locked worktree, git missing, permission denied)
+        # used to replace the merge conflict / divergence error the caller
+        # actually needed to see, so the round reported "worktree removal
+        # failed" while the real fault — a lost round of fixes — was buried in
+        # the chained context.
+        try:
+            removed = await mgr.remove_worktree(session.slug)
+        except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
+            log.warning(
+                "iterate worktree %s: removal raised during cleanup: %s",
+                session.slug,
+                exc,
+                exc_info=True,
+            )
+        else:
+            if not removed:
+                log.warning("iterate worktree %s was not removed (may be stale)", session.slug)
     return merged
 
 

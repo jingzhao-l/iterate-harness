@@ -26,6 +26,8 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
+from iterate_harness.utils.fs import atomic_write_text
+
 from .types import KnownIntentional
 
 log = logging.getLogger(__name__)
@@ -300,9 +302,11 @@ def sync_known_intentional_to_config(
     data["personalization"] = personalization
     try:
         content = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-        tmp = config_path.with_suffix(".yaml.tmp")
-        tmp.write_text(content, encoding="utf-8")
-        tmp.replace(config_path)
+        # ``config_path.with_suffix(".yaml.tmp")`` produced one *fixed* temp
+        # name, so two concurrent writers raced on it and a crash mid-write
+        # left ``iterate.config.yaml.tmp`` behind. The atomic writer uses a
+        # unique sibling and ``os.replace``s it into place.
+        atomic_write_text(config_path, content, encoding="utf-8")
     except Exception as exc:
         report["reason"] = f"failed to write config: {exc}"
         report["added"] = []

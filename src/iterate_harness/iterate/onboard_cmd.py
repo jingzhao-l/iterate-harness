@@ -28,6 +28,8 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 
+from iterate_harness.utils.fs import atomic_write_text
+
 from . import init_wizard, onboarding, prompts
 
 logger = logging.getLogger(__name__)
@@ -362,18 +364,25 @@ def run_refresh() -> int:
     if not isinstance(onboarding_section, dict):
         onboarding_section = {}
     previous_channel = onboarding_section.get("channel")
+    # Preserve an explicit ``drift_check: false``: refreshing onboarding is
+    # about re-capturing fingerprints, not about re-enabling a check the
+    # operator turned off.
+    previous_drift_check = onboarding_section.get("drift_check", True)
     onboarding_section.update(
         onboarding.build_onboarding_section(
             channel=previous_channel if isinstance(previous_channel, str) else "cli",
             fingerprints=onboarding.capture_fingerprints(cwd, ignores),
             completed_at=completed_at,
+            drift_check=previous_drift_check is not False,
         )
     )
     raw_config["onboarding"] = onboarding_section
 
     try:
-        config_path.write_text(
-            init_wizard.render_config_text(raw_config), encoding="utf-8"
+        # Atomic: a crash/interrupt mid-``write_text`` truncated the whole
+        # config to a partial yaml, losing every project setting at once.
+        atomic_write_text(
+            config_path, init_wizard.render_config_text(raw_config), encoding="utf-8"
         )
         onboarding.write_iterate_md(
             cwd, onboarding.update_completed_at_in_md(md_text, completed_at)
@@ -518,16 +527,20 @@ def ensure_onboarding_fingerprints(cwd: str | Path, *, quiet: bool = False) -> b
     if not isinstance(onboarding_section, dict):
         onboarding_section = {}
     previous_channel = onboarding_section.get("channel")
+    previous_drift_check = onboarding_section.get("drift_check", True)
     onboarding_section.update(
         onboarding.build_onboarding_section(
             channel=previous_channel if isinstance(previous_channel, str) else "ai",
             fingerprints=onboarding.capture_fingerprints(root, onboarding.load_drift_ignore(root)),
+            drift_check=previous_drift_check is not False,
         )
     )
     raw_config["onboarding"] = onboarding_section
     try:
-        config_path.write_text(
-            init_wizard.render_config_text(raw_config), encoding="utf-8"
+        # Atomic: a crash/interrupt mid-``write_text`` truncated the whole
+        # config to a partial yaml, losing every project setting at once.
+        atomic_write_text(
+            config_path, init_wizard.render_config_text(raw_config), encoding="utf-8"
         )
     except OSError:
         return False

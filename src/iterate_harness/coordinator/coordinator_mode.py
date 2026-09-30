@@ -166,9 +166,9 @@ _TASK_STOP_TOOL_NAME = "task_stop"
 
 _WORKER_TOOLS = [
     "bash",
-    "file_read",
-    "file_edit",
-    "file_write",
+    "read_file",
+    "edit_file",
+    "write_file",
     "glob",
     "grep",
     "web_fetch",
@@ -180,7 +180,7 @@ _WORKER_TOOLS = [
     "skill",
 ]
 
-_SIMPLE_WORKER_TOOLS = ["bash", "file_read", "file_edit"]
+_SIMPLE_WORKER_TOOLS = ["bash", "read_file", "edit_file"]
 
 
 def is_coordinator_mode() -> bool:

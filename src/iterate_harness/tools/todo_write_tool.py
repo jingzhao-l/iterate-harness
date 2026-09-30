@@ -38,7 +38,7 @@ class TodoWriteTool(BaseTool[TodoWriteToolInput]):
 
         # Serialize read-modify-write with concurrent TODO writers and swap
         # the result in atomically (never a truncated checklist).
-        from iterate_harness.utils.file_lock import exclusive_file_lock
+        from iterate_harness.utils.file_lock import exclusive_file_lock, sidecar_lock_path
         from iterate_harness.utils.fs import atomic_write_text, is_regular_file
 
         if path.exists() and not is_regular_file(path):
@@ -48,7 +48,7 @@ class TodoWriteTool(BaseTool[TodoWriteToolInput]):
             )
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        with exclusive_file_lock(path.with_name(path.name + ".lock")):
+        with exclusive_file_lock(sidecar_lock_path(path)):
             existing = path.read_text(encoding="utf-8") if path.exists() else "# TODO\n"
 
             unchecked_line = f"- [ ] {arguments.item}"

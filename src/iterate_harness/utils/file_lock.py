@@ -9,6 +9,7 @@ both race-free and crash-safe.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
 import os
 from pathlib import Path
 from typing import Iterator
@@ -22,6 +23,23 @@ class SwarmLockError(RuntimeError):
 
 class SwarmLockUnavailableError(SwarmLockError):
     """Raised when file locking is unavailable on the current platform."""
+
+
+def sidecar_lock_path(target: str | Path) -> Path:
+    """Return a lock path for ``target`` that never pollutes the target's repo.
+
+    A ``<file>.lock`` sibling is the obvious choice, but a write/edit tool
+    would then leave an untracked file next to every file it touched — noise
+    in ``git status``, and a stray match for any glob over the project.
+    Hashing the *resolved absolute* target into the shared data dir keeps the
+    same cross-process mutual exclusion (every process derives the identical
+    path) while keeping the working tree clean.
+    """
+    from iterate_harness.config.paths import get_data_dir
+
+    resolved = str(Path(target).expanduser().resolve())
+    digest = hashlib.sha256(resolved.encode("utf-8", "surrogateescape")).hexdigest()[:32]
+    return get_data_dir() / "locks" / f"{digest}.lock"
 
 
 @contextmanager

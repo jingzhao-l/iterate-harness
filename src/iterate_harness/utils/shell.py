@@ -87,8 +87,15 @@ async def create_shell_subprocess(
     stdout: int | None = None,
     stderr: int | None = None,
     env: Mapping[str, str] | None = None,
+    start_new_session: bool = False,
 ) -> asyncio.subprocess.Process:
-    """Spawn a shell command with platform-aware shell selection and sandboxing."""
+    """Spawn a shell command with platform-aware shell selection and sandboxing.
+
+    ``start_new_session=True`` puts the child in its own process group, so the
+    caller can signal the whole tree (background task stop) instead of only the
+    direct child, and so a Ctrl-C at the terminal does not race the harness'
+    own teardown.
+    """
     resolved_settings = settings or load_settings()
 
     # Docker backend: route through docker exec
@@ -123,6 +130,7 @@ async def create_shell_subprocess(
             stdout=stdout,
             stderr=stderr,
             env=dict(env) if env is not None else None,
+            start_new_session=start_new_session,
         )
     except Exception:
         remove_runtime_settings(cleanup_path) if cleanup_path is not None else None

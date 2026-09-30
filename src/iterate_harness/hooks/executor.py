@@ -198,11 +198,25 @@ class HookExecutor:
 
         text_chunks: list[str] = []
         final_event: ApiMessageCompleteEvent | None = None
-        async for event_item in self._context.api_client.stream_message(request):
-            if isinstance(event_item, ApiMessageCompleteEvent):
-                final_event = event_item
-            elif isinstance(event_item, ApiTextDeltaEvent):
-                text_chunks.append(event_item.text)
+        # A prompt/agent hook is an LLM call made inline in front of a tool
+        # call or a turn boundary. It had neither a timeout nor a try/except
+        # (unlike the command and http hooks above), so one hung or failing
+        # model call took the whole turn down instead of degrading to
+        # "hook failed" — the same policy the other hook types already follow.
+        try:
+            async with asyncio.timeout(hook.timeout_seconds):
+                async for event_item in self._context.api_client.stream_message(request):
+                    if isinstance(event_item, ApiMessageCompleteEvent):
+                        final_event = event_item
+                    elif isinstance(event_item, ApiTextDeltaEvent):
+                        text_chunks.append(event_item.text)
+        except Exception as exc:
+            return HookResult(
+                hook_type=hook.type,
+                success=False,
+                blocked=hook.block_on_failure,
+                reason=f"prompt hook failed: {exc}",
+            )
 
         text = "".join(text_chunks)
         if final_event is not None and final_event.message.text:

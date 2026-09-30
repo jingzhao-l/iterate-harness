@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -9,6 +10,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, Field
 
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from iterate_harness.utils.fs import atomic_write_text, is_regular_file
 
 
 class NotebookEditToolInput(BaseModel):
@@ -46,7 +48,9 @@ class NotebookEditTool(BaseTool[NotebookEditToolInput]):
                 return ToolResult(output=f"Sandbox: {reason}", is_error=True)
 
         try:
-            notebook = _load_notebook(path, create_if_missing=arguments.create_if_missing)
+            notebook = await asyncio.to_thread(
+                _load_notebook, path, create_if_missing=arguments.create_if_missing
+            )
         except ValueError as exc:
             return ToolResult(output=f"Cannot edit notebook {path}: {exc}", is_error=True)
         if notebook is None:
@@ -68,7 +72,12 @@ class NotebookEditTool(BaseTool[NotebookEditToolInput]):
         cell["source"] = updated
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(notebook, indent=2) + "\n", encoding="utf-8")
+        # Off the event loop: a notebook on a network/FUSE mount can block for
+        # seconds, and a blocking write inside ``async def execute`` freezes
+        # every concurrent agent, stream, and hook timer in the session.
+        await asyncio.to_thread(
+            atomic_write_text, path, json.dumps(notebook, indent=2) + "\n", encoding="utf-8"
+        )
         return ToolResult(output=f"Updated notebook cell {arguments.cell_index} in {path}")
 
 
@@ -81,12 +90,34 @@ def _resolve_path(base: Path, candidate: str) -> Path:
 
 def _load_notebook(path: Path, *, create_if_missing: bool) -> dict[str, Any] | None:
     if path.exists():
+        # ``is_regular_file`` first: a FIFO/device/directory at this path
+        # would make ``read_text`` block forever (or raise IsADirectoryError)
+        # inside a coroutine, where no timeout can cancel it.
+        if not is_regular_file(path):
+            raise ValueError(
+                f"not a regular file ({path}); a notebook must be an .ipynb file on disk"
+            )
         try:
-            return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
+            payload = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             # A malformed notebook file must surface as a clean error response,
             # never as an unhandled exception that aborts the query.
             raise ValueError(f"not a valid .ipynb JSON file: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"not a valid .ipynb file: the JSON root must be an object, got "
+                f"{type(payload).__name__}"
+            )
+        cells = payload.get("cells")
+        if not isinstance(cells, list):
+            if cells is None:
+                payload["cells"] = []
+            else:
+                raise ValueError(
+                    f"not a valid .ipynb file: 'cells' must be a list, got "
+                    f"{type(cells).__name__}"
+                )
+        return cast("dict[str, Any]", payload)
     if not create_if_missing:
         return None
     return {

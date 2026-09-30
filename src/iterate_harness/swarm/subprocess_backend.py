@@ -48,12 +48,24 @@ class SubprocessBackend:
         """
         agent_id = f"{config.name}@{config.team}"
 
+        # A definition's tool posture is only real if the spawned process
+        # actually honours it. Forward both lists as CLI flags so the
+        # teammate's registry/permission checker enforces them.
+        tool_flags: list[str] = []
+        if config.allowed_tools:
+            tool_flags.append("--allowed-tools")
+            tool_flags.append(",".join(config.allowed_tools))
+        if config.denied_tools:
+            tool_flags.append("--disallowed-tools")
+            tool_flags.append(",".join(config.denied_tools))
+
         flags = build_inherited_cli_flags(
             model=config.model,
             system_prompt=config.system_prompt,
             system_prompt_mode=config.system_prompt_mode,
             plan_mode_required=config.plan_mode_required,
             task_mode=config.task_mode,
+            extra_flags=tool_flags,
         )
         # Only inject the inherited teammate env vars when we are also
         # building the command ourselves. If the caller supplied a custom

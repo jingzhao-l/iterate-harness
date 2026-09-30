@@ -813,6 +813,11 @@ class Settings(BaseModel):
         disallowed_tools = updates.pop("disallowed_tools", None)
         if disallowed_tools:
             permission_updates["denied_tools"] = list(dict.fromkeys(disallowed_tools))
+        # ``denied_tools`` is the spawn/engine spelling of the same concept;
+        # route it into the permission model exactly like ``disallowed_tools``.
+        denied_tools = updates.pop("denied_tools", None)
+        if denied_tools:
+            permission_updates["denied_tools"] = list(dict.fromkeys(denied_tools))
 
         merged = self.model_copy(update=updates)
         if permission_updates:

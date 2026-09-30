@@ -748,10 +748,17 @@ async def _preprocess_images_in_messages(
         *[_describe_guarded(mi, bi, blk) for mi, bi, blk in pending]
     )
 
-    # Replace ImageBlocks with TextBlocks in-place
+    # Replace ImageBlocks with TextBlocks. Each replacement is a *new* message
+    # object: ``messages`` is a shallow copy of the engine's durable history
+    # (see ``_query_messages``), so mutating ``msg.content`` in place would
+    # silently convert the shared ImageBlock inside ``self._messages`` —
+    # destroying the image even if the run later fails, is resumed with a
+    # different model, or is snapshot-restored.
     for msg_idx, blk_idx, description in results:
         msg = messages[msg_idx]
-        msg.content[blk_idx] = TextBlock(text=description)
+        updated_content = list(msg.content)
+        updated_content[blk_idx] = TextBlock(text=description)
+        messages[msg_idx] = msg.model_copy(update={"content": updated_content})
 
 
 async def run_query(
@@ -938,6 +945,11 @@ async def run_query(
                 if compacted_messages is not messages:
                     messages[:] = compacted_messages
                 if was_compacted:
+                    # The retried turn did not consume a real model round; take
+                    # the slot back so a compact-then-succeed round near
+                    # ``max_turns`` is not counted twice (mirrors the
+                    # token-clamp retry above).
+                    turn_count = max(0, turn_count - 1)
                     continue
             if "connect" in error_msg.lower() or "timeout" in error_msg.lower() or "network" in error_msg.lower():
                 yield ErrorEvent(message=f"Network error: {error_msg}. Check your internet connection and try again."), None
@@ -1066,14 +1078,6 @@ async def run_query(
         messages.append(
             ConversationMessage(role="user", content=cast(list[ContentBlock], tool_results))
         )
-
-        # Re-append the coordinator context AFTER the tool results so the
-        # tool_result user message immediately follows the assistant's tool_use
-        # (the provider requires a tool_result to directly back each tool_use;
-        # an intervening plain user message would be out-of-order). The context
-        # stays as the trailing message, visible to the next model turn.
-        if coordinator_context_message is not None:
-            messages.append(coordinator_context_message)
 
         # --- iterate loop-policy control (deterministic convergence) ----
         if context.iterate_policy is not None:
@@ -1230,6 +1234,15 @@ async def run_query(
                     message=f"iterate loop stopped: {decision.stop_reason}{hint}"
                 ), None
                 return
+
+        # Re-append the coordinator context as the TRAILING message of the turn
+        # so the pop above finds it again next iteration. It must be the last
+        # append: both the tool_results row and any iterate inject row are plain
+        # user messages and must stay before it, otherwise the push/pop
+        # negotiation breaks and stale coordinator copies get folded into
+        # ``self._messages`` (see _sync_after_turn in query_engine).
+        if coordinator_context_message is not None:
+            messages.append(coordinator_context_message)
 
     if context.max_turns is not None:
         raise MaxTurnsExceeded(context.max_turns)

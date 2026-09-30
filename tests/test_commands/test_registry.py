@@ -143,6 +143,72 @@ async def test_sensitive_control_plane_commands_are_local_only(tmp_path: Path, m
         assert command.remote_admin_opt_in is True, payload
 
 
+def test_remote_invocation_allowed_defaults_to_yes():
+    from iterate_harness.commands.registry import SlashCommand, remote_invocation_allowed
+
+    async def _handler(_args, _ctx):
+        raise AssertionError("should not run")
+
+    command = SlashCommand(name="help", description="Show help", handler=_handler)
+    allowed, detail = remote_invocation_allowed(command)
+    assert allowed is True
+    assert detail == ""
+
+
+def test_remote_invocation_allowed_refuses_local_only_without_opt_in():
+    from iterate_harness.commands.registry import SlashCommand, remote_invocation_allowed
+
+    async def _handler(_args, _ctx):
+        raise AssertionError("should not run")
+
+    command = SlashCommand(
+        name="login",
+        description="Store api key",
+        handler=_handler,
+        remote_invocable=False,
+        remote_admin_opt_in=True,
+    )
+    allowed, detail = remote_invocation_allowed(command)
+    assert allowed is False
+    assert "opt in" in detail
+
+
+def test_remote_invocation_allowed_accepts_admin_opt_in():
+    from iterate_harness.commands.registry import SlashCommand, remote_invocation_allowed
+
+    async def _handler(_args, _ctx):
+        raise AssertionError("should not run")
+
+    command = SlashCommand(
+        name="login",
+        description="Store api key",
+        handler=_handler,
+        remote_invocable=False,
+        remote_admin_opt_in=True,
+    )
+    allowed, _ = remote_invocation_allowed(command, admin_opt_in_requested=True)
+    assert allowed is True
+
+
+def test_remote_invocation_allowed_refuses_hard_local_only_command():
+    from iterate_harness.commands.registry import SlashCommand, remote_invocation_allowed
+
+    async def _handler(_args, _ctx):
+        raise AssertionError("should not run")
+
+    # A local-only command that does not even offer admin opt-in is always refused.
+    command = SlashCommand(
+        name="tuntap",
+        description="Low-level device command",
+        handler=_handler,
+        remote_invocable=False,
+        remote_admin_opt_in=False,
+    )
+    allowed, detail = remote_invocation_allowed(command, admin_opt_in_requested=True)
+    assert allowed is False
+    assert "not invocable in a remote context" in detail
+
+
 @pytest.mark.asyncio
 async def test_config_show_redacts_nested_mcp_and_vision_secrets(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))

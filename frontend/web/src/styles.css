@@ -711,6 +711,11 @@ table.data tr.row-active td {
   background: var(--critical);
 }
 
+.conn-dot.unauthorized {
+  background: var(--critical);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
@@ -851,6 +856,11 @@ table.data tr.row-active td {
 .state-badge.state-stopped { background: #64748b; }
 .state-badge.state-converged { background: #16a34a; }
 .state-badge.state-failed { background: var(--critical); }
+
+/* Pending run-state transitions (pause requested / stop requested) pulse so
+   the operator can tell "the click registered, waiting for the round boundary"
+   from "the click did nothing". */
+.state-badge.state-pending { animation: pulse 1.2s ease-in-out infinite; }
 
 /* Persistent run-status banner on the dashboard (decoupled from the chat
    panel) — see Dashboard.tsx. */

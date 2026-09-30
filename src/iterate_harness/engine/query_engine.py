@@ -372,18 +372,27 @@ class QueryEngine:
         ``run_query`` yields ``AssistantTurnComplete`` *before* appending the
         tool_results user message and re-appending the synthetic coordinator
         context to its local ``messages``. On the normal path the next turn's
-        event re-filters, but when the run ends with ``MaxTurnsExceeded``
-        right after a tool round there is no further event — without this
-        sync ``self._messages`` would stay stale, dropping the executed tool
-        results. A continuation from that history would present an unmatched
-        ``tool_use`` block, which providers reject. The coordinator message
-        stays excluded (never persisted).
+        event re-filters, but when the run ends right after a tool round
+        (normal iterate stop, an error return, or ``MaxTurnsExceeded``) there
+        is no further event — without this sync ``self._messages`` would stay
+        stale, dropping the executed tool results. A continuation from that
+        history would present an unmatched ``tool_use`` block, which providers
+        reject.
+
+        The coordinator message stays excluded (never persisted). Filtering is
+        by content marker in addition to identity: on error-return paths the
+        coordinator was never popped by ``run_query`` (and so is not the
+        ``coordinator_context`` object), and folding it in would make the next
+        submit append another copy.
         """
-        self._messages = (
-            query_messages
-            if coordinator_context is None
-            else [m for m in query_messages if m is not coordinator_context]
-        )
+        self._messages = [
+            m
+            for m in query_messages
+            if (
+                m is not coordinator_context
+                and not (m.role == "user" and m.text.startswith("# Coordinator User Context"))
+            )
+        ]
 
     async def submit_message(self, prompt: str | ConversationMessage) -> AsyncIterator[StreamEvent]:
         """Append a user message and execute the query loop."""
@@ -453,6 +462,17 @@ class QueryEngine:
             # instead of an unmatched tool_use block.
             self._sync_after_turn(query_messages, coordinator_context)
             raise
+        else:
+            # The loop finished normally (final response, iterate stop, or an
+            # error-return path in run_query) *after* a tool round: the last
+            # turn's tool_results were appended to ``query_messages`` after the
+            # final AssistantTurnComplete event, so the per-event sync above
+            # could not have folded them in. Sync once more so the executed
+            # tools stay visible and self._messages does not end on an unmatched
+            # tool_use tail. (``else`` deliberately not ``finally``: a consumer
+            # that abandons the stream raises GeneratorExit mid-``yield``, and
+            # must not sync a torn state.)
+            self._sync_after_turn(query_messages, coordinator_context)
 
     async def continue_pending(self, *, max_turns: int | None = None) -> AsyncIterator[StreamEvent]:
         """Continue an interrupted tool loop without appending a new user message."""
@@ -491,3 +511,7 @@ class QueryEngine:
         except MaxTurnsExceeded:
             self._sync_after_turn(query_messages, coordinator_context)
             raise
+        else:
+            # Same final-state fold as submit_message: a normal return after a
+            # tool round would otherwise leave an unmatched tool_use tail.
+            self._sync_after_turn(query_messages, coordinator_context)

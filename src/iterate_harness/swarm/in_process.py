@@ -38,6 +38,7 @@ from iterate_harness.swarm.mailbox import (
     TeammateMailbox,
     create_idle_notification,
 )
+from iterate_harness.tasks.types import TaskStatus
 from iterate_harness.swarm.types import (
     BackendType,
     SpawnResult,
@@ -225,8 +226,19 @@ def build_teammate_query_context(config: TeammateSpawnConfig) -> Any | None:
 
     try:
         settings = load_settings()
+        # Enforce the definition's tool posture. Both lists were previously
+        # carried on the spawn config with no consumer, so an in-process
+        # teammate declared "read-only" got the full registry and could
+        # write. Merged the same way the leader's own CLI flags are.
+        tool_overrides: dict[str, object] = {}
+        if config.allowed_tools:
+            tool_overrides["allowed_tools"] = list(config.allowed_tools)
+        if config.denied_tools:
+            tool_overrides["denied_tools"] = list(config.denied_tools)
         if config.model:
-            settings = settings.merge_cli_overrides(model=config.model)
+            tool_overrides["model"] = config.model
+        if tool_overrides:
+            settings = settings.merge_cli_overrides(**tool_overrides)
         api_client = _resolve_api_client_from_settings(settings)
         cwd = str(Path(config.cwd).expanduser().resolve())
         system_prompt = config.system_prompt or build_runtime_system_prompt(
@@ -588,10 +600,61 @@ class InProcessBackend:
         )
         self._active[agent_id] = entry
 
+        # Register the teammate with the background task manager so the
+        # operation console / task tools can list, poll, nudge (via mailbox)
+        # and stop it — identical surface to subprocess teammates.
+        manager = None
+        try:
+            from iterate_harness.tasks import get_task_manager
+
+            manager = get_task_manager()
+
+            async def _abort() -> None:
+                await self.shutdown(agent_id, force=False, timeout=5.0)
+
+            manager.register_in_process_task(
+                task_id,
+                task_type=config.task_type or "in_process_teammate",
+                description=config.prompt or f"Teammate {agent_id}",
+                cwd=config.cwd or ".",
+                prompt=config.prompt,
+                agent_id=agent_id,
+                team=config.team,
+                abort=_abort,
+            )
+        except Exception:
+            # Best-effort: the teammate still runs (and mailbox messaging still
+            # works) — it just won't appear in task_list/task_get.
+            logger.warning(
+                "[InProcessBackend] could not register task record for %s; "
+                "continuing without task-tool visibility",
+                agent_id,
+                exc_info=True,
+            )
+            manager = None
+
+        def _finalize(status: TaskStatus, return_code: int) -> None:
+            if manager is None:
+                return
+            try:
+                asyncio.create_task(
+                    manager.mark_in_process_terminal(
+                        task_id, status=status, return_code=return_code
+                    )
+                )
+            except (RuntimeError, ConnectionError):
+                # Event loop already closed (shutdown) — nothing to notify.
+                pass
+
         def _on_done(t: asyncio.Task[None]) -> None:
             self._active.pop(agent_id, None)
-            if not t.cancelled() and t.exception() is not None:
+            if t.cancelled():
+                _finalize("killed", -1)
+            elif t.exception() is not None:
                 self._on_teammate_error(agent_id, t.exception())  # type: ignore[arg-type]
+                _finalize("failed", 1)
+            else:
+                _finalize("completed", 0)
 
         task.add_done_callback(_on_done)
 

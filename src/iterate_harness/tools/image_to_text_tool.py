@@ -8,6 +8,7 @@ of the image via a separately configured vision-capable model.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from pathlib import Path
@@ -17,8 +18,14 @@ from pydantic import BaseModel, Field
 
 from iterate_harness.api.openai_client import OpenAICompatibleClient
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from iterate_harness.utils.fs import is_regular_file
 
 log = logging.getLogger(__name__)
+
+#: Upper bound for an inline image read from disk. The bytes are base64'd into
+#: the prompt (~1.33× growth), so an unbounded read turns one tool call into a
+#: context-filling, event-loop-stalling memory spike.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 # Default system prompt for image description.
 _DEFAULT_VISION_PROMPT = (
@@ -166,8 +173,28 @@ class ImageToTextTool(BaseTool[ImageToTextToolInput]):
                 log.warning("image_to_text: image not found at %s", path)
                 return None, None
 
+            # A FIFO/device/directory "exists" but reading it blocks the event
+            # loop forever (no coroutine timeout can cancel a sync read), so
+            # require a real file of a sane size before touching it.
+            if not is_regular_file(path):
+                log.warning("image_to_text: %s is not a regular file", path)
+                return None, None
             try:
-                raw = path.read_bytes()
+                size = path.stat().st_size
+            except OSError as exc:
+                log.warning("image_to_text: cannot stat %s: %s", path, exc)
+                return None, None
+            if size > MAX_IMAGE_BYTES:
+                log.warning(
+                    "image_to_text: %s is %d bytes, over the %d byte limit",
+                    path,
+                    size,
+                    MAX_IMAGE_BYTES,
+                )
+                return None, None
+
+            try:
+                raw = await asyncio.to_thread(path.read_bytes)
                 data = base64.b64encode(raw).decode("ascii")
             except OSError as exc:
                 log.warning("image_to_text: failed to read %s: %s", path, exc)

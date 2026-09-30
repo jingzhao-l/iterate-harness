@@ -28,6 +28,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import routes as route_modules
 from . import events as events_module
+from .run_manager import RunManagerError
+from .security import allowed_roots, set_allowed_roots
 from iterate_harness import __version__
 
 log = logging.getLogger(__name__)
@@ -57,17 +59,29 @@ def _frontend_dir() -> Path | None:
     return None
 
 
+#: Route that may authenticate via the ``?token=`` query parameter. Only the
+#: SSE stream needs it: ``EventSource`` cannot attach an ``Authorization``
+#: header, so the token has to ride on the URL for that one endpoint. Every
+#: other route must use the header, which keeps the token out of URLs, proxy
+#: /access logs, and browser history for ordinary API calls.
+_QUERY_TOKEN_PATH = f"{API_PREFIX}/events"
+
+
 def _extract_request_token(request: "Request") -> str:
     """Return the access token from the request, if any.
 
     Accepts ``Authorization: Bearer <token>`` (used by the frontend fetch
-    wrapper) and the ``?token=<token>`` query parameter (required for the
-    EventSource stream, which cannot set custom headers).
+    wrapper) and, for the SSE stream only, the ``?token=<token>`` query
+    parameter (required for the ``EventSource`` stream, which cannot set custom
+    headers). The query parameter is ignored on every other route so a token
+    pasted into an ordinary request URL is not honoured.
     """
     authorization = request.headers.get("authorization", "")
     if authorization.lower().startswith("bearer "):
         return authorization[7:].strip()
-    return request.query_params.get("token", "")
+    if request.url.path.rstrip("/") == _QUERY_TOKEN_PATH:
+        return request.query_params.get("token", "")
+    return ""
 
 
 def _guard_api(token: str, request: "Request") -> JSONResponse | None:
@@ -108,8 +122,43 @@ def create_app(project_root: str | Path | None = None, *, token: str | None = No
     # Expose the resolved project root to routes via app state.
     resolved_root = str(Path(project_root).resolve()) if project_root else ""
     app.state.project_root = resolved_root
+    # Pin the roots the API may touch *when the app was started for a specific
+    # project*. Without the pin, every route's ``project_root`` parameter is an
+    # unrestricted selector: holding the token let a client point the console
+    # at any directory on the box (config writes, checkpoint clears, report
+    # reads, ``git worktree remove``). ``create_app()`` with no root is the
+    # embedding/test mode where every request names its own root, so it stays
+    # unpinned; ``serve()`` always passes the concrete root.
+    set_allowed_roots([resolved_root] if resolved_root else None)
+    app.state.allowed_roots = sorted(allowed_roots())
     # Empty string means "authentication disabled"; serve() always sets it.
     app.state.webui_token = token or ""
+
+    @app.exception_handler(RunManagerError)
+    async def _run_manager_error(
+        _request: Request, exc: RunManagerError
+    ) -> JSONResponse:
+        # One error contract for the whole API: the frontend reads
+        # ``detail`` for string errors, so every 4xx carries a human message
+        # the operator can act on instead of a bare "HTTP 409".
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(Exception)
+    async def _unhandled_error(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        # A bug in any route must surface as the same {"detail": ...} JSON
+        # contract the frontend already decodes, not Starlette's default plain
+        # "Internal Server Error" text/plain body. Without this the console's
+        # fetch wrapper tried to ``response.json()`` on a non-JSON 500, the
+        # decode failed, and the operator saw a bare "HTTP 500" with no clue
+        # what broke. The traceback still goes to the server log; only the
+        # exception type + message are echoed to the local console.
+        log.exception("unhandled WebUI error on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Internal error: {type(exc).__name__}: {exc}"},
+        )
 
     # Protect every /api/v1 route behind the access token (when one is set).
     @app.middleware("http")

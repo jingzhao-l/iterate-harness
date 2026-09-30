@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from ..security import allowed_roots, root_is_allowed
 from ..schemas import ReportView
 
 log = logging.getLogger(__name__)
@@ -23,11 +24,25 @@ router = APIRouter(tags=["reports"])
 #: Report file types the WebUI lists and previews.
 REPORT_FILENAMES = ("report.html", "replay.html", "report.csv")
 
+#: Largest report the inline preview will buffer into a JSON response.
+MAX_PREVIEW_BYTES = 8 * 1024 * 1024
+
 
 def _resolve_project(project_root: str) -> Path:
     root = Path(project_root) if project_root else Path.cwd()
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
+    # ``project_root`` is caller-controlled, so containment inside the root is
+    # not enough on its own: without this the parameter *selects* the root, and
+    # a valid token granted read/write over any directory on the machine.
+    if not root_is_allowed(root):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Project root is outside the roots this WebUI serves: {root}. "
+                f"Allowed: {', '.join(sorted(allowed_roots())) or '(none)'}"
+            ),
+        )
     return root
 
 
@@ -103,9 +118,25 @@ def preview_report(
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail=f"Report file not found: {name}")
 
+    # A long run's report.html is routinely tens of MB. Buffering the whole
+    # file into one JSON string doubled memory and hung the tab on JSON.parse,
+    # so refuse politely with an actionable message instead of stalling.
+    size = resolved.stat().st_size
+    if size > MAX_PREVIEW_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"报告过大（{size} 字节 > {MAX_PREVIEW_BYTES} 字节），无法在线预览。"
+                f"请直接打开文件：{resolved}"
+            ),
+        )
+
     try:
         content = resolved.read_text(encoding="utf-8")
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Read failed: {exc}") from exc
+        log.warning("report preview read failed for %s: %s", resolved, exc)
+        raise HTTPException(
+            status_code=500, detail="Read failed (see the server log)"
+        ) from exc
 
-    return {"name": name, "content": content, "size": resolved.stat().st_size}
+    return {"name": name, "content": content, "size": size}

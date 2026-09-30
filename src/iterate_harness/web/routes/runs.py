@@ -22,7 +22,7 @@ from ..schemas import (
     RunSummary,
     TimelineEntry,
 )
-from ..security import AuditLog
+from ..security import AuditLog, allowed_roots, root_is_allowed
 
 router = APIRouter(tags=["runs"])
 
@@ -37,6 +37,17 @@ def _resolve_project(project_root: str) -> Path:
     root = Path(project_root) if project_root else Path.cwd()
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
+    # ``project_root`` is caller-controlled, so containment inside the root is
+    # not enough on its own: without this the parameter *selects* the root, and
+    # a valid token granted read/write over any directory on the machine.
+    if not root_is_allowed(root):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Project root is outside the roots this WebUI serves: {root}. "
+                f"Allowed: {', '.join(sorted(allowed_roots())) or '(none)'}"
+            ),
+        )
     return root
 
 
@@ -133,8 +144,12 @@ def get_findings(
 ) -> dict[str, Any]:
     """Findings table: gathered from review_result + report entries.
 
-    Returns ``{"findings": [...], "total": n, "page": m}``. Filters on
-    ``severity`` / ``dimension`` are exact-match on the finding fields.
+    Returns ``{"findings": [...], "total": n, "returned": m, "truncated": b}``.
+    Filters on ``severity`` / ``dimension`` are exact-match on the finding
+    fields. ``truncated`` is what let the UI hide the fact that a page was
+    only the first ``limit`` rows: the header advertised the *unpaginated*
+    total while the pager could only ever page through the first 500, so
+    findings beyond that were invisible and silently untriaged.
     """
     entries = read_entries(_resolve_project(project_root))
     findings: list[dict[str, Any]] = []
@@ -173,7 +188,13 @@ def get_findings(
 
     total = len(findings)
     page = findings[offset:offset + limit]
-    return {"findings": page, "total": total, "page": len(page)}
+    return {
+        "findings": page,
+        "total": total,
+        "returned": len(page),
+        "offset": offset,
+        "truncated": offset + len(page) < total,
+    }
 
 
 @router.get("/runs/report", response_model=dict[str, Any])

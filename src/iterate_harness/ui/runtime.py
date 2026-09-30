@@ -21,6 +21,7 @@ from iterate_harness.commands import (
     MemoryCommandBackend,
     create_default_command_registry,
     lookup_skill_slash_command,
+    remote_invocation_allowed,
 )
 from iterate_harness.config import get_config_file_path, load_settings
 from iterate_harness.config.settings import ResolvedAuth, Settings
@@ -300,7 +301,21 @@ async def build_runtime(
             default_model=settings.model,
         ),
     )
-    engine_max_turns = settings.max_turns if (enforce_max_turns or max_turns is not None) else None
+    # The configured cap is the default, not a CLI-only override: discarding
+    # ``settings.max_turns`` in the interactive path silently disabled the one
+    # runaway-loop guard a user can set from config, while ``/turns show``
+    # still advertised the (never enforced) value. ``enforce_max_turns`` keeps
+    # its distinct meaning: re-apply the saved cap after every run, which
+    # would otherwise undo an explicit ``/turns unlimited``.
+    #
+    # An explicit cap always wins. Otherwise the default cap (``settings.max_turns``,
+    # default 200) applies to enforcing surfaces (``--print``) but NOT to a plain
+    # interactive console, which stays unbounded-by-default — max-turns is an
+    # *optional* cap for interactive use (CLI help) and the turns selector
+    # presents "unlimited" as the active choice there.
+    engine_max_turns = max_turns if max_turns is not None else (
+        settings.max_turns if enforce_max_turns else None
+    )
     system_prompt_text = build_runtime_system_prompt(
         settings,
         cwd=cwd,
@@ -575,8 +590,17 @@ async def handle_line(
     print_system: SystemPrinter,
     render_event: StreamRenderer,
     clear_output: ClearHandler,
+    remote_context: bool = False,
+    remote_admin_opt_in_requested: bool = False,
 ) -> bool:
-    """Handle one submitted line for either headless or TUI rendering."""
+    """Handle one submitted line for either headless or TUI rendering.
+
+    ``remote_context=True`` marks a model-driven / non-interactive invocation
+    (e.g. ``--print`` driven by an orchestrator) so that local-management
+    slash commands (``remote_invocable=False``) are refused unless the caller
+    explicitly opts in. Interactive consoles pass the default and keep full
+    access.
+    """
     if not bundle.external_api_client:
         bundle.hook_executor.update_registry(
             load_hook_registry(bundle.current_settings(), bundle.current_plugins())
@@ -600,6 +624,15 @@ async def handle_line(
     parsed = bundle.commands.lookup(line) or lookup_skill_slash_command(line, command_context)
     if parsed is not None:
         command, args = parsed
+        if remote_context:
+            allowed, refusal_detail = remote_invocation_allowed(
+                command, admin_opt_in_requested=remote_admin_opt_in_requested
+            )
+            if not allowed:
+                # Surface a crisp refusal and skip the handler entirely — a
+                # remote caller must never mutate local credentials/config.
+                await print_system(refusal_detail)
+                return True
         result = await command.handler(
             args,
             command_context,

@@ -94,20 +94,43 @@ def _is_retryable(exc: Exception) -> bool:
     return False
 
 
+def _retry_after_seconds(exc: APIStatusError) -> float | None:
+    """Extract a usable ``Retry-After`` value (seconds form) from an API error."""
+    sources: list[object] = [getattr(exc, "headers", None)]
+    response = getattr(exc, "response", None)
+    if response is not None:
+        sources.append(getattr(response, "headers", None))
+    for headers in sources:
+        if headers is None:
+            continue
+        getter = getattr(headers, "get", None)
+        if not callable(getter):
+            continue
+        try:
+            raw = getter("retry-after")
+        except (AttributeError, TypeError):
+            continue
+        if raw is None:
+            continue
+        try:
+            return float(raw)
+        except (ValueError, TypeError) as invalid_exc:
+            log.debug("Ignoring invalid retry-after header %r: %s", raw, invalid_exc)
+    return None
+
+
 def _get_retry_delay(attempt: int, exc: Exception | None = None) -> float:
     """Calculate delay with exponential backoff and jitter."""
     import random
 
-    # Check for Retry-After header
+    # Check for Retry-After header. ``APIStatusError.headers`` is the httpx
+    # response headers object, not a dict, and it is case-insensitive —
+    # reading a dict out of it silently never found anything, so a provider
+    # asking for a 30s backoff got the 1s default and burned its retry budget.
     if isinstance(exc, APIStatusError):
-        headers = getattr(exc, "headers", None)
-        if isinstance(headers, dict):
-            val = headers.get("retry-after")
-            if val:
-                try:
-                    return min(float(val), MAX_DELAY)
-                except (ValueError, TypeError) as invalid_exc:
-                    log.debug("Ignoring invalid retry-after header %r: %s", val, invalid_exc)
+        val = _retry_after_seconds(exc)
+        if val is not None:
+            return min(val, MAX_DELAY)
 
     delay: float = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
     jitter: float = random.uniform(0.0, delay * 0.25)
@@ -140,14 +163,31 @@ class AnthropicApiClient:
         last_error: Exception | None = None
 
         for attempt in range(MAX_RETRIES + 1):
+            emitted = False
             try:
                 async for event in self._stream_once(request):
+                    emitted = True
                     yield event
                 return  # Success
             except IterateHarnessApiError:
                 raise  # Auth errors are not retried
             except Exception as exc:
                 last_error = exc
+                if emitted:
+                    # The attempt already streamed events to the caller.
+                    # Replaying the request would duplicate the visible output
+                    # and, worse, orphan the tool_use blocks already in the
+                    # transcript (their tool_result never arrives) — the next
+                    # request is then rejected with a 400. Surface the failure
+                    # instead of corrupting the conversation.
+                    log.error(
+                        "API stream failed after %d event(s) were emitted; not retrying: %s",
+                        1,
+                        exc,
+                    )
+                    if isinstance(exc, APIError):
+                        raise _translate_api_error(exc) from exc
+                    raise RequestFailure(str(exc)) from exc
                 if attempt >= MAX_RETRIES or not _is_retryable(exc):
                     if isinstance(exc, APIError):
                         raise _translate_api_error(exc) from exc

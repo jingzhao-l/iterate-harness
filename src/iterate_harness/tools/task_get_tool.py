@@ -30,4 +30,7 @@ class TaskGetTool(BaseTool[TaskGetToolInput]):
         task = get_task_manager().get_task(arguments.task_id)
         if task is None:
             return ToolResult(output=f"No task found with ID: {arguments.task_id}", is_error=True)
-        return ToolResult(output=str(task))
+        # Never render the raw record: its ``env`` carries the API key the task
+        # was spawned with, and this output goes into the model context and the
+        # persisted transcript.
+        return ToolResult(output=task.describe())

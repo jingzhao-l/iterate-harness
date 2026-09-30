@@ -42,10 +42,39 @@ const MODES: Array<{
 // tricks). We validate on the client so a typo surfaces before the POST.
 const REF_INVALID_RE = /[\s~^:?*[\]\\]/;
 
+// The permission posture is a deliberate choice, not a hidden default: the
+// WebUI used to hard-code "full_auto", so a run launched from the auxiliary
+// channel wrote without asking while the CLI may have been configured to ask
+// on every write. "default" defers to the saved configuration.
+const PERMISSION_MODES: Array<{
+  value: StartRequest["permission_mode"];
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "default",
+    label: "沿用配置（default）",
+    description: "使用 settings.json / CLI 中配置的权限模式",
+  },
+  {
+    value: "plan",
+    label: "先计划（plan）",
+    description: "只读分析并给出计划，写入前逐条确认",
+  },
+  {
+    value: "full_auto",
+    label: "全自动（full_auto）",
+    description: "⚠️ 写入前不再询问，等同于无人值守",
+  },
+];
+
 export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX.Element {
   const [mode, setMode] = useState<StartRequest["mode"]>("review");
   const [changed, setChanged] = useState(false);
   const [ref, setRef] = useState("HEAD");
+  const [permissionMode, setPermissionMode] = useState<
+    NonNullable<StartRequest["permission_mode"]>
+  >("default");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pushToast = useWebUi((state) => state.pushToast);
@@ -79,7 +108,10 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
     setBusy(true);
     setError(null);
     try {
-      const result = await api.chatStart({ mode, changed, ref: ref.trim() }, projectRoot);
+      const result = await api.chatStart(
+        { mode, changed, ref: ref.trim(), permission_mode: permissionMode },
+        projectRoot,
+      );
       // Optimistically set an "starting" status so the panel reflects it immediately.
       setChatStatus({
         state: "starting",
@@ -95,6 +127,7 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
         question: null,
         options: null,
         permission: null,
+        permission_mode: permissionMode,
         error: null,
         message: "正在启动…",
       });
@@ -171,6 +204,27 @@ export function StartDialog({ onClose, onStarted }: StartDialogProps): React.JSX
             {refError && <span className="field-error">{refError}</span>}
           </label>
         )}
+
+        <div style={{ marginTop: 14 }}>
+          <p className="field-label" style={{ marginBottom: 6 }}>
+            权限模式
+          </p>
+          <div className="mode-options" role="group" aria-label="权限模式">
+            {PERMISSION_MODES.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`mode-option ${permissionMode === option.value ? "active" : ""}`}
+                aria-pressed={permissionMode === option.value}
+                onClick={() => setPermissionMode(option.value ?? "default")}
+                disabled={busy}
+              >
+                <span className="mode-label">{option.label}</span>
+                <span className="mode-desc">{option.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
 
         {error && <p className="form-error">{error}</p>}
 

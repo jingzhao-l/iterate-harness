@@ -399,7 +399,12 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
                 written.append(str(replay_path))
             if not written:
                 return _result(message="No report or log entries to serve.")
-            report_server.serve_report(
+            # The report server blocks until Ctrl+C. Invoked inline it froze
+            # the whole event loop for the entire serving window, so every
+            # other task in the process stalled with it. Same off-loop
+            # treatment as /iterate validate below.
+            await asyncio.to_thread(
+                report_server.serve_report,
                 target,
                 port=report_server.DEFAULT_PORT,
                 oneshot=False,

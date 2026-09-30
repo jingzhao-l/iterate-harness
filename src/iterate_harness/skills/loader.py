@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+
 from pathlib import Path
 from typing import Iterable
 
@@ -88,7 +89,15 @@ def load_skills_from_dirs(
             if path in seen:
                 continue
             seen.add(path)
-            content = path.read_text(encoding="utf-8")
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                # A single binary/garbled SKILL.md used to abort the whole
+                # discovery pass with UnicodeDecodeError, so *every* skill in
+                # the run disappeared because one file was not text. Skip it
+                # and keep the rest.
+                log.warning("Skipping unreadable skill definition: %s", path, exc_info=True)
+                continue
             default_name = path.parent.name
             metadata = _parse_skill_metadata(default_name, content)
             name = metadata["name"]
@@ -134,3 +143,5 @@ def _parse_skill_metadata(default_name: str, content: str) -> SkillMetadata:
         "model": optional_frontmatter_str(frontmatter.get("model")),
         "argument_hint": optional_frontmatter_str(frontmatter.get("argument-hint")),
     }
+
+log = logging.getLogger(__name__)

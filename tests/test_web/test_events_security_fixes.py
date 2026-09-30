@@ -24,7 +24,12 @@ from iterate_harness.web.security import resolve_within
 
 
 def _event_type(chunk: str) -> str:
-    return chunk.split("\n", 1)[0].split(":", 1)[1].strip()
+    # Frames are "id: <n>\nevent: <type>\ndata: ...", so the event name is on
+    # the second line, not the first.
+    for line in chunk.splitlines():
+        if line.startswith("event:"):
+            return line.split(":", 1)[1].strip()
+    return ""
 
 
 # ---------------------------------------------------------------------------

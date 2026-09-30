@@ -76,7 +76,25 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail: unknown = undefined;
     try {
       const body = (await response.json()) as { message?: string; detail?: unknown };
-      if (body.message) message = body.message;
+      // FastAPI reports human-readable failures under ``detail`` (a string for
+      // HTTPException, a list of issues for a 422). Every backend error message
+      // was being dropped on the floor, so the UI showed "控制失败：HTTP 409"
+      // with no indication of what to do — including the 401 that names the
+      // exact recovery command. Prefer whichever field actually carries text.
+      if (typeof body.detail === "string" && body.detail) {
+        message = body.detail;
+      } else if (Array.isArray(body.detail) && body.detail.length > 0) {
+        message = body.detail
+          .map((issue) => {
+            const entry = issue as { msg?: unknown; loc?: unknown };
+            const loc = Array.isArray(entry.loc) ? entry.loc.join(".") : "";
+            const text = typeof entry.msg === "string" ? entry.msg : JSON.stringify(entry);
+            return loc ? `${loc}: ${text}` : text;
+          })
+          .join("; ");
+      } else if (body.message) {
+        message = body.message;
+      }
       detail = body.detail;
     } catch {
       // non-JSON error body; keep default message
@@ -137,12 +155,14 @@ export const api = {
     severity?: string,
     dimension?: string,
     limit = 500,
+    offset = 0,
   ): Promise<FindingsResponse> =>
     request<FindingsResponse>(
       `/runs/findings${buildQuery(projectRoot, {
         severity,
         dimension,
         limit,
+        offset,
       })}`,
     ),
 
@@ -164,11 +184,22 @@ export const api = {
   config: (projectRoot?: string): Promise<ConfigView> =>
     request<ConfigView>(`/config${buildQuery(projectRoot)}`),
 
-  saveConfig: (config: Record<string, unknown>, projectRoot?: string): Promise<OperationResult> =>
-    request<OperationResult>(`/config${buildQuery(projectRoot, { confirm: "true" })}`, {
-      method: "PUT",
-      body: JSON.stringify(config),
-    }),
+  // ``expectedVersion`` is the ``version`` returned by the GET the editor was
+  // built from. When the file changed on disk in the meantime the backend
+  // answers 409 instead of overwriting the other edit; the editor then reloads
+  // and the operator re-applies their change.
+  saveConfig: (
+    config: Record<string, unknown>,
+    projectRoot?: string,
+    expectedVersion?: string,
+  ): Promise<OperationResult> =>
+    request<OperationResult>(
+      `/config${buildQuery(projectRoot, { confirm: "true", expectedVersion })}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(config),
+      },
+    ),
 
   reports: (projectRoot?: string): Promise<ReportView[]> =>
     request<ReportView[]>(`/reports${buildQuery(projectRoot)}`),
@@ -210,6 +241,14 @@ export const api = {
       body: JSON.stringify({ action }),
     }),
 
+  // Safety hatch: cancel a live run and return to idle. Mutating, so it always
+  // carries the secondary-confirm flag (and is audited server-side).
+  chatReset: (projectRoot?: string): Promise<{ ok: boolean; status: string }> =>
+    request<{ ok: boolean; status: string }>(
+      `/chat/reset${buildQuery(projectRoot, { confirm: "true" })}`,
+      { method: "POST" },
+    ),
+
   // ---- Workspaces (design §17.3 P4) ----
   workspaces: (projectRoot?: string): Promise<WorkspaceView[]> =>
     request<WorkspaceView[]>(`/workspaces${buildQuery(projectRoot)}`),
@@ -241,6 +280,20 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ file, line, dimension, decision, note }),
       },
+    ),
+
+  // Undo a single triage decision. Without this, a mis-click on one finding
+  // was a one-way door: the only removal path wiped every decision, so the
+  // operator had to either live with a wrong verdict or destroy the journal.
+  dismissTriageFinding: (
+    file: string,
+    line: number | null,
+    dimension: string,
+    projectRoot?: string,
+  ): Promise<OperationResult> =>
+    request<OperationResult>(
+      `/runs/findings/triage/dismiss${buildQuery(projectRoot, { confirm: "true" })}`,
+      { method: "DELETE", body: JSON.stringify({ file, line, dimension }) },
     ),
 
   clearTriage: (projectRoot?: string): Promise<OperationResult> =>

@@ -206,13 +206,21 @@ def build_onboarding_section(
     channel: str,
     fingerprints: list[FingerprintEntry],
     completed_at: str | None = None,
+    drift_check: bool = True,
 ) -> dict[str, object]:
-    """Assemble the ``onboarding`` yaml section (schema-compatible with the skill)."""
+    """Assemble the ``onboarding`` yaml section (schema-compatible with the skill).
+
+    ``drift_check`` is a *callers'* choice, not an invariant: an operator who
+    turned the drift check off (offline project, noisy environment) had it
+    silently flipped back on by every ``/iterate refresh`` and
+    ``/iterate reonboard``, re-enabling a check they had deliberately opted out
+    of. Refresh paths must pass the stored value through.
+    """
     return {
         "version": ONBOARDING_VERSION,
         "completed_at": completed_at or utc_now_iso(),
         "channel": channel,
-        "drift_check": True,
+        "drift_check": bool(drift_check),
         "fingerprints": fingerprints_to_dict(fingerprints),
     }
 

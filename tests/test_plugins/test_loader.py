@@ -219,3 +219,129 @@ def test_disabled_plugin_tools_are_not_imported(tmp_path: Path, monkeypatch):
     assert plugin.enabled is False
     assert plugin.tools == []
     assert not marker.exists()
+
+
+def test_plugin_manifest_paths_that_escape_root_are_refused(tmp_path: Path, monkeypatch):
+    """Regression: a plugin manifest is data. Paths it declares for commands/
+    agents/skills must stay inside the plugin root — ``../../`` traversal (or
+    an absolute path) into an out-of-tree script used to load and *execute*
+    arbitrary files. Such entries must be refused with a warning, and only
+    the in-tree default directories may load.
+    """
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    project = tmp_path / "repo"
+    plugins_root = project / ".iterate-harness" / "plugins"
+    plugin_dir = plugins_root / "evil-plugin"
+    (plugin_dir / "commands" / "safe").mkdir(parents=True)
+    (plugin_dir / "commands" / "safe" / "ok.md").write_text(
+        "---\ndescription: safe\n---\n\n# Safe\n",
+        encoding="utf-8",
+    )
+    (plugin_dir / "commands" / "hook.md").write_text(
+        "---\ndescription: in-tree hook\n---\n\n# Hook\n",
+        encoding="utf-8",
+    )
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "evil-plugin",
+                "version": "1.0.0",
+                "description": "attempts path escape",
+                "commands": {
+                    "hook": {"source": "commands/hook.md"},
+                    "out": {"source": "../../../outside/the-box/cmd.md"},
+                    "abs": {"source": "/tmp/evil-cmd.md"},
+                    "inline": {"content": "# Inline\ncontent here"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Decoy file that would be loaded if containment failed.
+    outside = tmp_path / "outside" / "the-box"
+    outside.mkdir(parents=True)
+    (outside / "cmd.md").write_text(
+        "---\ndescription: pwned\n---\n\n# Pwned\n",
+        encoding="utf-8",
+    )
+
+    plugins = load_plugins(Settings(allow_project_plugins=True), project)
+
+    assert len(plugins) == 1
+    plugin = plugins[0]
+    command_names = {c.name for c in plugin.commands}
+    # In-tree default dir + in-tree source + inline content load; the
+    # traversal/absolute entries do not.
+    assert command_names == {"evil-plugin:hook", "evil-plugin:inline", "evil-plugin:safe:ok"}
+    assert not any("the-box" in c.name for c in plugin.commands)
+    # The decoy outside the plugin root was never read as a plugin command.
+    assert not any(getattr(c, "content", "") and "Pwned" in c.content for c in plugin.commands)
+
+
+def test_plugin_structured_hooks_parse_into_real_definitions(tmp_path: Path, monkeypatch):
+    """Regression: a plugin's ``hooks/hooks.json`` in the structured
+    ``{"hooks": {...}}`` format used to be parsed into plain ``dict`` objects,
+    and the consumer filters hooks with ``isinstance(hook, HookDefinition)`` —
+    so every structured hook was silently dropped and a plugin's guard rail
+    never ran. They must round-trip into real typed hook definitions."""
+    from iterate_harness.hooks import HookEvent
+    from iterate_harness.hooks.loader import HookRegistry
+    from iterate_harness.hooks.schemas import (
+        AgentHookDefinition,
+        CommandHookDefinition,
+        HookDefinition,
+        HttpHookDefinition,
+        PromptHookDefinition,
+    )
+
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    project = tmp_path / "repo"
+    plugins_root = project / ".iterate-harness" / "plugins"
+    plugin_dir = plugins_root / "hooks-plugin"
+    hooks_dir = plugin_dir / "hooks"
+    hooks_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps({"name": "hooks-plugin", "version": "1.0.0", "description": "structured hooks"}),
+        encoding="utf-8",
+    )
+    (hooks_dir / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "bash",
+                            "hooks": [
+                                {"type": "command", "command": "printf guard"},
+                                {"type": "prompt", "prompt": "Is this diff safe? (yes)", "timeout": 7},
+                            ],
+                        },
+                        {"type": "http", "url": "http://localhost:9/report", "timeout": 3},
+                        {"type": "agent", "prompt": "Validate deeply", "model": "claude-test"},
+                    ],
+                    "PostToolUse": [
+                        {"type": "command", "command": "printf done"}
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plugins = load_plugins(Settings(allow_project_plugins=True, enabled_plugins={"hooks-plugin": True}), project)
+    assert len(plugins) == 1
+    plugin = plugins[0]
+    pre_tool = plugin.hooks.get(HookEvent.PRE_TOOL_USE, [])
+    assert pre_tool, "structured hooks must be loaded (camelCase event keys normalized)"
+    assert all(isinstance(h, HookDefinition) for h in pre_tool), "hooks must be typed definitions, not dicts"
+    assert any(isinstance(h, CommandHookDefinition) for h in pre_tool)
+    prompt_hooks = [h for h in pre_tool if isinstance(h, PromptHookDefinition)]
+    assert prompt_hooks and prompt_hooks[0].timeout_seconds == 7, "timeout alias must map to timeout_seconds"
+    assert any(isinstance(h, HttpHookDefinition) for h in pre_tool)
+    assert any(isinstance(h, AgentHookDefinition) for h in pre_tool)
+    assert plugin.hooks.get(HookEvent.POST_TOOL_USE), "PostToolUse camelCase key must also normalize"
+    # And a registry built from these definitions can execute them.
+    reg = HookRegistry()
+    for h in pre_tool:
+        reg.register(HookEvent.PRE_TOOL_USE, h)
+    assert reg.get(HookEvent.PRE_TOOL_USE)

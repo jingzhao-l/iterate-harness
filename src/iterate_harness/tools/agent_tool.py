@@ -40,7 +40,7 @@ class AgentToolInput(BaseModel):
 
 
 class AgentTool(BaseTool[AgentToolInput]):
-    """Spawn a local agent subprocess."""
+    """Spawn a background agent task (subprocess or in-process teammate)."""
 
     name = "agent"
     description = "Spawn a local background agent task."
@@ -62,12 +62,26 @@ class AgentTool(BaseTool[AgentToolInput]):
         team = arguments.team or "default"
         agent_name = arguments.subagent_type or "agent"
 
-        # Use subprocess backend so spawned agents are registered in
-        # BackgroundTaskManager and are pollable by the task tools.
-        # in_process tasks return asyncio-internal IDs that task tools
-        # cannot query, and subprocess is always available on all platforms.
+        # Pick the execution backend from the requested mode. In-process
+        # teammates run as asyncio Tasks inside this process (low overhead,
+        # shared memory) and are registered with the BackgroundTaskManager by
+        # InProcessBackend.spawn, so the task tools keep working for them.
+        # local_agent / remote_agent use the subprocess transport so they are
+        # pollable via BackgroundTaskManager and available on every platform.
         registry = get_backend_registry()
-        executor = registry.get_executor("subprocess")
+        if arguments.mode == "in_process_teammate":
+            try:
+                executor = registry.get_executor("in_process")
+            except KeyError:
+                # Platform without in-process mailbox support (rare): fall back
+                # to the pollable subprocess transport; the caller still sees a
+                # task record regardless of transport.
+                logger.warning(
+                    "in_process backend unavailable; falling back to subprocess transport"
+                )
+                executor = registry.get_executor("subprocess")
+        else:
+            executor = registry.get_executor("subprocess")
 
         config = TeammateSpawnConfig(
             name=agent_name,
@@ -79,6 +93,17 @@ class AgentTool(BaseTool[AgentToolInput]):
             command=arguments.command,
             system_prompt=agent_def.system_prompt if agent_def else None,
             permissions=agent_def.permissions if agent_def else [],
+            # Forward the definition's tool posture to the spawned teammate.
+            # Without this a definition's ``tools`` allow-list and
+            # ``disallowed_tools`` deny-list stopped at the definition: the
+            # subagent inherited the parent's full registry, so a
+            # read-only "Explore" agent could still write files.
+            allowed_tools=list(agent_def.tools) if agent_def and agent_def.tools else None,
+            denied_tools=(
+                list(agent_def.disallowed_tools)
+                if agent_def and agent_def.disallowed_tools
+                else None
+            ),
             task_type=cast(AgentTaskType, arguments.mode),
             # Worker inherits the leader's defensive kernel (design §20.5):
             # a ``code``-mode leader spawns ``code`` workers so each subagent

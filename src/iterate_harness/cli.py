@@ -992,6 +992,11 @@ def _run_headless(kickoff: str, branch: str | None = None) -> None:
         warn_if_drifted,
     )
     from iterate_harness.iterate.config_loader import load_effective_config
+    from iterate_harness.iterate.run_lock import (
+        ROLE_CONSOLE,
+        RunLeaseConflictError,
+        claim_run_lease,
+    )
     from iterate_harness.ui.app import run_print_mode
 
     effective_goal = load_effective_config(str(Path.cwd())).config.goal
@@ -1008,7 +1013,16 @@ def _run_headless(kickoff: str, branch: str | None = None) -> None:
         )
     ensure_onboarding_fingerprints(Path.cwd())
     warn_if_drifted(Path.cwd())
-    asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
+    # Take the project's shared run lease. Without it the console and the
+    # WebUI each only knew about their *own* runs, so the operator could start
+    # an iterate loop in the TUI and then start a second one from the WebUI
+    # (or a cron job) — two writers on ``.iterate/`` and on the same git tree.
+    try:
+        with claim_run_lease(Path.cwd(), role=ROLE_CONSOLE):
+            asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
+    except RunLeaseConflictError as exc:
+        print(str(exc), file=sys.stderr)
+        raise typer.Exit(1) from exc
     print(
         "\nRun finished. "
         "View the report with `ih iterate report --html` "
@@ -2767,6 +2781,12 @@ def main(
         help="Output format with --print: text (default), json, or stream-json",
         rich_help_panel="Output",
     ),
+    admin_opt_in: bool = typer.Option(
+        False,
+        "--admin-opt-in",
+        help="With --print: explicitly allow local-management slash commands (/config, /login, /permissions, ...). Off by default — remote invocations must opt in.",
+        rich_help_panel="Output",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -3059,6 +3079,7 @@ def main(
                 verbose=verbose or None,
                 allowed_tools=allowed_tools,
                 disallowed_tools=disallowed_tools,
+                admin_opt_in=admin_opt_in,
             )
         )
         return

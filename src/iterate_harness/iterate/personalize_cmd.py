@@ -155,7 +155,13 @@ def _is_known_safe_command(cmd: str) -> bool:
     # "python -m pytest" style: the effective tool is after -m.
     if first_token in ("python", "python3", "py") and " -m " in stripped:
         parts = stripped.split(" -m ", 1)
-        inner = parts[1].strip().split(None, 1)[0]
+        # "python3 -m  " (trailing space) parses to an empty module name; the
+        # call sites treat this helper as total (never raising), so return
+        # False for the unusable command instead of IndexError-ing.
+        inner_tokens = parts[1].strip().split()
+        if not inner_tokens:
+            return False
+        inner = inner_tokens[0]
         return inner in KNOWN_SAFE_COMMAND_PREFIXES or inner in operator_prefixes
     return first_token in KNOWN_SAFE_COMMAND_PREFIXES or first_token in operator_prefixes
 

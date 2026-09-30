@@ -20,6 +20,11 @@ log = logging.getLogger(__name__)
 BRIDGE_LOG_MAX_BYTES = 64 * 1024 * 1024
 BRIDGE_LOG_TAIL_BYTES = 16 * 1024 * 1024
 
+#: Default cap on concurrently running bridge child processes. Mirrors
+#: :attr:`iterate_harness.bridge.types.BridgeConfig.max_sessions`, which was
+#: declared but never consulted.
+DEFAULT_MAX_ACTIVE_SESSIONS = 4
+
 
 @dataclass(frozen=True)
 class BridgeSessionRecord:
@@ -37,21 +42,45 @@ class BridgeSessionRecord:
 class BridgeSessionManager:
     """Manage bridge-run child sessions and capture their output."""
 
-    def __init__(self, max_completed: int = 20) -> None:
+    def __init__(
+        self,
+        max_completed: int = 20,
+        *,
+        max_active: int = DEFAULT_MAX_ACTIVE_SESSIONS,
+    ) -> None:
         self._sessions: dict[str, SessionHandle] = {}
         self._commands: dict[str, str] = {}
         self._output_paths: dict[str, Path] = {}
         self._copy_tasks: dict[str, asyncio.Task[None]] = {}
         self._max_completed = max(1, max_completed)
+        # ``BridgeConfig.max_sessions`` exists to bound how many SDK child
+        # processes may run at once, but nothing read it: an agent could
+        # spawn sessions in a loop until the box ran out of processes (or
+        # out of the 64 MB-per-session log budget). Enforced here.
+        self._max_active = max(1, max_active)
         # Sessions the caller explicitly stopped/killed: their records are
         # released once the copy task winds down, like before.
         self._stopped: set[str] = set()
+
+    def active_session_count(self) -> int:
+        """Number of sessions whose child process is still running."""
+        return sum(
+            1
+            for handle in self._sessions.values()
+            if handle.process.returncode is None
+        )
 
     async def spawn(self, *, session_id: str, command: str, cwd: str | Path) -> SessionHandle:
         if not session_id or session_id in self._sessions:
             raise ValueError(
                 f"Duplicate or empty bridge session_id: {session_id!r} — "
                 "generate a unique id (see BridgeSessionManager.spawn)."
+            )
+        active = self.active_session_count()
+        if active >= self._max_active:
+            raise ValueError(
+                f"Too many concurrent bridge sessions ({active}/{self._max_active}). "
+                "Stop a running session before starting another."
             )
         handle = await spawn_session(session_id=session_id, command=command, cwd=cwd)
         self._sessions[session_id] = handle
@@ -88,13 +117,25 @@ class BridgeSessionManager:
         return sorted(items, key=lambda item: item.started_at, reverse=True)
 
     def read_output(self, session_id: str, *, max_bytes: int = 12000) -> str:
+        """Return the tail of a session's capture, decoded for display.
+
+        Reads only the trailing bytes. The previous ``read_text`` pulled the
+        whole capture into memory (up to ``BRIDGE_LOG_MAX_BYTES`` = 64 MB
+        per session) only to throw all but 12 KB away — and a multi-byte
+        character straddling the cut would be replaced rather than re-aligned.
+        """
         path = self._output_paths.get(session_id)
         if path is None or not path.exists():
             return ""
-        content = path.read_text(encoding="utf-8", errors="replace")
-        if len(content) > max_bytes:
-            return content[-max_bytes:]
-        return content
+        try:
+            size = path.stat().st_size
+            with path.open("rb") as handle:
+                if size > max_bytes:
+                    handle.seek(size - max_bytes)
+                raw = handle.read(max_bytes)
+        except OSError:
+            return ""
+        return raw.decode("utf-8", errors="replace")
 
     async def stop(self, session_id: str) -> None:
         handle = self._sessions.get(session_id)

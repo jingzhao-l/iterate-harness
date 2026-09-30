@@ -12,6 +12,7 @@ replaces the old prefix-match whitelist, which let e.g.
 
 from __future__ import annotations
 
+import io
 import subprocess
 import time
 from dataclasses import dataclass
@@ -59,47 +60,94 @@ class ValidationRunResult:
     reject_reason: str | None = None
 
 
+def _read_head(stream: "io.BufferedRandom | None", limit: int) -> tuple[str, str]:
+    """Read at most ``limit`` bytes from the head of ``stream``.
+
+    Returns ``(text, note)`` where ``note`` is non-empty when output was
+    dropped, so the caller can say so instead of silently truncating.
+    """
+    if stream is None:
+        return "", ""
+    try:
+        stream.seek(0)
+    except (OSError, ValueError):
+        return "", ""
+    data = stream.read(limit + 1)
+    note = ""
+    if len(data) > limit:
+        data = data[:limit]
+        note = f"\n[truncated at {limit} bytes]"
+    return data.decode("utf-8", errors="replace"), note
+
+
 def run_command(command: str, cwd: str, timeout_ms: int) -> ValidationResult:
     """Run a single shell command with timeout; return structured results.
 
     Never raises: a timeout or nonzero exit is reported in the result.
     Output is truncated to :data:`MAX_OUTPUT_BYTES` to bound memory, and
     decoding errors fall back to replacement characters.
+
+    ``stdout``/``stderr`` are redirected to temporary files rather than
+    pipes. ``capture_output=True`` buffers the child's *entire* output in
+    memory and only then slices the first 10 MB, so a trusted command that
+    prints gigabytes (``yes``, a test suite with a debug build, ``npm install``
+    without ``--silent``) could OOM the iterate loop — the truncation after
+    the fact protects nothing. The temp files also cap the child's output
+    and are read back only up to the limit.
     """
     import os
+    import tempfile
 
     start = time.perf_counter()
     env = dict(os.environ)
     env["PAGER"] = "cat"
     try:
-        completed = subprocess.run(
-            command,
-            shell=True,
-            cwd=cwd,
-            timeout=timeout_ms / 1000,
-            capture_output=True,
-            env=env,
-            check=False,
-        )
+        with tempfile.TemporaryFile() as out_fh, tempfile.TemporaryFile() as err_fh:
+            try:
+                completed = subprocess.run(
+                    command,
+                    shell=True,
+                    cwd=cwd,
+                    timeout=timeout_ms / 1000,
+                    stdout=out_fh,
+                    stderr=err_fh,
+                    stdin=subprocess.DEVNULL,
+                    env=env,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                duration_ms = round((time.perf_counter() - start) * 1000)
+                stdout, out_note = _read_head(out_fh, MAX_OUTPUT_BYTES)
+                stderr, err_note = _read_head(err_fh, MAX_OUTPUT_BYTES)
+                return ValidationResult(
+                    command=command,
+                    exit_code=-1,
+                    stdout=stdout + out_note,
+                    stderr=stderr + err_note,
+                    timed_out=True,
+                    duration_ms=duration_ms,
+                )
+            duration_ms = round((time.perf_counter() - start) * 1000)
+            stdout, out_note = _read_head(out_fh, MAX_OUTPUT_BYTES)
+            stderr, err_note = _read_head(err_fh, MAX_OUTPUT_BYTES)
+            return ValidationResult(
+                command=command,
+                exit_code=completed.returncode,
+                stdout=stdout + out_note,
+                stderr=stderr + err_note,
+                timed_out=False,
+                duration_ms=duration_ms,
+            )
+    except OSError as exc:
+        # An unlaunchable shell (missing cwd, fork failure) is a result, not
+        # a crash: the loop reports it as a failed validation command.
         duration_ms = round((time.perf_counter() - start) * 1000)
-        return ValidationResult(
-            command=command,
-            exit_code=completed.returncode,
-            stdout=completed.stdout[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
-            stderr=completed.stderr[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
-            timed_out=False,
-            duration_ms=duration_ms,
-        )
-    except subprocess.TimeoutExpired as exc:
-        duration_ms = round((time.perf_counter() - start) * 1000)
-        stdout = exc.stdout or b""
-        stderr = exc.stderr or b""
         return ValidationResult(
             command=command,
             exit_code=-1,
-            stdout=stdout[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
-            stderr=stderr[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
-            timed_out=True,
+            stdout="",
+            stderr=f"failed to execute command: {exc}",
+            timed_out=False,
             duration_ms=duration_ms,
         )
 

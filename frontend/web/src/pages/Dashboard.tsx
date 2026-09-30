@@ -92,6 +92,11 @@ export default function Dashboard(): React.JSX.Element {
   const { budget, config } = status;
   const lastRun = status.last_run;
   const runActive = chatStatus?.state === "running" || chatStatus?.state === "starting" || chatStatus?.state === "paused";
+  // Another process owns this project's loop (the console, typically). We must
+  // not offer to start a competing run, and we must say who is driving rather
+  // than showing a misleading "空闲".
+  const driver = chatStatus?.driver ?? null;
+  const runLocked = runActive || driver !== null;
   // While the chat status is still loading we can't tell whether a run is
   // active — keep the launch button disabled instead of risking a duplicate
   // run that would bounce off the backend's "already running" guard.
@@ -111,6 +116,10 @@ export default function Dashboard(): React.JSX.Element {
   if (chatStatus?.error) {
     bannerLabel = "运行失败";
     bannerKind = "failed";
+  } else if (driver && !runActive) {
+    bannerLabel =
+      driver.role === "console" ? "控制台迭代中" : `另一通道运行中（${driver.role}）`;
+    bannerKind = "running";
   } else if (liveConverged) {
     bannerLabel = "已收敛";
     bannerKind = "converged";
@@ -120,6 +129,12 @@ export default function Dashboard(): React.JSX.Element {
   } else if (chatState === "paused") {
     bannerLabel = "暂停 · 等待输入";
     bannerKind = "paused";
+  } else if (chatState === "pausing") {
+    bannerLabel = "暂停中 · 将在下一轮边界生效";
+    bannerKind = "paused";
+  } else if (chatState === "stopping") {
+    bannerLabel = "停止中…";
+    bannerKind = "stopped";
   } else if (chatState === "stopped") {
     bannerLabel = "已停止";
     bannerKind = "stopped";
@@ -135,22 +150,29 @@ export default function Dashboard(): React.JSX.Element {
         <button
           className="btn primary start-run-btn"
           onClick={() => setShowStart(true)}
-          disabled={runActive || runUnknown}
+          disabled={runLocked || runUnknown}
           title={
             runActive
               ? "已有运行中的 iterate 循环"
-              : runUnknown
-                ? "正在读取运行状态…"
-                : "启动一次 iterate 循环"
+              : driver
+                ? `另一个进程正在迭代本项目（${driver.role} pid ${driver.pid}@${driver.host}）。辅助通道不能并发启动第二个循环。`
+                : runUnknown
+                  ? "正在读取运行状态…"
+                  : "启动一次 iterate 循环"
           }
         >
-          {runActive ? "运行中…" : runUnknown ? "读取中…" : "启动迭代"}
+          {runActive ? "运行中…" : driver ? "控制台运行中" : runUnknown ? "读取中…" : "启动迭代"}
         </button>
       </div>
 
       {/* Persistent run status (decoupled from the chat panel). */}
       <section className={`run-banner ${bannerKind}`}>
         <span className={`state-badge state-${bannerKind}`}>{bannerLabel}</span>
+        {driver && !runActive && (
+          <span className="waiting-tag" title={`pid ${driver.pid}@${driver.host}`}>
+            由{driver.role === "console" ? "控制台" : "另一通道"}驱动
+          </span>
+        )}
         {waitingForInput && <span className="waiting-tag">需要你的输入</span>}
         {chatStatus?.run_id && (
           <span className="muted mono run-banner-id">
@@ -173,20 +195,27 @@ export default function Dashboard(): React.JSX.Element {
             <button
               className="btn"
               onClick={() => void handleControl("resume")}
-              disabled={controlling}
-              title="恢复运行"
+              disabled={controlling || chatStatus?.waiting_for !== "user_select"}
+              title={
+                chatStatus?.waiting_for === "user_select"
+                  ? "恢复运行"
+                  : "当前是提问/权限请求，请直接在下方回答（继续仅用于选择菜单）"
+              }
             >
               继续
             </button>
           )}
-          {(chatState === "running" || chatState === "paused") && (
+          {(chatState === "running" ||
+            chatState === "paused" ||
+            chatState === "pausing" ||
+            chatState === "stopping") && (
             <button
               className="btn danger"
               onClick={() => setConfirmStop(true)}
-              disabled={controlling}
+              disabled={controlling || chatState === "stopping"}
               title="停止运行（保留决策日志，可 resume）"
             >
-              停止
+              {chatState === "stopping" ? "停止中…" : "停止"}
             </button>
           )}
         </div>
