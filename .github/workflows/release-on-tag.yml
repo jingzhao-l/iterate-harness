@@ -2,31 +2,39 @@ name: Release create on tag
 
 # Why this exists
 # ---------------
-# `release.yml` only builds and publishes the wheel on `release: published`,
-# and that step needs a human (or a local `gh` session) to create the GitHub
-# Release first. The header of `release.yml` records the history: the `release`
-# event "has not fired reliably since v1.12.10", so every release since then
-# has needed a manual `gh workflow run` — i.e. a machine holding a *write*
-# token. When that token is unavailable (expired PAT, keychain credential an
-# automation context cannot read, headless box), the release is stuck: the tag
-# is pushed, and nothing builds.
+# `release.yml` builds and publishes the wheel, but only after something
+# creates the GitHub Release for the tag. Its own header records how fragile
+# that has been: the `release` event "has not fired reliably since v1.12.10",
+# so releases came to depend on a machine holding a *write* token
+# (`gh release create`, or `gh workflow run` for the dispatch fallback). When
+# that token is unavailable — expired PAT, keychain credential an automation
+# context cannot read (`security find-generic-password -w` → rc=36), headless
+# box — the release stalls at "tag pushed, nothing built".
 #
-# This workflow closes that hole using only what `git push` already proves we
-# have: pushing a `v*` tag (1) creates the Release for it with `GITHUB_TOKEN`
-# (`contents: write`) and (2) dispatches `release.yml` on the same tag
-# (`actions: write`). release.yml then builds/signs/uploads the wheel and
-# publishes to PyPI exactly as before — nothing about the artifact path changes.
+# v2.5.0 hit exactly that, and then hit a second wall: creating the Release
+# did *not* emit a `release: published` run, and dispatching release.yml
+# through the REST API returned 403 (a GITHUB_TOKEN may not start other
+# workflows).
 #
-# Why the dispatch is needed on top of the creation: on 2026-09-30, creating
-# v2.5.0's Release did *not* produce a `release: published` run, so the build
-# never started. The manual `gh workflow run` fallback needs a write token, so
-# the tag push performs the dispatch instead. Doing both from one trigger also
-# makes a re-pushed tag a complete, idempotent "republish" of the release.
+# So a pushed `v*` tag now does the whole job, using nothing beyond the
+# `git push` that created it:
+#   1. create the Release for the tag (idempotent — an existing one is kept),
+#   2. call `release.yml` as a **reusable workflow**. A `uses:` call is an
+#      ordinary job, not an event, so it is not blocked by the
+#      GITHUB_TOKEN-cannot-trigger-workflows rule that killed the API dispatch.
+#      release.yml still resolves its tree from `github.ref_name`, which in a
+#      called workflow is the tag that triggered this run, so the wheel is
+#      built from exactly the tagged source, and `secrets: inherit` forwards
+#      GPG_PRIVATE_KEY / GPG_PASSPHRASE / PYPI_PASSWORD.
 #
-# Release notes come from the *annotated tag message* — the same text the
+# Net effect: pushing the tag is now a complete, idempotent "publish this
+# release", and re-pushing it safely re-runs the build. The artifact path is
+# unchanged — release.yml still does the building, signing, uploading and
+# PyPI publish.
+#
+# Release notes come from the *annotated tag message* — the text the
 # maintainer already writes when tagging — so publishing never needs a second
-# copy of the notes to keep in sync. `--generate-notes` is the fallback when the
-# tag is lightweight.
+# copy of the notes. `--generate-notes` is the fallback for a lightweight tag.
 
 on:
   push:
@@ -35,10 +43,8 @@ on:
 
 permissions:
   contents: write
-  # Needed to dispatch release.yml (see the second job).
-  actions: write
 
-# One release per tag; a retag of an existing tag must not race itself.
+# One publish per tag; a re-pushed tag must not race itself.
 concurrency:
   group: release-create-${{ github.ref_name }}
   cancel-in-progress: false
@@ -56,7 +62,7 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "release for $TAG already exists — nothing to do"
+            echo "release for $TAG already exists — keeping it"
             exit 0
           fi
 
@@ -75,24 +81,8 @@ jobs:
             gh release create "$TAG" --repo "$REPO" --title "iterate-harness $TAG" --generate-notes
           fi
 
-  dispatch-wheel-build:
-    name: Dispatch the wheel build
-    runs-on: ubuntu-latest
+  build-wheel:
+    name: Build, sign, upload and publish the wheel
     needs: create-release
-    steps:
-      - name: Kick off release.yml on the same tag
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # `release: published` is release.yml's primary trigger, but it has
-          # been unreliable for years (its own header says so) and it did not
-          # fire when v2.5.0's Release was created. release.yml also accepts
-          # workflow_dispatch, the documented manual fallback — do that from
-          # here, where GITHUB_TOKEN is available. (workflow_dispatch is one of
-          # the two events GITHUB_TOKEN may start, so the recursion guard does
-          # not apply.)
-          gh api -X POST "repos/$REPO/actions/workflows/release.yml/dispatches" -f ref="$TAG"
-          echo "dispatched release.yml for $TAG"
+    uses: ./.github/workflows/release.yml
+    secrets: inherit

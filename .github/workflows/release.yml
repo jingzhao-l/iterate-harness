@@ -25,6 +25,14 @@ on:
   # so operators can dispatch this workflow on an existing tag instead:
   #   gh workflow run release.yml --ref v1.12.11
   workflow_dispatch:
+  # Third entry point, and the one that actually works unattended:
+  # `release-on-tag.yml` calls this workflow as a reusable workflow when a `v*`
+  # tag is pushed. A `uses:` call is a normal job rather than an event, so it is
+  # not blocked by the rule that a GITHUB_TOKEN may not start other workflows
+  # (the API `workflows/…/dispatches` fallback 403s for exactly that reason).
+  # The `release` event did not fire at all for v2.5.0 even after its Release
+  # was created, so the tag push now calls the build directly.
+  workflow_call:
 
 permissions:
   contents: write
