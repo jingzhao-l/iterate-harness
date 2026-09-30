@@ -198,18 +198,29 @@ class HookExecutor:
 
         text_chunks: list[str] = []
         final_event: ApiMessageCompleteEvent | None = None
+
+        async def _collect() -> None:
+            nonlocal final_event
+            async for event_item in self._context.api_client.stream_message(request):
+                if isinstance(event_item, ApiMessageCompleteEvent):
+                    final_event = event_item
+                elif isinstance(event_item, ApiTextDeltaEvent):
+                    text_chunks.append(event_item.text)
+
         # A prompt/agent hook is an LLM call made inline in front of a tool
         # call or a turn boundary. It had neither a timeout nor a try/except
         # (unlike the command and http hooks above), so one hung or failing
         # model call took the whole turn down instead of degrading to
         # "hook failed" — the same policy the other hook types already follow.
+        #
+        # ``asyncio.wait_for`` instead of the newer ``asyncio.timeout`` context
+        # manager: the harness still supports Python 3.10 (``requires-python``),
+        # and ``asyncio.timeout`` only landed in 3.11. On 3.10 the attribute
+        # lookup raised ``AttributeError`` *inside* this try, so every prompt /
+        # agent hook silently degraded to "hook failed" on the oldest runtime
+        # we claim to support (caught here, but only by CI on 3.10).
         try:
-            async with asyncio.timeout(hook.timeout_seconds):
-                async for event_item in self._context.api_client.stream_message(request):
-                    if isinstance(event_item, ApiMessageCompleteEvent):
-                        final_event = event_item
-                    elif isinstance(event_item, ApiTextDeltaEvent):
-                        text_chunks.append(event_item.text)
+            await asyncio.wait_for(_collect(), timeout=hook.timeout_seconds)
         except Exception as exc:
             return HookResult(
                 hook_type=hook.type,

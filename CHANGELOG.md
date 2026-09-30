@@ -70,6 +70,13 @@ All notable changes to iterate-harness should be recorded in this file.
 - **hooks 装载器**（`hooks/executor.py`）：结构化 hook 接受裸条目（不再要求
   `{hooks: [...]}` 包装），camelCase 事件键经 `_coerce_hook_event_key` 归一化
   （此前直接 ValueError）；prompt/agent hook 超时降级为可控失败而非抛穿。
+  **超时实现改用 `asyncio.wait_for`**：原写法 `async with asyncio.timeout(...)`
+  是 3.11+ API，在 3.10（`requires-python` 仍声明支持）上属性查找抛
+  `AttributeError` 且被同一个 `try` 吞掉，于是**每个 prompt/agent hook 在 3.10
+  上都静默退化成「hook failed」**——本机 3.13 全绿，只有 3.10 CI job 抓到。
+  同时新增 `tests/test_py310_compat.py`（AST 静态守卫：扫 3.11+ 专属 API、
+  认 `import asyncio as aio` 别名与 `from itertools import batched` 形态、
+  用合法 310 写法钉住误报面、守卫自身有 planted 用例证明会失败）。
 - **iterate 运行锁与落盘**（`iterate/run_lock.py`、`iterate/onboarding.py`、
   `iterate/personalization.py`）：新增 `<data_dir>/locks/` 下的磁盘租约 run-lock
   （WebUI 与控制台互斥，同一 project 不会两个循环），onboarding/personalization
