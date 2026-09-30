@@ -1,0 +1,69 @@
+name: Release create on tag
+
+# Why this exists
+# ---------------
+# `release.yml` only builds and publishes the wheel on `release: published`,
+# and that step needs a human (or a local `gh` session) to create the GitHub
+# Release first. The header of `release.yml` records the history: the `release`
+# event "has not fired reliably since v1.12.10", so every release since then
+# has needed a manual `gh workflow run` — i.e. a machine holding a *write*
+# token. When that token is unavailable (expired PAT, keychain credential an
+# automation context cannot read, headless box), the release is stuck: the tag
+# is pushed, and nothing builds.
+#
+# This workflow closes that hole using only what `git push` already proves we
+# have: pushing a `v*` tag creates the Release for it, with `GITHUB_TOKEN`
+# (which has `contents: write` below). Creating the Release emits
+# `release: published`, so the existing `release.yml` picks it up unchanged and
+# builds/signs/uploads the wheel and publishes to PyPI. Nothing about the
+# published artifact path changes.
+#
+# Release notes come from the *annotated tag message* — the same text the
+# maintainer already writes when tagging — so publishing never needs a second
+# copy of the notes to keep in sync. `--generate-notes` is the fallback when the
+# tag is lightweight.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+# One release per tag; a retag of an existing tag must not race itself.
+concurrency:
+  group: release-create-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  create-release:
+    name: Create GitHub Release for the tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the release (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "release for $TAG already exists — nothing to do"
+            exit 0
+          fi
+
+          # Annotated tag -> tag object -> its message becomes the notes.
+          notes=""
+          if sha="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null)"; then
+            if [ "$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type')" = "tag" ]; then
+              notes="$(gh api "repos/$REPO/git/tags/$sha" --jq '.message' 2>/dev/null || true)"
+            fi
+          fi
+
+          if [ -n "$notes" ]; then
+            gh release create "$TAG" --repo "$REPO" --title "iterate-harness $TAG" --notes "$notes"
+          else
+            # Lightweight tag: fall back to GitHub's own release notes.
+            gh release create "$TAG" --repo "$REPO" --title "iterate-harness $TAG" --generate-notes
+          fi
