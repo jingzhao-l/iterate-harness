@@ -10,11 +10,14 @@ round-trip through the standard settings load/save machinery, while the
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 from .config_loader import EffectiveConfig, load_effective_config
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MAX_REVIEW_ROUNDS = 3
 DEFAULT_ATOMIC_MAX_LINES = 20
@@ -75,6 +78,23 @@ def project_config(project_root: str | Path) -> EffectiveConfig:
     untrusted can execute.
     """
     return load_effective_config(project_root)
+
+
+def personalization_base_dir() -> str | None:
+    """Base directory for personalization data from harness settings.
+
+    Returns ``None`` when the user has not configured
+    ``iterate.data_dir``, so callers keep the historical default
+    (``~/.iterate-harness/iterate``). Imported lazily because
+    ``iterate_harness.config.settings`` imports this module.
+    """
+    try:
+        from iterate_harness.config.settings import load_settings  # noqa: PLC0415
+
+        return load_settings().iterate.data_dir or None
+    except Exception as exc:  # noqa: BLE001 - personalization must survive bad settings
+        log.debug("Could not resolve the personalization data dir: %s", exc)
+        return None
 
 
 def effective_review_rounds(settings: IterateSettings, effective: EffectiveConfig) -> int:

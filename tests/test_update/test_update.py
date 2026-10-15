@@ -90,6 +90,31 @@ def test_compare_versions_ordering():
     assert compare_versions("1.2", "1.2.0") == 0
 
 
+def test_compare_versions_orders_prereleases_before_their_release():
+    """A pre-release must never compare equal to (or newer than) the release
+    it precedes — the old digit-scraping parser reported ``1.2.3-beta`` as
+    already up to date against ``1.2.3``, so the update hint never fired."""
+    assert compare_versions("1.2.3-beta", "1.2.3") == 1
+    assert compare_versions("1.2.3", "1.2.3-beta") == -1
+    assert compare_versions("1.2.3", "1.2.3-rc1") == -1
+    assert compare_versions("1.2.3-rc1", "1.2.3") == 1
+    assert compare_versions("1.2.3rc1", "1.2.3") == 1
+    assert compare_versions("1.2.3-rc1", "1.2.3-rc2") == 1
+    assert compare_versions("1.2.3-rc2", "1.2.3-rc1") == -1
+    assert compare_versions("1.2.3-alpha", "1.2.3-beta") == 1
+    assert compare_versions("1.2.3-dev", "1.2.3-rc1") == 1
+    assert compare_versions("1.2.3-beta", "1.2.3-beta") == 0
+
+
+def test_compare_versions_handles_prefix_and_build_metadata():
+    assert compare_versions("v1.2.3", "1.2.3") == 0
+    assert compare_versions("1.2.3+build.7", "1.2.3") == 0
+    assert compare_versions("V2.0.0", "v2.0") == 0
+    # Different-length cores still compare zero-padded.
+    assert compare_versions("1.2.3", "1.2.3.4") == 1
+    assert compare_versions("1.2", "1.2.1-beta") == 1
+
+
 # ---------------------------------------------------------------------------
 # Install-method detection
 # ---------------------------------------------------------------------------
@@ -141,6 +166,26 @@ def test_fetch_latest_version_falls_back_to_raw_file(monkeypatch):
 
     assert fetch_latest_version(get_fn=flaky_get) == "8.8.8"
     assert len(calls) == 2
+
+
+def test_fetch_from_raw_file_reads_the_captured_version_not_the_match_repr():
+    """``__version__`` is parsed out of the captured group; the surrounding
+    file text (decoy versions, offsets) must not influence the result."""
+    def get_fn(url: str, *, timeout: float, headers: dict[str, str]) -> FakeResponse:
+        return FakeResponse(
+            200,
+            text='# decoy: 0.0.0 appears before the real assignment\n'
+            '__version__ = "7.6.5"\n',
+        )
+
+    assert update_module._fetch_from_raw_file(get_fn, timeout=1.0) == "7.6.5"
+
+
+def test_fetch_from_raw_file_returns_none_without_a_version_line():
+    def get_fn(url: str, *, timeout: float, headers: dict[str, str]) -> FakeResponse:
+        return FakeResponse(200, text="__version__ = unknown\n")
+
+    assert update_module._fetch_from_raw_file(get_fn, timeout=1.0) is None
 
 
 def test_fetch_latest_version_returns_none_when_all_sources_fail():
@@ -367,6 +412,48 @@ def test_perform_update_reports_failure_without_verify(tmp_path: Path):
         runner=runner,
     )
     assert result.success is False
+
+
+def test_perform_update_fails_when_verification_is_unavailable(tmp_path: Path):
+    """``python -m iterate_harness --version`` failing after a "successful"
+    install must not be reported as a completed update."""
+    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if "--version" in argv:
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    result = perform_update(
+        current="1.0.0",
+        home=tmp_path,
+        method=INSTALL_METHOD_PIP,
+        latest="9.9.9",
+        runner=runner,
+    )
+
+    assert result.success is False
+    assert "could not verify" in result.message
+
+
+def test_perform_update_fails_when_version_did_not_change(tmp_path: Path):
+    """A no-op install leaves the old version running: report failure with
+    both versions instead of appending a triumphant '(now running …)'."""
+    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            argv, 0, stdout="iterate_harness 1.0.0\n", stderr=""
+        )
+
+    result = perform_update(
+        current="1.0.0",
+        home=tmp_path,
+        method=INSTALL_METHOD_PIP,
+        latest="9.9.9",
+        runner=runner,
+    )
+
+    assert result.success is False
+    assert "still running 1.0.0" in result.message
+    assert "9.9.9" in result.message
+    assert "now running" not in result.message
 
 
 # ---------------------------------------------------------------------------

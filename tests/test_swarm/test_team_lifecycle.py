@@ -10,13 +10,17 @@ from pathlib import Path
 import pytest
 
 from iterate_harness.swarm import spawn_utils as spawn_utils_mod
+from iterate_harness.swarm import team_lifecycle as team_lifecycle_mod
 from iterate_harness.swarm.mailbox import validate_team_name
 from iterate_harness.swarm.team_lifecycle import (
     TeamFile,
     TeamLifecycleManager,
     TeamMember,
+    _destroy_worktree,
     _kill_orphaned_teammate_panes,
+    cleanup_team_directories,
     get_team_file_path,
+    register_team_for_session_cleanup,
 )
 
 
@@ -281,3 +285,100 @@ async def test_kill_orphaned_pane_logs_when_backend_has_no_kill_pane(tmp_path, m
     assert any(
         "does not implement PaneBackend.kill_pane" in m for m in caplog.messages
     ), "expected a warning about the backend lacking kill_pane"
+
+
+# ---------------------------------------------------------------------------
+# _destroy_worktree / cleanup_team_directories — teardown containment
+# ---------------------------------------------------------------------------
+
+
+async def test_destroy_worktree_never_raises_on_git_failure(tmp_path, monkeypatch):
+    """Teardown runs mid-shutdown: a failing ``git worktree remove`` (or an
+    unreadable/binary ``.git`` marker) must never propagate — the directory is
+    still removed via the rmtree fallback."""
+    import subprocess as _subprocess
+
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: /nonexistent/main/.git/worktrees/x\n", encoding="utf-8")
+    (wt / "file.txt").write_text("work", encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise _subprocess.SubprocessError("git exploded")
+
+    monkeypatch.setattr(_subprocess, "run", _boom)
+
+    await _destroy_worktree(str(wt))  # must not raise
+    assert not wt.exists()
+
+
+async def test_destroy_worktree_handles_binary_git_marker(tmp_path):
+    """A binary (non-UTF-8) ``.git`` marker must not crash teardown; the
+    directory is removed via the rmtree fallback."""
+    wt = tmp_path / "wt-binary"
+    wt.mkdir()
+    (wt / ".git").write_bytes(b"\xff\xfe\x00gitdir: garbage\x00")
+    (wt / "file.txt").write_text("work", encoding="utf-8")
+
+    await _destroy_worktree(str(wt))  # must not raise
+    assert not wt.exists()
+
+
+async def test_cleanup_team_directories_removes_team_even_if_worktree_fails(
+    tmp_path, monkeypatch
+):
+    """A failure while tearing down one member's worktree must not leave the
+    team directory behind (later passes would treat the half-torn-down team as
+    live) and must still unregister the team from session-cleanup tracking."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    tf = TeamFile(name="cleanup-team", created_at=time.time())
+    tf.members["w@cleanup-team"] = TeamMember(
+        agent_id="w@cleanup-team",
+        name="w",
+        backend_type="subprocess",
+        joined_at=time.time(),
+        worktree_path=str(tmp_path / "some-worktree"),
+    )
+    tf.save(get_team_file_path("cleanup-team"))
+    register_team_for_session_cleanup("cleanup-team")
+
+    async def _explode(_path):
+        raise RuntimeError("teardown blew up")
+
+    # Patch the collection-time module object: ``test_imports.py`` pops the
+    # swarm modules from ``sys.modules``, so a string-target patch would
+    # re-import a *fresh* module while ``cleanup_team_directories`` still
+    # resolves ``_destroy_worktree`` in the original module's globals.
+    monkeypatch.setattr(team_lifecycle_mod, "_destroy_worktree", _explode)
+
+    with pytest.raises(RuntimeError, match="teardown blew up"):
+        await cleanup_team_directories("cleanup-team")
+
+    # Deterministic cleanup: team dir gone, registration dropped, even though
+    # the worktree teardown failed.
+    team_dir = tmp_path / ".iterate-harness" / "teams" / "cleanup-team"
+    assert not team_dir.exists()
+    from iterate_harness.swarm import team_lifecycle as tl_mod
+
+    assert "cleanup-team" not in tl_mod._session_created_teams
+
+
+async def test_cleanup_team_directories_tolerates_unreadable_team_file(
+    tmp_path, monkeypatch
+):
+    """An unreadable team.json during cleanup must not raise; the team dir is
+    still removed."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    team_dir = tmp_path / ".iterate-harness" / "teams" / "broken-team"
+    team_dir.mkdir(parents=True)
+    (team_dir / "team.json").write_text("{not json", encoding="utf-8")
+    register_team_for_session_cleanup("broken-team")
+
+    await cleanup_team_directories("broken-team")  # must not raise
+
+    assert not team_dir.exists()
+    from iterate_harness.swarm import team_lifecycle as tl_mod
+
+    assert "broken-team" not in tl_mod._session_created_teams

@@ -280,3 +280,50 @@ async def test_subprocess_backend_does_not_inject_env_when_command_overridden(
     assert captured["command"] == "custom-script --do-it"
     assert captured.get("argv") is None
     assert captured.get("env") is None
+
+
+@pytest.mark.asyncio
+async def test_spawn_prunes_finished_agents_from_registry(monkeypatch, tmp_path: Path):
+    """Regression test: a finished teammate's entry must not linger in
+    ``_agent_tasks`` forever. ``spawn()`` prunes entries whose task record
+    is terminal before registering the new teammate."""
+
+    records: list[TaskRecord] = []
+
+    async def _fake_create_agent_task(self, **kwargs):
+        record = TaskRecord(
+            id=f"task_{len(records)}",
+            type="local_agent",
+            status="running",
+            description=str(kwargs["description"]),
+            cwd=str(kwargs["cwd"]),
+            output_file=tmp_path / f"task_{len(records)}.log",
+        )
+        records.append(record)
+        return record
+
+    monkeypatch.setattr(BackgroundTaskManager, "create_agent_task", _fake_create_agent_task)
+    monkeypatch.setattr("iterate_harness.swarm.subprocess_backend.get_teammate_command", lambda: "/usr/bin/python3")
+
+    backend = SubprocessBackend()
+    config = TeammateSpawnConfig(
+        name="worker",
+        team="default",
+        prompt="hi",
+        cwd=str(tmp_path),
+        parent_session_id="sess-001",
+        task_type="local_agent",
+    )
+
+    first = await backend.spawn(config)
+    assert first.success is True
+    assert backend.get_task_id(first.agent_id) == "task_0"
+
+    # Simulate the first teammate finishing.
+    records[0].status = "done"
+
+    second = await backend.spawn(TeammateSpawnConfig(**{**config.__dict__, "name": "worker-2"}))
+    assert second.success is True
+    # Finished entry pruned; new entry registered.
+    assert backend.get_task_id(first.agent_id) is None
+    assert backend.get_task_id(second.agent_id) == "task_1"

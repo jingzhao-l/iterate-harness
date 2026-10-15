@@ -74,6 +74,38 @@ class TestReportHandler:
             server.shutdown()  # type: ignore[attr-defined]
             thread.join(timeout=3)
 
+    def test_aliases_ignore_the_query_string(self, tmp_path):
+        """/replay?round=3 is the replay page carrying a query, not a 404."""
+        root = _write_sample_files(tmp_path)
+        server, thread = _serve_in_thread(root)
+        try:
+            port = server.server_port  # type: ignore[attr-defined]
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/replay?round=3", timeout=5
+            ) as resp:
+                assert resp.status == 200
+                assert "replay</html>" in resp.read().decode("utf-8")
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/report?source=cli", timeout=5
+            ) as resp:
+                assert resp.status == 200
+                assert "report</html>" in resp.read().decode("utf-8")
+        finally:
+            server.shutdown()  # type: ignore[attr-defined]
+            thread.join(timeout=3)
+
+    def test_unknown_paths_with_a_query_still_404(self, tmp_path):
+        root = _write_sample_files(tmp_path)
+        server, thread = _serve_in_thread(root)
+        try:
+            port = server.server_port  # type: ignore[attr-defined]
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/nope.html?x=1", timeout=5)
+            assert exc.value.code == 404
+        finally:
+            server.shutdown()  # type: ignore[attr-defined]
+            thread.join(timeout=3)
+
 
 class TestServeReport:
     def test_missing_directory_raises(self, tmp_path):

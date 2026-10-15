@@ -12,13 +12,24 @@ from pydantic import BaseModel, Field
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from iterate_harness.utils.fs import atomic_write_text, is_regular_file
 
+#: Upper bound on a single cell's source after an edit. Appends against a
+#: repeatedly-edited cell would otherwise grow the notebook (and every future
+#: read of it) without limit; once the cap is hit the stored source is
+#: truncated with an explicit marker instead of silently ballooning.
+_MAX_CELL_SOURCE_CHARS = 100_000
+
+_TRUNCATION_MARKER = "\n# ...[cell source truncated by notebook_edit]"
+
 
 class NotebookEditToolInput(BaseModel):
     """Arguments for notebook editing."""
 
     path: str = Field(description="Path to the .ipynb file")
     cell_index: int = Field(description="Zero-based cell index", ge=0)
-    new_source: str = Field(description="Replacement or appended source for the target cell")
+    new_source: str = Field(
+        description="Replacement or appended source for the target cell",
+        max_length=_MAX_CELL_SOURCE_CHARS,
+    )
     cell_type: Literal["code", "markdown"] = Field(default="code")
     mode: Literal["replace", "append"] = Field(default="replace")
     create_if_missing: bool = Field(default=True)
@@ -69,6 +80,9 @@ class NotebookEditTool(BaseTool[NotebookEditToolInput]):
 
         existing = _normalize_source(cell.get("source", ""))
         updated = arguments.new_source if arguments.mode == "replace" else f"{existing}{arguments.new_source}"
+        if len(updated) > _MAX_CELL_SOURCE_CHARS:
+            keep = _MAX_CELL_SOURCE_CHARS - len(_TRUNCATION_MARKER)
+            updated = updated[:keep].rstrip() + _TRUNCATION_MARKER
         cell["source"] = updated
 
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -754,6 +754,11 @@ async def _destroy_worktree(worktree_path: str) -> None:
     """Best-effort removal of a git worktree.
 
     Tries ``git worktree remove --force`` first; falls back to ``shutil.rmtree``.
+
+    This runs in the middle of session teardown, so it must never raise:
+    every step (marker read, git invocation, directory removal) is contained
+    and logged, and the directory removal is always attempted even when an
+    earlier step failed.  Only asyncio cancellation propagates.
     """
     wt = Path(worktree_path)
     git_file = wt / ".git"
@@ -766,12 +771,16 @@ async def _destroy_worktree(worktree_path: str) -> None:
             worktree_git_dir = match.group(1)
             main_git_dir = Path(worktree_git_dir) / ".." / ".."
             main_repo_path = str(main_git_dir / "..")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        # ValueError covers e.g. embedded NUL bytes in a crafted path;
+        # UnicodeDecodeError covers a binary marker file.
         logger.debug("Could not read git worktree metadata %s: %s", git_file, exc)
 
     if main_repo_path:
         try:
-            result = subprocess.run(
+            # Off the event loop: git may take seconds on a large repo.
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["git", "worktree", "remove", "--force", worktree_path],
                 cwd=main_repo_path,
                 capture_output=True,
@@ -782,12 +791,12 @@ async def _destroy_worktree(worktree_path: str) -> None:
                 return
             if "not a working tree" in (result.stderr or ""):
                 return
-        except (subprocess.SubprocessError, OSError) as exc:
+        except (subprocess.SubprocessError, OSError, ValueError) as exc:
             logger.debug("git worktree remove failed for %s: %s", worktree_path, exc)
 
     try:
         shutil.rmtree(worktree_path, ignore_errors=True)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         logger.debug("Could not remove worktree directory %s: %s", worktree_path, exc)
 
 
@@ -802,27 +811,47 @@ async def cleanup_team_directories(team_name: str) -> None:
     Also removes git worktrees created for team members.  Called when a
     swarm session is terminated.
 
+    Deterministic by construction: worktree paths are collected before the
+    team directory is touched, every worktree teardown is contained (see
+    :func:`_destroy_worktree`), the team directory is removed in a
+    ``finally`` block so a teardown failure cannot leave it behind, and the
+    team is unregistered from session-cleanup tracking so it is never
+    cleaned up twice.
+
     Args:
         team_name: The team name to clean up.
     """
     # Read team file to get worktree paths BEFORE deleting the team directory
-    team_file = read_team_file(team_name)
+    try:
+        team_file = read_team_file(team_name)
+    except OSError:
+        logger.exception(
+            "[team_lifecycle] Could not read team file for %s during cleanup; "
+            "skipping worktree teardown",
+            team_name,
+        )
+        team_file = None
+
     worktree_paths: list[str] = []
     if team_file:
         for member in team_file.members.values():
             if member.worktree_path:
                 worktree_paths.append(member.worktree_path)
 
-    # Clean up worktrees first
-    for wt_path in worktree_paths:
-        await _destroy_worktree(wt_path)
-
-    # Remove the team directory
-    team_dir = get_team_dir(team_name)
     try:
-        shutil.rmtree(team_dir, ignore_errors=True)
-    except OSError as exc:
-        logger.debug("Could not remove team directory %s: %s", team_dir, exc)
+        # Clean up worktrees first (each call contains its own failures).
+        for wt_path in worktree_paths:
+            await _destroy_worktree(wt_path)
+    finally:
+        # Remove the team directory unconditionally: a partial cleanup must
+        # still delete the team's on-disk state instead of leaving a half-
+        # torn-down directory that later passes treat as live.
+        try:
+            team_dir = get_team_dir(team_name, create=False)
+            shutil.rmtree(team_dir, ignore_errors=True)
+        except (OSError, ValueError) as exc:
+            logger.debug("Could not remove team directory for %s: %s", team_name, exc)
+        unregister_team_for_session_cleanup(team_name)
 
 
 # ---------------------------------------------------------------------------

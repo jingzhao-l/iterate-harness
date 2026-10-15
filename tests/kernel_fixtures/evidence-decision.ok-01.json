@@ -1,0 +1,541 @@
+{
+  "comment": "Cross-implementation anchor for decisionOutcomeFromEvidence and decisionSummaryFromEvidence (kernel/src/evidence-decision.ts). The rules a second implementation must reproduce, written so it can be coded from this file without reading the TypeScript: (1) circuitBreaker.level >= 3 is `blocked`, checked FIRST — the loop was stopped by harness policy and calling that a `fail` would blame the app. (2) Otherwise an assertion present (key present and not null) decides `pass` when its `passed` is true, `fail` when false. (3) Otherwise a diagnosis present decides `NO_ANOMALY` -> pass, `INCONCLUSIVE` -> inconclusive, any T-class -> fail. (4) Otherwise `inconclusive`: nothing was asserted and nothing diagnosed is not a pass. (5) A pass is then downgraded — never upgraded — to `inconclusive` when attribution.contaminated is true or attribution.level is `weak`, because the engine itself refuses to attribute that result to this operation. Absent vs explicit-null for assertion/diagnosis are two shapes the engine really emits and must be treated the same way. The summary is a rendering of the same fields in this order, joined by '; ': 'assertion <property> passed|failed: expected <JSON>, actual <JSON>' when an assertion is present; 'diagnosis <class>: <report.anomaly>' when a diagnosis is present; 'circuitBreaker level <n> (<reason>)' when level > 0 (the parenthetical only when a reason is present); 'attribution <level>' plus ', contaminated' when contaminated. JSON values are rendered as JavaScript's JSON.stringify would (no insignificant whitespace, key order as the pack carries them). Longer than 2048 characters, keep the first 2045 and append '...'. Provenance: four cases are real packs read out of ~/.glasspane/evidence on 2026-10-08 (operationId recorded per case); four are derived by editing exactly one field of a recorded pack, stated in each case's `origin`, because the archived corpus never contains a failed assertion, a weak-or-contaminated pass, or a breaker at the policy limit — those rules can only be pinned by derivation, and a fixture that silently invented them would be unsourced. The `input` bytes are the archived files exactly as the engine wrote them, including a `schemaVersion` of `glasspane.evidence/0.1-draft` and a `pixelDiff` with no `bounds`. A consumer that reads evidence off disk therefore parses them through the read-side contract (`parseEvidencePackRead`), which is what folds the legacy version and tolerates the missing signal — the same path the GlassPane Harness ledger uses. The transcription itself reads only `attribution`, `assertion`, `diagnosis` and `circuitBreaker`, which are identical under both contracts; nothing here depends on version folding.",
+  "cases": [
+    {
+      "name": "no-assertion-no-diagnosis-soft-breaker0",
+      "origin": "real",
+      "sourceOperationId": "op_01M2QS5A2AMWPNKCMTH0KFARC2",
+      "input": {
+        "assertion": null,
+        "attribution": {
+          "contaminated": false,
+          "level": "soft"
+        },
+        "circuitBreaker": {
+          "level": 0
+        },
+        "createdAt": "2026-09-17T13:33:39.275Z",
+        "diagnosis": null,
+        "operationId": "op_01M2QS5A2AMWPNKCMTH0KFARC2",
+        "schemaVersion": "glasspane.evidence/0.1-draft",
+        "signals": {
+          "act": {
+            "actConfirmed": true,
+            "action": "press",
+            "selector": {
+              "role": "AXButton",
+              "title": "Submit"
+            }
+          },
+          "axEvent": {
+            "axChanged": false,
+            "latencyMs": 0.0050067901611328125,
+            "nodeCount": 4,
+            "treeDigestAfter": "f84988c2d9a2edf3972aa9a247279fce",
+            "treeDigestBefore": "f84988c2d9a2edf3972aa9a247279fce"
+          },
+          "crash": {
+            "processAliveAfter": true,
+            "processAliveBefore": true
+          },
+          "handlerProbe": null,
+          "pixelDiff": {
+            "changedPixelRatio": 0,
+            "windowId": 12
+          },
+          "responsiveness": {
+            "pingMs": 3,
+            "responsive": true
+          },
+          "stateDiff": null
+        }
+      },
+      "expectedOutcome": "inconclusive",
+      "expectedSummary": "attribution soft"
+    },
+    {
+      "name": "diagnosis-T5-strong-breaker1",
+      "origin": "real",
+      "sourceOperationId": "op_01M2WNQN9TTG0MCR0ZRNZ5V5G1",
+      "input": {
+        "assertion": null,
+        "attribution": {
+          "contaminated": false,
+          "level": "strong"
+        },
+        "circuitBreaker": {
+          "level": 1,
+          "reason": "screen-recording-denied"
+        },
+        "createdAt": "2026-09-19T11:09:58.741Z",
+        "diagnosis": {
+          "class": "T5",
+          "report": {
+            "anomaly": "SwiftUI dependency loss: handler hit and state changed (source=z3-kvc, changed=true, keys=[demo.hidden]) but AX tree and pixels stayed silent",
+            "evidence": "op_01M2WNQN9TTG0MCR0ZRNZ5V5G1 strong attribution; actConfirmed=true; axChanged=false (digest 37521cc12c2829f47cca0287517a6d9c -> 37521cc12c2829f47cca0287517a6d9c, 171 nodes, 281.99493885040283ms); pixelDiff=unavailable; responsive=true pingMs=0.028967857360839844; alive true -> true; handlerProbe hitCount=1 late=0 [probe_demo/ProbeDemoApp.swift:68]; source=z3-kvc, changed=true, keys=[demo.hidden]; circuitBreaker=1",
+            "next": "check the view's observation of the changed key (Z1b-style direct @State writes and missing @Observable registration are the usual roots); re-bind or route through the observed model",
+            "path": "act.press -> probe-window -> handler/state -> ax-digest -> pixel-diff"
+          }
+        },
+        "operationId": "op_01M2WNQN9TTG0MCR0ZRNZ5V5G1",
+        "schemaVersion": "glasspane.evidence/0.1-draft",
+        "signals": {
+          "act": {
+            "actConfirmed": true,
+            "action": "press",
+            "selector": {
+              "identifier": "hidden-write",
+              "role": "AXButton"
+            }
+          },
+          "axEvent": {
+            "axChanged": false,
+            "latencyMs": 281.99493885040283,
+            "nodeCount": 171,
+            "treeDigestAfter": "37521cc12c2829f47cca0287517a6d9c",
+            "treeDigestBefore": "37521cc12c2829f47cca0287517a6d9c"
+          },
+          "crash": {
+            "processAliveAfter": true,
+            "processAliveBefore": true
+          },
+          "handlerProbe": {
+            "handlers": [
+              {
+                "file": "probe_demo/ProbeDemoApp.swift",
+                "line": 68
+              }
+            ],
+            "hitCount": 1,
+            "lateCount": 0,
+            "probeVersion": "gp-probe/0.1.0"
+          },
+          "responsiveness": {
+            "pingMs": 0.028967857360839844,
+            "responsive": true
+          },
+          "stateDiff": {
+            "changed": true,
+            "entries": [
+              {
+                "after": "1",
+                "before": "0",
+                "key": "demo.hidden"
+              }
+            ],
+            "source": "z3-kvc"
+          }
+        }
+      },
+      "expectedOutcome": "fail",
+      "expectedSummary": "diagnosis T5: SwiftUI dependency loss: handler hit and state changed (source=z3-kvc, changed=true, keys=[demo.hidden]) but AX tree and pixels stayed silent; circuitBreaker level 1 (screen-recording-denied); attribution strong"
+    },
+    {
+      "name": "diagnosis-INCONCLUSIVE-strong-breaker1",
+      "origin": "real",
+      "sourceOperationId": "op_01M2WNQMK2NEEZDNMK58NP2JYQ",
+      "input": {
+        "assertion": null,
+        "attribution": {
+          "contaminated": false,
+          "level": "strong"
+        },
+        "circuitBreaker": {
+          "level": 1,
+          "reason": "screen-recording-denied"
+        },
+        "createdAt": "2026-09-19T11:09:58.103Z",
+        "diagnosis": {
+          "class": "INCONCLUSIVE",
+          "report": {
+            "anomaly": "AX tree changed but the pixel signal is unavailable (circuitBreaker level 1); T6 is undecidable without screen capture",
+            "evidence": "op_01M2WNQMK2NEEZDNMK58NP2JYQ strong attribution; actConfirmed=true; axChanged=true (digest c624dee7d3644a4b64f8f8b6739917de -> 37521cc12c2829f47cca0287517a6d9c, 171 nodes, 372.1029758453369ms); pixelDiff=unavailable; responsive=true pingMs=0.054955482482910156; alive true -> true; handlerProbe hitCount=1 late=0 [probe_demo/ProbeDemoApp.swift:60]; source=z3-kvc, changed=true, keys=[count-domain.count, demo.count]; circuitBreaker=1",
+            "next": "grant screen recording permission to the daemon and replay the act for a decidable T6/NO_ANOMALY verdict",
+            "path": "act.press -> probe-window -> handler/state -> ax-digest -> pixel-diff"
+          }
+        },
+        "operationId": "op_01M2WNQMK2NEEZDNMK58NP2JYQ",
+        "schemaVersion": "glasspane.evidence/0.1-draft",
+        "signals": {
+          "act": {
+            "actConfirmed": true,
+            "action": "press",
+            "selector": {
+              "identifier": "ok-press",
+              "role": "AXButton"
+            }
+          },
+          "axEvent": {
+            "axChanged": true,
+            "latencyMs": 372.1029758453369,
+            "nodeCount": 171,
+            "treeDigestAfter": "37521cc12c2829f47cca0287517a6d9c",
+            "treeDigestBefore": "c624dee7d3644a4b64f8f8b6739917de"
+          },
+          "crash": {
+            "processAliveAfter": true,
+            "processAliveBefore": true
+          },
+          "handlerProbe": {
+            "handlers": [
+              {
+                "file": "probe_demo/ProbeDemoApp.swift",
+                "line": 60
+              }
+            ],
+            "hitCount": 1,
+            "lateCount": 0,
+            "probeVersion": "gp-probe/0.1.0"
+          },
+          "responsiveness": {
+            "pingMs": 0.054955482482910156,
+            "responsive": true
+          },
+          "stateDiff": {
+            "changed": true,
+            "entries": [
+              {
+                "after": "1",
+                "before": "0",
+                "key": "count-domain.count"
+              },
+              {
+                "after": "1",
+                "before": "0",
+                "key": "demo.count"
+              }
+            ],
+            "source": "z3-kvc"
+          }
+        }
+      },
+      "expectedOutcome": "inconclusive",
+      "expectedSummary": "diagnosis INCONCLUSIVE: AX tree changed but the pixel signal is unavailable (circuitBreaker level 1); T6 is undecidable without screen capture; circuitBreaker level 1 (screen-recording-denied); attribution strong"
+    },
+    {
+      "name": "assertion-pass-with-diagnosis-T3-soft",
+      "origin": "real",
+      "sourceOperationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+      "input": {
+        "assertion": {
+          "actual": true,
+          "expected": true,
+          "kind": "element_property",
+          "passed": true,
+          "property": "enabled",
+          "selector": {
+            "role": "AXButton"
+          }
+        },
+        "attribution": {
+          "contaminated": false,
+          "level": "soft"
+        },
+        "circuitBreaker": {
+          "level": 1,
+          "reason": "screen-recording-denied"
+        },
+        "createdAt": "2026-09-18T08:39:37.667Z",
+        "diagnosis": {
+          "class": "T3",
+          "report": {
+            "anomaly": "operation confirmed but neither the AX tree nor pixels changed; binding lost",
+            "evidence": "op_01M2STQMY23REZG9CPD6Z3CYGT soft attribution; actConfirmed=true; axChanged=false (digest bd76f2aba5c08ea202103eeca782292b -> bd76f2aba5c08ea202103eeca782292b, 820 nodes, 811.6888999938965ms); pixelDiff=unavailable; responsive=true pingMs=0.1289844512939453; alive true -> true; circuitBreaker=1",
+            "next": "verify the selector matches an enabled control; observe the tree; check the action binding and isEnabled state",
+            "path": "act.press -> ax-confirm -> tree-digest -> pixel-diff"
+          }
+        },
+        "operationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+        "schemaVersion": "glasspane.evidence/0.1-draft",
+        "signals": {
+          "act": {
+            "actConfirmed": true,
+            "action": "press",
+            "selector": {
+              "role": "AXButton"
+            }
+          },
+          "axEvent": {
+            "axChanged": false,
+            "latencyMs": 811.6888999938965,
+            "nodeCount": 820,
+            "treeDigestAfter": "bd76f2aba5c08ea202103eeca782292b",
+            "treeDigestBefore": "bd76f2aba5c08ea202103eeca782292b"
+          },
+          "crash": {
+            "processAliveAfter": true,
+            "processAliveBefore": true
+          },
+          "handlerProbe": null,
+          "responsiveness": {
+            "pingMs": 0.1289844512939453,
+            "responsive": true
+          },
+          "stateDiff": null
+        }
+      },
+      "expectedOutcome": "pass",
+      "expectedSummary": "assertion enabled passed: expected true, actual true; diagnosis T3: operation confirmed but neither the AX tree nor pixels changed; binding lost; circuitBreaker level 1 (screen-recording-denied); attribution soft"
+    },
+    {
+      "name": "assertion-pass-but-weak-attribution",
+      "origin": "derived: attribution.level strong->weak",
+      "sourceOperationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+      "input": {
+        "assertion": {
+          "actual": true,
+          "expected": true,
+          "kind": "element_property",
+          "passed": true,
+          "property": "enabled",
+          "selector": {
+            "role": "AXButton"
+          }
+        },
+        "attribution": {
+          "contaminated": false,
+          "level": "weak"
+        },
+        "circuitBreaker": {
+          "level": 1,
+          "reason": "screen-recording-denied"
+        },
+        "createdAt": "2026-09-18T08:39:37.667Z",
+        "diagnosis": {
+          "class": "T3",
+          "report": {
+            "anomaly": "operation confirmed but neither the AX tree nor pixels changed; binding lost",
+            "evidence": "op_01M2STQMY23REZG9CPD6Z3CYGT soft attribution; actConfirmed=true; axChanged=false (digest bd76f2aba5c08ea202103eeca782292b -> bd76f2aba5c08ea202103eeca782292b, 820 nodes, 811.6888999938965ms); pixelDiff=unavailable; responsive=true pingMs=0.1289844512939453; alive true -> true; circuitBreaker=1",
+            "next": "verify the selector matches an enabled control; observe the tree; check the action binding and isEnabled state",
+            "path": "act.press -> ax-confirm -> tree-digest -> pixel-diff"
+          }
+        },
+        "operationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+        "schemaVersion": "glasspane.evidence/0.1-draft",
+        "signals": {
+          "act": {
+            "actConfirmed": true,
+            "action": "press",
+            "selector": {
+              "role": "AXButton"
+            }
+          },
+          "axEvent": {
+            "axChanged": false,
+            "latencyMs": 811.6888999938965,
+            "nodeCount": 820,
+            "treeDigestAfter": "bd76f2aba5c08ea202103eeca782292b",
+            "treeDigestBefore": "bd76f2aba5c08ea202103eeca782292b"
+          },
+          "crash": {
+            "processAliveAfter": true,
+            "processAliveBefore": true
+          },
+          "handlerProbe": null,
+          "responsiveness": {
+            "pingMs": 0.1289844512939453,
+            "responsive": true
+          },
+          "stateDiff": null
+        }
+      },
+      "expectedOutcome": "inconclusive",
+      "expectedSummary": "assertion enabled passed: expected true, actual true; diagnosis T3: operation confirmed but neither the AX tree nor pixels changed; binding lost; circuitBreaker level 1 (screen-recording-denied); attribution weak"
+    },
+    {
+      "name": "assertion-pass-but-contaminated",
+      "origin": "derived: attribution.contaminated -> true",
+      "sourceOperationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+      "input": {
+        "assertion": {
+          "actual": true,
+          "expected": true,
+          "kind": "element_property",
+          "passed": true,
+          "property": "enabled",
+          "selector": {
+            "role": "AXButton"
+          }
+        },
+        "attribution": {
+          "contaminated": true,
+          "level": "soft"
+        },
+        "circuitBreaker": {
+          "level": 1,
+          "reason": "screen-recording-denied"
+        },
+        "createdAt": "2026-09-18T08:39:37.667Z",
+        "diagnosis": {
+          "class": "T3",
+          "report": {
+            "anomaly": "operation confirmed but neither the AX tree nor pixels changed; binding lost",
+            "evidence": "op_01M2STQMY23REZG9CPD6Z3CYGT soft attribution; actConfirmed=true; axChanged=false (digest bd76f2aba5c08ea202103eeca782292b -> bd76f2aba5c08ea202103eeca782292b, 820 nodes, 811.6888999938965ms); pixelDiff=unavailable; responsive=true pingMs=0.1289844512939453; alive true -> true; circuitBreaker=1",
+            "next": "verify the selector matches an enabled control; observe the tree; check the action binding and isEnabled state",
+            "path": "act.press -> ax-confirm -> tree-digest -> pixel-diff"
+          }
+        },
+        "operationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+        "schemaVersion": "glasspane.evidence/0.1-draft",
+        "signals": {
+          "act": {
+            "actConfirmed": true,
+            "action": "press",
+            "selector": {
+              "role": "AXButton"
+            }
+          },
+          "axEvent": {
+            "axChanged": false,
+            "latencyMs": 811.6888999938965,
+            "nodeCount": 820,
+            "treeDigestAfter": "bd76f2aba5c08ea202103eeca782292b",
+            "treeDigestBefore": "bd76f2aba5c08ea202103eeca782292b"
+          },
+          "crash": {
+            "processAliveAfter": true,
+            "processAliveBefore": true
+          },
+          "handlerProbe": null,
+          "responsiveness": {
+            "pingMs": 0.1289844512939453,
+            "responsive": true
+          },
+          "stateDiff": null
+        }
+      },
+      "expectedOutcome": "inconclusive",
+      "expectedSummary": "assertion enabled passed: expected true, actual true; diagnosis T3: operation confirmed but neither the AX tree nor pixels changed; binding lost; circuitBreaker level 1 (screen-recording-denied); attribution soft, contaminated"
+    },
+    {
+      "name": "assertion-failed",
+      "origin": "derived: assertion.passed -> false, assertion.actual -> false",
+      "sourceOperationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+      "input": {
+        "assertion": {
+          "actual": false,
+          "expected": true,
+          "kind": "element_property",
+          "passed": false,
+          "property": "enabled",
+          "selector": {
+            "role": "AXButton"
+          }
+        },
+        "attribution": {
+          "contaminated": false,
+          "level": "soft"
+        },
+        "circuitBreaker": {
+          "level": 1,
+          "reason": "screen-recording-denied"
+        },
+        "createdAt": "2026-09-18T08:39:37.667Z",
+        "diagnosis": {
+          "class": "T3",
+          "report": {
+            "anomaly": "operation confirmed but neither the AX tree nor pixels changed; binding lost",
+            "evidence": "op_01M2STQMY23REZG9CPD6Z3CYGT soft attribution; actConfirmed=true; axChanged=false (digest bd76f2aba5c08ea202103eeca782292b -> bd76f2aba5c08ea202103eeca782292b, 820 nodes, 811.6888999938965ms); pixelDiff=unavailable; responsive=true pingMs=0.1289844512939453; alive true -> true; circuitBreaker=1",
+            "next": "verify the selector matches an enabled control; observe the tree; check the action binding and isEnabled state",
+            "path": "act.press -> ax-confirm -> tree-digest -> pixel-diff"
+          }
+        },
+        "operationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+        "schemaVersion": "glasspane.evidence/0.1-draft",
+        "signals": {
+          "act": {
+            "actConfirmed": true,
+            "action": "press",
+            "selector": {
+              "role": "AXButton"
+            }
+          },
+          "axEvent": {
+            "axChanged": false,
+            "latencyMs": 811.6888999938965,
+            "nodeCount": 820,
+            "treeDigestAfter": "bd76f2aba5c08ea202103eeca782292b",
+            "treeDigestBefore": "bd76f2aba5c08ea202103eeca782292b"
+          },
+          "crash": {
+            "processAliveAfter": true,
+            "processAliveBefore": true
+          },
+          "handlerProbe": null,
+          "responsiveness": {
+            "pingMs": 0.1289844512939453,
+            "responsive": true
+          },
+          "stateDiff": null
+        }
+      },
+      "expectedOutcome": "fail",
+      "expectedSummary": "assertion enabled failed: expected true, actual false; diagnosis T3: operation confirmed but neither the AX tree nor pixels changed; binding lost; circuitBreaker level 1 (screen-recording-denied); attribution soft"
+    },
+    {
+      "name": "breaker-at-policy-limit",
+      "origin": "derived: circuitBreaker.level -> 3",
+      "sourceOperationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+      "input": {
+        "assertion": {
+          "actual": true,
+          "expected": true,
+          "kind": "element_property",
+          "passed": true,
+          "property": "enabled",
+          "selector": {
+            "role": "AXButton"
+          }
+        },
+        "attribution": {
+          "contaminated": false,
+          "level": "soft"
+        },
+        "circuitBreaker": {
+          "level": 3,
+          "reason": "fixture: breaker raised to the policy limit"
+        },
+        "createdAt": "2026-09-18T08:39:37.667Z",
+        "diagnosis": {
+          "class": "T3",
+          "report": {
+            "anomaly": "operation confirmed but neither the AX tree nor pixels changed; binding lost",
+            "evidence": "op_01M2STQMY23REZG9CPD6Z3CYGT soft attribution; actConfirmed=true; axChanged=false (digest bd76f2aba5c08ea202103eeca782292b -> bd76f2aba5c08ea202103eeca782292b, 820 nodes, 811.6888999938965ms); pixelDiff=unavailable; responsive=true pingMs=0.1289844512939453; alive true -> true; circuitBreaker=1",
+            "next": "verify the selector matches an enabled control; observe the tree; check the action binding and isEnabled state",
+            "path": "act.press -> ax-confirm -> tree-digest -> pixel-diff"
+          }
+        },
+        "operationId": "op_01M2STQMY23REZG9CPD6Z3CYGT",
+        "schemaVersion": "glasspane.evidence/0.1-draft",
+        "signals": {
+          "act": {
+            "actConfirmed": true,
+            "action": "press",
+            "selector": {
+              "role": "AXButton"
+            }
+          },
+          "axEvent": {
+            "axChanged": false,
+            "latencyMs": 811.6888999938965,
+            "nodeCount": 820,
+            "treeDigestAfter": "bd76f2aba5c08ea202103eeca782292b",
+            "treeDigestBefore": "bd76f2aba5c08ea202103eeca782292b"
+          },
+          "crash": {
+            "processAliveAfter": true,
+            "processAliveBefore": true
+          },
+          "handlerProbe": null,
+          "responsiveness": {
+            "pingMs": 0.1289844512939453,
+            "responsive": true
+          },
+          "stateDiff": null
+        }
+      },
+      "expectedOutcome": "blocked",
+      "expectedSummary": "assertion enabled passed: expected true, actual true; diagnosis T3: operation confirmed but neither the AX tree nor pixels changed; binding lost; circuitBreaker level 3 (fixture: breaker raised to the policy limit); attribution soft"
+    }
+  ]
+}

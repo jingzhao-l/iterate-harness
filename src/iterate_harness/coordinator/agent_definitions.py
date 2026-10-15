@@ -763,7 +763,9 @@ def load_agents_dir(directory: Path) -> list[AgentDefinition]:
             effort_raw = frontmatter.get("effort")
             effort: str | int | None = None
             if effort_raw is not None:
-                if isinstance(effort_raw, int):
+                # ``bool`` subclasses ``int``: ``effort: true`` must not be
+                # silently reinterpreted as effort level 1.
+                if isinstance(effort_raw, int) and not isinstance(effort_raw, bool):
                     effort = effort_raw if effort_raw > 0 else None
                 elif isinstance(effort_raw, str) and effort_raw in EFFORT_LEVELS:
                     effort = effort_raw

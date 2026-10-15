@@ -176,10 +176,55 @@ class DockerSandboxSession:
         self._running = True
         logger.info("Docker sandbox started: %s", self._container_name)
 
-    async def stop(self) -> None:
-        """Stop and remove the sandbox container."""
+    async def _run_docker_command(self, *argv: str, timeout: float) -> tuple[int, bytes]:
+        """Run one docker subcommand; returns ``(returncode, stdout)``."""
+        docker = shutil.which("docker") or "docker"
+        process = await asyncio.create_subprocess_exec(
+            docker,
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        return process.returncode or 0, stdout
+
+    async def _container_still_running(self) -> bool:
+        """True when ``docker inspect`` reports the container as running.
+
+        A container docker no longer knows about counts as stopped (they are
+        started with ``--rm``). If the state cannot be determined at all, the
+        conservative answer is "still running" so the caller does not forget
+        about a container it never confirmed gone.
+        """
+        try:
+            _rc, stdout = await self._run_docker_command(
+                "inspect", "-f", "{{.State.Running}}", self._container_name, timeout=10
+            )
+        except (asyncio.TimeoutError, OSError) as exc:
+            logger.warning(
+                "Could not confirm the sandbox container state (%s): %s", self._container_name, exc
+            )
+            return True
+        return stdout.decode("utf-8", errors="replace").strip().lower() == "true"
+
+    async def _kill_container(self) -> None:
+        """Force-kill the container when a graceful stop failed."""
+        try:
+            await self._run_docker_command("kill", self._container_name, timeout=10)
+        except (asyncio.TimeoutError, OSError) as exc:
+            logger.warning("Error force-killing Docker sandbox: %s", exc)
+
+    async def stop(self) -> bool:
+        """Stop and remove the sandbox container.
+
+        Returns True once the container is confirmed stopped (or already
+        gone). A failed or timed-out ``docker stop`` used to clear
+        ``_running`` unconditionally, so the caller believed the container was
+        gone while it kept running — and a retry was impossible because
+        ``_running`` was already False.
+        """
         if not self._running:
-            return
+            return True
         docker = shutil.which("docker") or "docker"
         try:
             process = await asyncio.create_subprocess_exec(
@@ -194,9 +239,16 @@ class DockerSandboxSession:
             await asyncio.wait_for(process.communicate(), timeout=15)
         except (asyncio.TimeoutError, OSError) as exc:
             logger.warning("Error stopping Docker sandbox: %s", exc)
-        finally:
-            self._running = False
-            logger.info("Docker sandbox stopped: %s", self._container_name)
+            await self._kill_container()
+        if await self._container_still_running():
+            logger.warning(
+                "Docker sandbox %s is still running after stop; leaving the session marked active",
+                self._container_name,
+            )
+            return False
+        self._running = False
+        logger.info("Docker sandbox stopped: %s", self._container_name)
+        return True
 
     def stop_sync(self) -> None:
         """Synchronous stop for use in atexit handlers."""

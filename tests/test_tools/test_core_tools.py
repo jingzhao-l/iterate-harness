@@ -401,6 +401,21 @@ async def test_lsp_tool(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_lsp_tool_missing_file_path_raises_instead_of_assert(tmp_path: Path):
+    """A caller bypassing pydantic validation must hit a real error, not an ``assert``.
+
+    ``assert`` statements vanish under ``python -O``, which would turn a
+    validation bug into silent misbehaviour (``None`` flowing into path
+    resolution).
+    """
+    arguments = LspToolInput(operation="document_symbol", file_path="pkg/utils.py")
+    arguments.file_path = None  # bypass validation, as a buggy caller would
+
+    with pytest.raises(ValueError, match="requires file_path"):
+        await LspTool().execute(arguments, ToolExecutionContext(cwd=tmp_path))
+
+
+@pytest.mark.asyncio
 async def test_worktree_tools(tmp_path: Path):
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(

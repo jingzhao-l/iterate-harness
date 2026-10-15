@@ -211,9 +211,9 @@ def build_teammate_query_context(config: TeammateSpawnConfig) -> Any | None:
 
     Returns ``None`` (never raises) when the environment cannot supply one —
     missing auth, unreadable settings, or an unsupported install — in which
-    case the caller keeps the stub fallback so tests and direct invocations
-    still behave. The failure is logged once so the silent-stub path stays
-    diagnosable.
+    case the caller reports a real failure instead of pretending the
+    teammate ran (see :func:`start_in_process_teammate`). The failure is
+    logged once so the no-context path stays diagnosable.
     """
     from pathlib import Path
 
@@ -276,7 +276,7 @@ def build_teammate_query_context(config: TeammateSpawnConfig) -> Any | None:
     except (Exception, SystemExit) as exc:  # noqa: BLE001 - defensive builder
         logger.warning(
             "[in_process] %s: could not build teammate QueryContext; "
-            "falling back to stub run: %s",
+            "teammate will be reported failed instead of running: %s",
             config.name,
             exc,
         )
@@ -321,10 +321,12 @@ async def start_in_process_teammate(
     query_context:
         Optional pre-built
         :class:`~iterate_harness.engine.query.QueryContext`. When *None* this
-        function falls back to :func:`build_teammate_query_context` — and only
-        if THAT is also unavailable (missing auth / unreadable settings) does
-        it run a stub that respects the cancel signals, so tests and direct
-        invocations still work without an API key.
+        function falls back to :func:`build_teammate_query_context`. If THAT
+        is also unavailable (missing auth / unreadable settings) the
+        teammate cannot do any work at all, so after a short cancel-aware
+        window this coroutine raises and the task is recorded as **failed**
+        — a prompt that was never executed must never be reported as a
+        successful "finished" run.
     """
     ctx = TeammateContext(
         agent_id=agent_id,
@@ -343,6 +345,11 @@ async def start_in_process_teammate(
 
     logger.debug("[in_process] %s: starting", agent_id)
 
+    #: Set when the teammate could not run its prompt; reported to the
+    #: leader in the idle notification and re-raised so the task records
+    #: a real failure instead of a silent no-op.
+    failure: str | None = None
+
     try:
         ctx.status = "running"
 
@@ -355,12 +362,13 @@ async def start_in_process_teammate(
             await _run_query_loop(query_context, config, ctx, mailbox)
         else:
             # No usable QueryContext (missing auth / broken settings): the
-            # teammate cannot do real work. Log the reason and honour cancel
-            # signals so the caller sees a clean, diagnosable no-op rather
-            # than a fake transcript.
+            # teammate cannot do real work. Honour cancel signals for a
+            # moment (so shutdown of a just-spawned teammate stays clean),
+            # then fail loudly — reporting "finished" for a prompt that was
+            # never executed is how a no-op worker masquerades as success.
             logger.info(
-                "[in_process] %s: no query_context available — running "
-                "cancel-aware stub for prompt: %.80s",
+                "[in_process] %s: no query_context available — waiting "
+                "cancel-aware before failing prompt: %.80s",
                 agent_id,
                 config.prompt,
             )
@@ -370,20 +378,37 @@ async def start_in_process_teammate(
                     logger.debug("[in_process] %s: cancelled during stub run", agent_id)
                     return
                 await asyncio.sleep(0.1)
+            failure = (
+                f"{agent_id} could not execute its prompt: no QueryContext "
+                "available (missing auth or unreadable settings)"
+            )
+            raise RuntimeError(failure)
 
     except asyncio.CancelledError:
         logger.debug("[in_process] %s: task cancelled", agent_id)
         raise
-    except Exception:
-        logger.exception("[in_process] %s: unhandled exception in agent loop", agent_id)
+    except Exception as exc:
+        failure = failure or f"{type(exc).__name__}: {exc}"
+        logger.error(
+            "[in_process] %s: agent loop failed: %s", agent_id, exc, exc_info=True
+        )
+        # Propagate so the backend's done-callback records the task as
+        # ``failed`` instead of ``completed``.
+        raise
     finally:
         ctx.status = "stopped"
-        # Notify the leader that this teammate has gone idle / finished.
+        # Notify the leader that this teammate has gone idle / finished —
+        # or, when it could not run at all, that it FAILED.
         with contextlib.suppress(Exception):
+            summary = (
+                f"{config.name} FAILED: {failure}"
+                if failure is not None
+                else f"{config.name} finished (tools={ctx.tool_use_count}, tokens={ctx.total_tokens})"
+            )
             idle_msg = create_idle_notification(
                 sender=agent_id,
                 recipient="leader",
-                summary=f"{config.name} finished (tools={ctx.tool_use_count}, tokens={ctx.total_tokens})",
+                summary=summary,
             )
             leader_mailbox = TeammateMailbox(team_name=config.team, agent_id="leader")
             await leader_mailbox.write(idle_msg)
@@ -407,7 +432,12 @@ async def _drain_mailbox(
     """
     try:
         pending = await mailbox.read_all(unread_only=True)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - poll loop must survive I/O errors
+        logger.debug(
+            "[in_process] %s: mailbox read failed; treating as empty: %s",
+            ctx.agent_id,
+            exc,
+        )
         pending = []
 
     for msg in pending:
@@ -637,22 +667,62 @@ class InProcessBackend:
             if manager is None:
                 return
             try:
-                asyncio.create_task(
+                finalize = asyncio.create_task(
                     manager.mark_in_process_terminal(
                         task_id, status=status, return_code=return_code
                     )
                 )
             except (RuntimeError, ConnectionError):
                 # Event loop already closed (shutdown) — nothing to notify.
-                pass
+                return
+
+            # The finalizer is intentionally not awaited (done-callbacks are
+            # sync), so make sure a failure inside it is surfaced instead of
+            # vanishing as "Task exception was never retrieved".
+            def _log_failure(done: asyncio.Task[None]) -> None:
+                if done.cancelled():
+                    return
+                exc = done.exception()
+                if exc is not None:
+                    logger.error(
+                        "[InProcessBackend] could not finalize task %s: %s: %s",
+                        task_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+
+            finalize.add_done_callback(_log_failure)
 
         def _on_done(t: asyncio.Task[None]) -> None:
-            self._active.pop(agent_id, None)
+            exc: BaseException | None = None if t.cancelled() else t.exception()
+            # Only touch the registry while OUR entry is still the current
+            # one: a respawn can replace ``_active[agent_id]`` after the old
+            # task finishes but before this callback runs, and evicting the
+            # fresh registration would silently unregister a live teammate.
+            owns_registration = self._active.get(agent_id) is entry
+            if exc is not None:
+                # Let the error handler pop the registry entry (it computes
+                # the run duration from it); pop here as the fallback.
+                if owns_registration:
+                    self._on_teammate_error(agent_id, exc, entry=entry)
+                else:
+                    logger.error(
+                        "[InProcessBackend] Teammate %s raised after respawn: %s: %s",
+                        agent_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+            elif owns_registration:
+                self._active.pop(agent_id, None)
             if t.cancelled():
                 _finalize("killed", -1)
-            elif t.exception() is not None:
-                self._on_teammate_error(agent_id, t.exception())  # type: ignore[arg-type]
+            elif exc is not None:
                 _finalize("failed", 1)
+            elif abort_controller.is_cancelled:
+                # The run was stopped (shutdown / shutdown message) instead
+                # of finishing its prompt — a deliberately terminated
+                # teammate must not be recorded as a successful completion.
+                _finalize("killed", -1)
             else:
                 _finalize("completed", 0)
 
@@ -670,12 +740,9 @@ class InProcessBackend:
 
         The agent name and team are inferred from *agent_id* (``name@team``
         format).  This mirrors how pane-based backends work so the rest of
-        the swarm stack stays backend-agnostic.
-
-        If the teammate is running in-process and its :class:`TeammateContext`
-        is accessible, the message is also pushed directly into
-        ``ctx.message_queue`` for low-latency delivery without a filesystem
-        round-trip.
+        the swarm stack stays backend-agnostic.  The teammate's query loop
+        drains the mailbox between turns, which is the single delivery path
+        for in-process teammates.
         """
         if "@" not in agent_id:
             raise ValueError(
@@ -738,8 +805,22 @@ class InProcessBackend:
         if force:
             entry.abort_controller.request_cancel(reason="force shutdown", force=True)
             entry.task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await asyncio.wait_for(asyncio.shield(entry.task), timeout=timeout)
+            except asyncio.CancelledError:
+                if not entry.task.cancelled():
+                    # The shutdown call itself was cancelled — propagate.
+                    raise
+                # The teammate task was cancelled: it is gone.
+            except asyncio.TimeoutError:
+                # The task refused to stop: report the real failure.
+                raise
+            except Exception as exc:  # noqa: BLE001 - teammate failure is contained
+                logger.debug(
+                    "[InProcessBackend] %s raised during force shutdown: %s",
+                    agent_id,
+                    exc,
+                )
         else:
             # Graceful: request cancel and wait for self-exit
             entry.abort_controller.request_cancel(reason="graceful shutdown")
@@ -753,10 +834,29 @@ class InProcessBackend:
                 )
                 entry.abort_controller.request_cancel(reason="timeout — forcing", force=True)
                 entry.task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await entry.task
+                try:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await entry.task
+                except Exception as exc:  # noqa: BLE001 - teammate failure is contained
+                    logger.debug(
+                        "[InProcessBackend] %s raised while force-cancelling: %s",
+                        agent_id,
+                        exc,
+                    )
+            except asyncio.CancelledError:
+                if not entry.task.cancelled():
+                    raise
+            except Exception as exc:  # noqa: BLE001 - teammate failure is contained
+                # The teammate's own failure surfaced while waiting for it to
+                # exit. It IS terminated; shutdown's contract is termination,
+                # so contain the error instead of leaking it to the caller.
+                logger.debug(
+                    "[InProcessBackend] %s raised during graceful shutdown: %s",
+                    agent_id,
+                    exc,
+                )
 
-        await self._cleanup_teammate(agent_id)
+        await self._cleanup_teammate(agent_id, entry)
         logger.debug("[InProcessBackend] shut down %s", agent_id)
         return True
 
@@ -764,16 +864,23 @@ class InProcessBackend:
     # Enhanced lifecycle management
     # ------------------------------------------------------------------
 
-    async def _cleanup_teammate(self, agent_id: str) -> None:
+    async def _cleanup_teammate(
+        self, agent_id: str, entry: _TeammateEntry | None = None
+    ) -> None:
         """Perform full cleanup for *agent_id* after its task finishes.
 
-        - Removes the entry from :attr:`_active`.
+        - Removes the entry from :attr:`_active` (only while it is still the
+          current registration — a respawn during a long shutdown must not be
+          unregistered by its predecessor's cleanup).
         - Cancels the abort controller (in case it was not already).
         - Logs the cleanup.
 
-        This is called automatically from the task's done-callback and from
-        :meth:`shutdown`.
+        This is called from :meth:`shutdown` (the done-callback pops the
+        registry entry directly, since it is a sync context).
         """
+        current = self._active.get(agent_id)
+        if entry is not None and current is not entry:
+            return
         entry = self._active.pop(agent_id, None)
         if entry is None:
             return
@@ -786,16 +893,23 @@ class InProcessBackend:
             "[InProcessBackend] _cleanup_teammate: %s removed from registry", agent_id
         )
 
-    def _on_teammate_error(self, agent_id: str, error: Exception) -> None:
+    def _on_teammate_error(
+        self, agent_id: str, error: BaseException, *, entry: _TeammateEntry | None = None
+    ) -> None:
         """Handle an unhandled exception from a teammate Task.
 
         Logs a structured error report and removes the entry from the registry.
+        When *entry* is given, only that exact registration is removed — a
+        respawn may have already replaced ``_active[agent_id]`` and the new
+        teammate must not be unregistered by its predecessor's error path.
         In future this can emit a TaskNotification to the leader mailbox.
         """
         duration = 0.0
-        entry = self._active.get(agent_id)
-        if entry is not None:
-            duration = time.time() - entry.started_at
+        current = self._active.get(agent_id)
+        if entry is not None and current is not entry:
+            current = None
+        if current is not None:
+            duration = time.time() - current.started_at
             self._active.pop(agent_id, None)
 
         logger.error(

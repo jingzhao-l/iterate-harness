@@ -1,0 +1,260 @@
+{
+  "comment": "Cross-implementation anchor for kernel/src/decision-log-transcribe.ts: how a decision record that the iterate ledgers ALREADY write maps onto the canonical ledger draft (5.8 R40 scenario 3, the 'three formats, one shape' convergence). A second implementation (the Python port in iterate-harness) is coded from this file, not from the TypeScript. Rules: (1) the record is an object with exactly the keys timestamp/round/type/data; an unknown key is REFUSED, never dropped. (2) type -> kind verbatim and must match ^[a-z][a-z0-9_]{0,31}$; no case folding, no renaming. (3) round is copied and must be an integer >= 0; data -> payload in full, and the canonical-JSON length of payload must stay <= 8192 characters. (4) createdAt is timestamp normalized to ISO-8601 UTC milliseconds ('Z', 3 digits). The INPUT must match ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|\\+\\-[0-9]{2}:[0-9]{2})$ -- an explicit zone is required, any offset converts to UTC, and fractional seconds TRUNCATE toward zero (drop the tail, never round up). Anything else is refused, including host-guessable spellings like 11/10/2026 02:28: one runtime reads those as US month/day and another refuses them, and a ledger whose dates depend on which runtime converted it is not evidence. (5) outcome is READ, never inferred from tone: data.outcome then data.status when one of pass|fail|blocked|inconclusive; else data.passed===true -> pass, data.passed===false -> fail; else inconclusive. (6) summary is the record's own sentence, first present and non-blank of data.summary, data.message, data.reason; when it carries none the label is `<kind> (round <round>)` (or just `<kind>` when round is absent) -- a label, not a claim; a sentence over SUMMARY_MAX_LENGTH=2048 is refused rather than truncated. (7) dimension is data.dimension when it matches ^[a-z0-9]+(?:-[a-z0-9]+)*$ and is <= 64 chars, otherwise ABSENT -- never substituted by kind or method name. (8) operationId is data.operationId when it matches ^op_[0-9A-HJKMNP-TV-Z]{26}$, otherwise absent. (9) entryId is supplied by the caller (ledger-owned randomness), which is why this fixture pins a literal id per case: a transcription that minted ids could not be compared across implementations. (10) SIZE-CASE EXPANSION, so no 9 KB literals clutter this file: when a case carries `blobRepeat: N`, set record.data[ case.blobKey ?? 'blob' ] to N repetitions of 'x' BEFORE transcribing; when it carries `summaryRepeat: N`, set record.data.summary to N repetitions of 's'. Expectations otherwise compare field by field; an absent field in `expect` must be absent from the result, not null.",
+  "cases": [
+    {
+      "id": "review-result-full",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.042345+00:00",
+        "round": 3,
+        "type": "review_result",
+        "data": {
+          "summary": "round 3 review: 2 findings, 1 blocking, across 2 dimensions",
+          "outcome": "fail",
+          "dimension": "ui-consistency",
+          "operationId": "op_0123456789ABCDEFGHJKMNPQRT",
+          "findings": [
+            {
+              "dimension": "ui-consistency",
+              "file": "src/client/index.ts",
+              "severity": "medium",
+              "summary": "hard-coded colour outside the token set"
+            },
+            {
+              "dimension": "accessibility",
+              "file": "src/client/index.ts",
+              "severity": "blocking",
+              "summary": "focus ring removed"
+            }
+          ]
+        }
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expect": {
+        "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+        "summary": "round 3 review: 2 findings, 1 blocking, across 2 dimensions",
+        "outcome": "fail",
+        "createdAt": "2026-10-11T02:28:11.042Z",
+        "kind": "review_result",
+        "round": 3,
+        "dimension": "ui-consistency",
+        "operationId": "op_0123456789ABCDEFGHJKMNPQRT",
+        "payload": {
+          "summary": "round 3 review: 2 findings, 1 blocking, across 2 dimensions",
+          "outcome": "fail",
+          "dimension": "ui-consistency",
+          "operationId": "op_0123456789ABCDEFGHJKMNPQRT",
+          "findings": [
+            {
+              "dimension": "ui-consistency",
+              "file": "src/client/index.ts",
+              "severity": "medium",
+              "summary": "hard-coded colour outside the token set"
+            },
+            {
+              "dimension": "accessibility",
+              "file": "src/client/index.ts",
+              "severity": "blocking",
+              "summary": "focus ring removed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cst-timestamp-normalizes-to-utc-millis",
+      "record": {
+        "timestamp": "2026-10-11T10:28:11.042+08:00",
+        "round": 7,
+        "type": "validation",
+        "data": {
+          "passed": true,
+          "command": "pytest -q"
+        }
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expect": {
+        "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+        "summary": "validation (round 7)",
+        "outcome": "pass",
+        "createdAt": "2026-10-11T02:28:11.042Z",
+        "kind": "validation",
+        "round": 7,
+        "payload": {
+          "passed": true,
+          "command": "pytest -q"
+        }
+      }
+    },
+    {
+      "id": "passed-false-is-fail-not-inconclusive",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.999Z",
+        "round": 1,
+        "type": "atomic_fix",
+        "data": {
+          "passed": false,
+          "message": "guard post-check still red",
+          "status": "error"
+        }
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expect": {
+        "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+        "summary": "guard post-check still red",
+        "outcome": "fail",
+        "createdAt": "2026-10-11T02:28:11.999Z",
+        "kind": "atomic_fix",
+        "round": 1,
+        "payload": {
+          "passed": false,
+          "message": "guard post-check still red",
+          "status": "error"
+        }
+      }
+    },
+    {
+      "id": "silent-record-stays-inconclusive",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.000Z",
+        "type": "decision",
+        "data": {
+          "note": "deferred architectural fix to round 4"
+        }
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expect": {
+        "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+        "summary": "decision",
+        "outcome": "inconclusive",
+        "createdAt": "2026-10-11T02:28:11.000Z",
+        "kind": "decision",
+        "payload": {
+          "note": "deferred architectural fix to round 4"
+        }
+      }
+    },
+    {
+      "id": "dimension-that-is-not-a-kernel-id-is-absent-not-guessed",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.000Z",
+        "round": 2,
+        "type": "report",
+        "data": {
+          "summary": "report for round 2",
+          "outcome": "pass",
+          "dimension": "UI Consistency"
+        }
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expect": {
+        "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+        "summary": "report for round 2",
+        "outcome": "pass",
+        "createdAt": "2026-10-11T02:28:11.000Z",
+        "kind": "report",
+        "round": 2,
+        "payload": {
+          "summary": "report for round 2",
+          "outcome": "pass",
+          "dimension": "UI Consistency"
+        }
+      }
+    },
+    {
+      "id": "unknown-key-refuses",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.000Z",
+        "round": 1,
+        "type": "decision",
+        "author": "agent",
+        "data": {}
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expectError": "KERNEL_E_DECISION_RECORD"
+    },
+    {
+      "id": "kind-needing-rewrite-refuses",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.000Z",
+        "round": 1,
+        "type": "Review Result",
+        "data": {}
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expectError": "KERNEL_E_DECISION_KIND"
+    },
+    {
+      "id": "negative-round-refuses",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.000Z",
+        "round": -1,
+        "type": "decision",
+        "data": {}
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expectError": "KERNEL_E_DECISION_ROUND"
+    },
+    {
+      "id": "unparseable-timestamp-refuses",
+      "record": {
+        "timestamp": "11/10/2026 02:28",
+        "round": 1,
+        "type": "decision",
+        "data": {}
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expectError": "KERNEL_E_DECISION_TIMESTAMP"
+    },
+    {
+      "id": "payload-over-the-bound-refuses",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.000Z",
+        "round": 1,
+        "type": "report",
+        "data": {
+          "blob": "x"
+        }
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "blobRepeat": 9000,
+      "blobKey": "blob",
+      "expectError": "KERNEL_E_DECISION_PAYLOAD"
+    },
+    {
+      "id": "sentence-over-summary-max-refuses",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.000Z",
+        "round": 1,
+        "type": "report",
+        "data": {
+          "summary": "s"
+        }
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "summaryRepeat": 2049,
+      "expectError": "KERNEL_E_DECISION_SUMMARY"
+    },
+    {
+      "id": "naive-local-timestamp-refuses",
+      "record": {
+        "timestamp": "11/10/2026 02:28",
+        "round": 1,
+        "type": "decision",
+        "data": {}
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expectError": "KERNEL_E_DECISION_TIMESTAMP"
+    },
+    {
+      "id": "zone-less-timestamp-refuses",
+      "record": {
+        "timestamp": "2026-10-11T02:28:11.042",
+        "round": 1,
+        "type": "decision",
+        "data": {}
+      },
+      "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+      "expectError": "KERNEL_E_DECISION_TIMESTAMP"
+    }
+  ]
+}

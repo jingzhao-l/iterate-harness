@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import random
+import re
 import string
 import time
 import uuid
@@ -296,6 +297,53 @@ def generate_sandbox_request_id() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Request ID validation
+# ---------------------------------------------------------------------------
+
+#: Strict charset for request IDs used as path components: must start with an
+#: alphanumeric character (rejects ``.`` / ``..``) and may continue with
+#: letters, digits, dots, underscores and dashes. No separators, no NUL.
+#: Matched with ``fullmatch`` so a trailing newline cannot slip past ``$``.
+_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def validate_request_id(request_id: str) -> str:
+    """Validate a permission request ID for use in on-disk paths.
+
+    Request IDs become ``permissions/pending/<id>.json`` and
+    ``permissions/resolved/<id>.json``.  They originate from worker agents
+    and from JSON read off disk, so an ID containing ``../`` (or a path
+    separator) would let a caller read, move, or delete files outside the
+    team's permissions directory — ``delete_resolved_permission`` unlinks
+    the resolved path directly, making this an arbitrary-file-delete
+    primitive without validation.
+
+    Rules:
+    - Must be a ``str``, non-empty, at most 128 characters
+    - Must match ``[A-Za-z0-9][A-Za-z0-9._-]*`` (first char alphanumeric,
+      which also rejects ``.`` and ``..``)
+
+    Returns:
+        The validated ID, unchanged.
+
+    Raises:
+        ValueError: if *request_id* cannot be safely used in a path.
+    """
+    if not isinstance(request_id, str) or not request_id:
+        raise ValueError("permission request id must not be empty")
+    if len(request_id) > 128:
+        raise ValueError(
+            f"permission request id must be 128 characters or fewer "
+            f"(got {len(request_id)})"
+        )
+    if not _REQUEST_ID_PATTERN.fullmatch(request_id):
+        raise ValueError(
+            f"permission request id is not path-safe: {request_id!r}"
+        )
+    return request_id
+
+
+# ---------------------------------------------------------------------------
 # Permission directory helpers
 # ---------------------------------------------------------------------------
 
@@ -323,10 +371,14 @@ def _ensure_permission_dirs(team_name: str) -> None:
 
 
 def _pending_request_path(team_name: str, request_id: str) -> Path:
+    # Choke point: every read/move/delete of a per-request file flows through
+    # here, so validating the ID here rejects ``../`` traversal everywhere.
+    validate_request_id(request_id)
     return _get_pending_dir(team_name) / f"{request_id}.json"
 
 
 def _resolved_request_path(team_name: str, request_id: str) -> Path:
+    validate_request_id(request_id)
     return _get_resolved_dir(team_name) / f"{request_id}.json"
 
 
@@ -455,7 +507,9 @@ async def read_pending_permissions(
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             requests.append(SwarmPermissionRequest.from_dict(data))
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, OSError, UnicodeDecodeError):
+            # Skip unreadable/corrupt request files rather than crashing the
+            # leader's whole listing on one bad file.
             continue
 
     requests.sort(key=lambda r: r.created_at)
@@ -489,7 +543,7 @@ async def read_resolved_permission(
     try:
         data = json.loads(resolved_path.read_text(encoding="utf-8"))
         return SwarmPermissionRequest.from_dict(data)
-    except (json.JSONDecodeError, KeyError, OSError):
+    except (json.JSONDecodeError, KeyError, OSError, UnicodeDecodeError):
         return None
 
 
@@ -511,7 +565,7 @@ def _sync_resolve_permission(
         try:
             data = json.loads(pending_path.read_text(encoding="utf-8"))
             request = SwarmPermissionRequest.from_dict(data)
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, OSError, UnicodeDecodeError):
             return False
 
         resolved_request = SwarmPermissionRequest(
@@ -584,10 +638,15 @@ def _sync_cleanup_old_resolutions(team: str, max_age_seconds: float) -> int:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             resolved_at = data.get("resolved_at") or data.get("created_at", 0)
+            if not isinstance(resolved_at, (int, float)) or isinstance(resolved_at, bool):
+                # A non-numeric timestamp makes the age arithmetic raise
+                # TypeError; treat the file as corrupt (same as unparseable
+                # JSON) instead of crashing the cleanup pass.
+                raise ValueError(f"non-numeric resolved_at: {resolved_at!r}")
             if now - resolved_at >= max_age_seconds:
                 path.unlink()
                 cleaned += 1
-        except (json.JSONDecodeError, KeyError, OSError):
+        except (KeyError, OSError, TypeError, ValueError):
             try:
                 path.unlink()
                 cleaned += 1

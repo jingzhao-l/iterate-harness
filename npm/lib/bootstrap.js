@@ -59,6 +59,20 @@ const DOWNLOAD_TOTAL_TIMEOUT_MS = 60000;
 const BOOTSTRAP_TIMEOUT_MS = 900000;
 const CURL_MAX_TIME_SECONDS = 240;
 
+// A `python --version` probe or a `python -m venv` step must never hang the
+// wrapper forever (broken py-launcher on Windows, wedged NFS home, ...).
+const PYTHON_PROBE_TIMEOUT_MS = 30000;
+const STEP_TIMEOUT_MS = 600000;
+
+// Advisory lock serializing concurrent bootstraps (parallel `ih` runs, npm
+// postinstall racing the first invocation): two installers writing the same
+// venv corrupt it. A live bootstrap is capped at BOOTSTRAP_TIMEOUT_MS, so a
+// lock untouched for longer belongs to a crashed/killed installer.
+const LOCK_FILE_NAME = "bootstrap.lock";
+const LOCK_STALE_MS = BOOTSTRAP_TIMEOUT_MS + 5 * 60 * 1000;
+const LOCK_POLL_INTERVAL_MS = 400;
+const LOCK_ACQUIRE_TIMEOUT_MS = BOOTSTRAP_TIMEOUT_MS;
+
 // Integrity: every release publishes a `<artifact>.sha256` sidecar next to the
 // artifact. Any bytes this wrapper downloads itself are hashed and compared
 // against that sidecar before pip is allowed to install them.
@@ -171,6 +185,23 @@ function assertHttpsInstallSource(url, allowHttp) {
   }
 }
 
+// Resolve a `Location` header against the URL it came from and enforce the
+// plain-HTTP gate on the result. Two failure modes are guarded here:
+//   - a malformed Location (e.g. `http://[::`) used to throw an uncaught
+//     TypeError inside the response callback and crash the whole wrapper;
+//   - an https→http redirect silently bypassed the --allow-http gate that the
+//     original install URL was checked against.
+function resolveRedirectUrl(location, fromUrl, allowHttp) {
+  let next;
+  try {
+    next = new URL(String(location), String(fromUrl)).toString();
+  } catch (error) {
+    throw new BootstrapError(`invalid redirect from ${fromUrl}: ${error.message}`);
+  }
+  assertHttpsInstallSource(next, allowHttp);
+  return next;
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested in test/bootstrap.test.js)
 // ---------------------------------------------------------------------------
@@ -272,7 +303,7 @@ function sha256File(filePath) {
 }
 
 // Small text fetch with the same redirect/timeout discipline as downloadFile.
-function fetchChecksumText(url, redirectBudget, totalTimeoutMs, signal) {
+function fetchChecksumText(url, redirectBudget, totalTimeoutMs, signal, allowHttp) {
   const budget = redirectBudget === undefined ? MAX_DOWNLOAD_REDIRECTS : redirectBudget;
   const totalTimeout = totalTimeoutMs === undefined ? DOWNLOAD_TOTAL_TIMEOUT_MS : totalTimeoutMs;
   return new Promise((resolve, reject) => {
@@ -321,19 +352,23 @@ function fetchChecksumText(url, redirectBudget, totalTimeoutMs, signal) {
       fail(new BootstrapError(`invalid checksum URL ${url}: ${error.message}`));
       return;
     }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      fail(new BootstrapError(`unsupported checksum protocol ${parsed.protocol} in ${url}`));
+      return;
+    }
     const client = parsed.protocol === "http:" ? http : https;
     request = client.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (response) => {
       const status = response.statusCode || 0;
       if (status >= 300 && status < 400 && response.headers.location) {
         response.resume();
-        finish(
-          fetchChecksumText(
-            new URL(response.headers.location, url).toString(),
-            budget - 1,
-            totalTimeout,
-            signal
-          )
-        );
+        let nextUrl;
+        try {
+          nextUrl = resolveRedirectUrl(response.headers.location, url, allowHttp);
+        } catch (redirectError) {
+          fail(redirectError);
+          return;
+        }
+        finish(fetchChecksumText(nextUrl, budget - 1, totalTimeout, signal, allowHttp));
         return;
       }
       if (status < 200 || status >= 300) {
@@ -467,15 +502,24 @@ function runtimeHomeDir(env) {
   return path.join(os.homedir(), RUNTIME_DIR_NAME);
 }
 
-function detectPython(env) {
+function detectPython(env, options) {
+  const probeTimeoutMs =
+    options && options.probeTimeoutMs !== undefined
+      ? options.probeTimeoutMs
+      : PYTHON_PROBE_TIMEOUT_MS;
   const errors = [];
   for (const candidate of pythonCandidates(process.platform, env || process.env)) {
     const probe = spawnSync(candidate.command, [...candidate.preArgs, "--version"], {
       encoding: "utf8",
       windowsHide: true,
+      timeout: probeTimeoutMs,
     });
     if (probe.error) {
-      errors.push(`${candidate.command}: not found`);
+      errors.push(
+        probe.error.code === "ETIMEDOUT"
+          ? `${candidate.command}: probing --version timed out after ${Math.round(probeTimeoutMs / 1000)}s`
+          : `${candidate.command}: not found`
+      );
       continue;
     }
     const stdout = `${probe.stdout || ""}${probe.stderr || ""}`;
@@ -509,18 +553,33 @@ function detectPython(env) {
 const CERT_VERIFY_FAILURE_MARKER = "CERTIFICATE_VERIFY_FAILED";
 
 function runStep(command, args, options) {
+  const timeoutMs =
+    options && options.timeout !== undefined ? options.timeout : STEP_TIMEOUT_MS;
   const result = spawnSync(command, args, {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     maxBuffer: 16 * 1024 * 1024,
+    timeout: timeoutMs,
     ...options,
   });
   const capturedOutput = `${result.stdout || ""}${result.stderr || ""}`;
   if (capturedOutput) {
     process.stderr.write(capturedOutput);
   }
+  if (result.error && result.error.code === "ETIMEDOUT") {
+    throw new BootstrapError(
+      `${command} ${args.join(" ")} timed out after ${Math.round(timeoutMs / 1000)}s`
+    );
+  }
   if (result.error) {
     throw new BootstrapError(`failed to run ${command}: ${result.error.message}`);
+  }
+  if (result.status === null) {
+    // Killed by a signal (not a numeric exit): "exited with code null" would
+    // send users hunting for a nonexistent exit code.
+    throw new BootstrapError(
+      `${command} ${args.join(" ")} was terminated by signal ${result.signal || "unknown"}`
+    );
   }
   if (result.status !== 0) {
     if (capturedOutput.includes(CERT_VERIFY_FAILURE_MARKER)) {
@@ -552,8 +611,10 @@ function runPipStepAsync(python, args, signal) {
       }
       process.stderr.write(text);
     };
-    child.stdout.on("data", forwardOutput);
-    child.stderr.on("data", forwardOutput);
+    // On some spawn failures the stdio streams are null; the 'error' handler
+    // below still reports the failure, but attaching must not throw first.
+    if (child.stdout) child.stdout.on("data", forwardOutput);
+    if (child.stderr) child.stderr.on("data", forwardOutput);
     const fail = (error) => {
       if (signal && onAbort) signal.removeEventListener("abort", onAbort);
       if (!child.killed) child.kill();
@@ -606,11 +667,12 @@ function installCandidates(version, env) {
 // Artifact download fallback (Node-side TLS — survives broken pip trust stores)
 // ---------------------------------------------------------------------------
 
-function downloadFile(url, dest, redirectBudget, totalTimeoutMs, signal) {
+function downloadFile(url, dest, redirectBudget, totalTimeoutMs, signal, allowHttp) {
   const budget = redirectBudget === undefined ? MAX_DOWNLOAD_REDIRECTS : redirectBudget;
   const totalTimeout = totalTimeoutMs === undefined ? DOWNLOAD_TOTAL_TIMEOUT_MS : totalTimeoutMs;
   return new Promise((resolve, reject) => {
     let request = null;
+    let file = null;
     let timer = null;
     let onAbort = null;
     let settled = false;
@@ -626,7 +688,12 @@ function downloadFile(url, dest, redirectBudget, totalTimeoutMs, signal) {
       settled = true;
       if (timer) clearTimeout(timer);
       if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      // Tear down the in-flight file stream (a timed-out/aborted download
+      // would otherwise leak the fd) and never leave a truncated artifact
+      // behind that a later run could mistake for a complete one.
+      if (file) file.destroy();
       if (request) request.destroy(error);
+      try { fs.rmSync(dest, { force: true }); } catch { /* best-effort */ }
       reject(error);
     };
     timer = setTimeout(() => {
@@ -655,13 +722,23 @@ function downloadFile(url, dest, redirectBudget, totalTimeoutMs, signal) {
       fail(new BootstrapError(`invalid download URL ${url}: ${error.message}`));
       return;
     }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      fail(new BootstrapError(`unsupported download protocol ${parsed.protocol} in ${url}`));
+      return;
+    }
     const client = parsed.protocol === "http:" ? http : https;
     request = client.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (response) => {
       const status = response.statusCode || 0;
       if (status >= 300 && status < 400 && response.headers.location) {
         response.resume();
-        const nextUrl = new URL(response.headers.location, url).toString();
-        finish(downloadFile(nextUrl, dest, budget - 1, totalTimeout, signal));
+        let nextUrl;
+        try {
+          nextUrl = resolveRedirectUrl(response.headers.location, url, allowHttp);
+        } catch (redirectError) {
+          fail(redirectError);
+          return;
+        }
+        finish(downloadFile(nextUrl, dest, budget - 1, totalTimeout, signal, allowHttp));
         return;
       }
       if (status < 200 || status >= 300) {
@@ -669,8 +746,13 @@ function downloadFile(url, dest, redirectBudget, totalTimeoutMs, signal) {
         fail(new BootstrapError(`downloading ${url} failed with HTTP ${status}`));
         return;
       }
-      const file = fs.createWriteStream(dest);
+      file = fs.createWriteStream(dest);
       response.pipe(file);
+      // A socket reset mid-body emits on the response, not the file: without
+      // this handler the download would stall until the total timeout fired.
+      response.on("error", (responseError) => {
+        fail(responseError);
+      });
       file.on("finish", () => {
         file.close((closeError) => {
           if (closeError) {
@@ -681,7 +763,6 @@ function downloadFile(url, dest, redirectBudget, totalTimeoutMs, signal) {
         });
       });
       file.on("error", (fileError) => {
-        file.destroy();
         fail(fileError);
       });
     });
@@ -692,12 +773,17 @@ function downloadFile(url, dest, redirectBudget, totalTimeoutMs, signal) {
   });
 }
 
-function curlDownload(url, dest, spawnFn) {
+// `--proto-redir` pins the protocols curl may follow a redirect to: by
+// default only https, so a 302 to plain http cannot bypass the --allow-http
+// gate the original URL was checked against (curl -L would happily fetch it).
+function curlDownload(url, dest, spawnFn, allowHttp) {
   const runner = spawnFn || spawnSync;
   const result = runner("curl", [
     "-fsSL",
     "--max-time",
     String(CURL_MAX_TIME_SECONDS),
+    "--proto-redir",
+    allowHttp ? "=https,http" : "=https",
     "-o",
     dest,
     url,
@@ -720,10 +806,18 @@ function curlDownload(url, dest, spawnFn) {
 
 async function downloadTarballTo(url, dest, deps) {
   const signal = deps && deps.signal;
+  const allowHttp = Boolean(deps && deps.allowHttp);
   const nodeDownload =
     (deps && deps.nodeDownload) ||
     ((downloadUrl, downloadDest) =>
-      downloadFile(downloadUrl, downloadDest, undefined, DOWNLOAD_TOTAL_TIMEOUT_MS, signal));
+      downloadFile(
+        downloadUrl,
+        downloadDest,
+        undefined,
+        DOWNLOAD_TOTAL_TIMEOUT_MS,
+        signal,
+        allowHttp
+      ));
   const curlDownloadFn = deps && deps.curlDownload ? deps.curlDownload : curlDownload;
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const untrack = trackDownload(dest);
@@ -736,7 +830,7 @@ async function downloadTarballTo(url, dest, deps) {
     {
       name: "curl",
       run: async () => {
-        const outcome = curlDownloadFn(url, dest);
+        const outcome = curlDownloadFn(url, dest, undefined, allowHttp);
         if (!outcome.ok) {
           throw outcome.error;
         }
@@ -785,10 +879,10 @@ async function installHarness(options) {
   const runPipStep = options.runStepFn || runPipStepAsync;
   const downloader = options.downloader
     ? options.downloader
-    : (url, dest) => downloadTarballTo(url, dest, { signal });
+    : (url, dest) => downloadTarballTo(url, dest, { signal, allowHttp });
   const checksumFetcher = options.checksumFetcher
     ? options.checksumFetcher
-    : (url) => fetchChecksumText(url, undefined, DOWNLOAD_TOTAL_TIMEOUT_MS, signal);
+    : (url) => fetchChecksumText(url, undefined, DOWNLOAD_TOTAL_TIMEOUT_MS, signal, allowHttp);
 
   if (!candidates || candidates.length === 0) {
     throw new BootstrapError("no install candidate URLs were provided");
@@ -854,20 +948,96 @@ async function installRemoteArtifact(
   signal
 ) {
   assertHttpsInstallSource(url, allowHttp);
+  let primaryError;
   try {
     await runStepFn(python, pipInstallArgs(url), signal);
     return;
-  } catch (primaryError) {
+  } catch (error) {
+    primaryError = error;
     process.stderr.write(
       `[iterate-harness] pip install from ${url} failed; retrying via direct download ...\n`
     );
   }
   const cachePath = downloadCachePath(homeDir, version, artifactExtensionFor(url));
-  await downloader(url, cachePath);
-  // These are bytes we fetched ourselves, so we own their integrity: check the
-  // published SHA256 sidecar before handing the file to pip.
-  await verifyDownloadedArtifact(url, cachePath, checksumFetcher, noVerify);
+  try {
+    await downloader(url, cachePath);
+    // These are bytes we fetched ourselves, so we own their integrity: check
+    // the published SHA256 sidecar before handing the file to pip.
+    await verifyDownloadedArtifact(url, cachePath, checksumFetcher, noVerify);
+  } catch (downloadError) {
+    // Keep the primary pip failure in the message: "all install candidates
+    // failed" is useless if it only reports the fallback's error.
+    throw new BootstrapError(
+      `pip install from ${url} failed (${primaryError.message}); ` +
+        `the direct-download fallback failed too: ${downloadError.message}`
+    );
+  }
   await runStepFn(python, pipInstallArgs(cachePath), signal);
+}
+
+// Serialize concurrent bootstraps with an atomically-created lock file
+// (`open(..., "wx")` is O_EXCL — no check-then-create race). A lock whose mtime
+// is older than LOCK_STALE_MS belongs to a crashed installer and is reaped;
+// a live waiter polls until the holder releases or LOCK_ACQUIRE_TIMEOUT_MS
+// elapses. The release callback only deletes a lock still bearing OUR token,
+// so it can never free a lock that was stale-reaped and re-taken meanwhile.
+async function acquireBootstrapLock(homeDir, options) {
+  const opts = options || {};
+  const pollIntervalMs =
+    opts.pollIntervalMs !== undefined ? opts.pollIntervalMs : LOCK_POLL_INTERVAL_MS;
+  const acquireTimeoutMs =
+    opts.acquireTimeoutMs !== undefined ? opts.acquireTimeoutMs : LOCK_ACQUIRE_TIMEOUT_MS;
+  const staleMs = opts.staleMs !== undefined ? opts.staleMs : LOCK_STALE_MS;
+  fs.mkdirSync(homeDir, { recursive: true });
+  const lockPath = path.join(homeDir, LOCK_FILE_NAME);
+  const token = `${process.pid}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}`;
+  const deadline = Date.now() + acquireTimeoutMs;
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      try {
+        fs.writeSync(fd, token);
+      } finally {
+        fs.closeSync(fd);
+      }
+      return () => {
+        try {
+          if (fs.readFileSync(lockPath, "utf8") === token) {
+            fs.rmSync(lockPath, { force: true });
+          }
+        } catch {
+          /* best-effort: a leftover stale lock is reaped by the next waiter */
+        }
+      };
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        throw new BootstrapError(`cannot create bootstrap lock ${lockPath}: ${error.message}`);
+      }
+    }
+    try {
+      const stat = fs.statSync(lockPath);
+      if (Date.now() - stat.mtimeMs > staleMs) {
+        process.stderr.write(
+          `[iterate-harness] removing stale bootstrap lock ${lockPath}\n`
+        );
+        fs.rmSync(lockPath, { force: true });
+        continue;
+      }
+    } catch (statError) {
+      if (statError.code === "ENOENT") {
+        // Holder released between our open and the stat — retry immediately.
+        continue;
+      }
+      throw new BootstrapError(`cannot stat bootstrap lock ${lockPath}: ${statError.message}`);
+    }
+    if (Date.now() > deadline) {
+      throw new BootstrapError(
+        `timed out waiting for the bootstrap lock ${lockPath}; ` +
+          "if no other `ih`/npm install is running, remove that file and retry"
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
 }
 
 async function bootstrap(homeDir, version, env, options) {
@@ -946,9 +1116,17 @@ async function ensureRuntime(env, options) {
     ? fs.readFileSync(stampPath, "utf8")
     : "";
 
-  if (!skipInstall && needsBootstrap(stampContent, version)) {
+  // Bootstrap is needed when the stamp does not match THIS wrapper's version
+  // OR when the venv's ih entry point is gone even though the stamp survived
+  // (user deleted/corrupted the venv) — self-heal instead of demanding
+  // `rm -rf` on every run.
+  const stampOutdated = needsBootstrap(stampContent, version);
+  const ihMissing = !fs.existsSync(executable.ih);
+
+  if (!skipInstall && (stampOutdated || ihMissing)) {
     if (opts.interactive) {
-      // Interactive install wizard: ask the user before downloading.
+      // Interactive install wizard: ask the user before downloading. Asked
+      // before taking the bootstrap lock so a waiting user never holds it.
       const confirmed = await ui.askYesNo(
         `Install iterate-harness v${version} into ${homeDir}?`,
         true
@@ -958,18 +1136,36 @@ async function ensureRuntime(env, options) {
           "Skipped installing iterate-harness. Re-run `ih` whenever you are ready."
         );
       }
-      ui.frameSection("Installing", [
-        `\x1b[36m◆\x1b[0m Version: v${version}`,
-        `\x1b[36m◆\x1b[0m Runtime:  ${homeDir}`,
-      ]);
     }
-    await bootstrap(homeDir, version, environment, opts);
-    if (opts.interactive) {
-      ui.frameSection("Done", [
-        `\x1b[32m✓\x1b[0m iterate-harness v${version} installed`,
-        `  Run \x1b[36mih --help\x1b[0m to see all commands.`,
-        `  Try \x1b[36mih status\x1b[0m or \x1b[36mih iterate --help\x1b[0m to get started.`,
-      ]);
+    // Concurrent `ih` runs (or postinstall racing the first run) must not
+    // bootstrap into the same venv at once — serialize on the lock file and
+    // re-check the stamp afterwards (another process may have finished while
+    // we waited).
+    const releaseLock = await acquireBootstrapLock(homeDir);
+    try {
+      const currentStamp = fs.existsSync(stampPath)
+        ? fs.readFileSync(stampPath, "utf8")
+        : "";
+      if (!needsBootstrap(currentStamp, version) && fs.existsSync(executable.ih)) {
+        ui.info(`iterate-harness ${version} was installed by another process; reusing it.`);
+      } else {
+        if (opts.interactive) {
+          ui.frameSection("Installing", [
+            `\x1b[36m◆\x1b[0m Version: v${version}`,
+            `\x1b[36m◆\x1b[0m Runtime:  ${homeDir}`,
+          ]);
+        }
+        await bootstrap(homeDir, version, environment, opts);
+        if (opts.interactive) {
+          ui.frameSection("Done", [
+            `\x1b[32m✓\x1b[0m iterate-harness v${version} installed`,
+            `  Run \x1b[36mih --help\x1b[0m to see all commands.`,
+            `  Try \x1b[36mih status\x1b[0m or \x1b[36mih iterate --help\x1b[0m to get started.`,
+          ]);
+        }
+      }
+    } finally {
+      releaseLock();
     }
   }
 
@@ -1082,6 +1278,7 @@ module.exports = {
   BootstrapError,
   CancelledError,
   DEFAULT_ARTIFACT_EXT,
+  LOCK_FILE_NAME,
   MAX_DOWNLOAD_REDIRECTS,
   MIN_PYTHON_MAJOR,
   MIN_PYTHON_MINOR,
@@ -1089,8 +1286,11 @@ module.exports = {
   HOME_ENV_VAR,
   INSTALL_URL_ENV_VAR,
   SKIP_INSTALL_ENV_VAR,
+  STEP_TIMEOUT_MS,
+  PYTHON_PROBE_TIMEOUT_MS,
   WHEEL_ASSET_SUFFIX,
   CHECKSUM_ASSET_SUFFIX,
+  acquireBootstrapLock,
   artifactExtensionFor,
   checksumAssetUrl,
   detectPython,
@@ -1100,6 +1300,8 @@ module.exports = {
   downloadTarballTo,
   fetchChecksumText,
   parseChecksum,
+  resolveRedirectUrl,
+  runStep,
   sha256File,
   verifyDownloadedArtifact,
   ensureRuntime,

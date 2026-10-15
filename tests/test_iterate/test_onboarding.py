@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from iterate_harness.iterate import onboard_cmd, onboarding, prompts
+from iterate_harness.iterate.dimension_context import DIMENSION_E_EMPTY, DimensionContextError
 
 VALID_MD = f"""# ITERATE.md — test
 
@@ -310,6 +311,24 @@ class TestDetectionRenderAndOnboard:
         monkeypatch.setattr(app_mod, "run_print_mode", _FakeRun())
         code = onboard_cmd.run_onboard(yes=True)
         assert code == 1
+        assert not (tmp_path / "iterate.config.yaml").exists()
+
+    def test_run_onboard_raises_when_no_dimension_is_chosen(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """The dimension guard used to be an ``assert``, which ``python -O``
+        strips — the None then reached build_config_dict and crashed there
+        with an unrelated TypeError."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "pyproject.toml").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(
+            onboard_cmd, "_confirm_questions", lambda **_kwargs: (None, "goal", 3)
+        )
+
+        with pytest.raises(DimensionContextError) as excinfo:
+            onboard_cmd.run_onboard(yes=True, no_ai=True)
+
+        assert excinfo.value.code == DIMENSION_E_EMPTY
         assert not (tmp_path / "iterate.config.yaml").exists()
 
 

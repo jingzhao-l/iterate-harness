@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
@@ -90,3 +91,23 @@ def _sanitize_tool_segment(value: str, max_length: int) -> str:
     if len(sanitized) > max_length:
         sanitized = sanitized[:max_length].rstrip("_-")
     return sanitized or "tool"
+
+
+def uniquify_tool_name(name: str, is_taken: Callable[[str], bool]) -> str:
+    """Return a deterministic variant of *name* that is not taken.
+
+    Two MCP servers (``my server`` and ``my-server``) can sanitize to the same
+    tool name, and a long name can truncate onto another tool's identifier.
+    Collisions are disambiguated by appending ``__2``, ``__3``, ... in
+    ascending order (trimming the base to keep the result within the 64-char
+    API limit), so the same set of colliding tools always maps to the same
+    surviving names regardless of registration timing.
+    """
+    counter = 2
+    while True:
+        suffix = f"__{counter}"
+        base = name[: _TOOL_NAME_LIMIT - len(suffix)].rstrip("_-") or name
+        candidate = f"{base}{suffix}"
+        if not is_taken(candidate):
+            return candidate
+        counter += 1

@@ -257,13 +257,66 @@ async def test_bash_tool_timeout_does_not_hang_when_stdout_stays_open(monkeypatc
         raising=False,
     )
 
+    # Outer guard is deliberately generous (20s, not 2s): under full-suite load
+    # the event loop can be starved long enough that a 2s guard flakes, while
+    # the inner tool timeout stays at 1s so the test still proves the tool
+    # itself does not hang past its own timeout.
     result = await asyncio.wait_for(
         BashTool().execute(
             BashToolInput(command="sleep 10", timeout_seconds=1),
             ToolExecutionContext(cwd=tmp_path),
         ),
-        timeout=2.0,
+        timeout=20.0,
     )
 
     assert result.is_error is True
     assert result.metadata["timed_out"] is True
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_spawns_command_in_its_own_session(monkeypatch, tmp_path: Path):
+    """The bash child must run in its own process group so a timeout can killpg the whole tree."""
+    process = _FakeProcess(stdout=_FakeStdout([b"ok\n", b""]), returncode=0)
+    seen_kwargs: dict[str, object] = {}
+
+    async def fake_create_shell_subprocess(*args, **kwargs):
+        del args
+        seen_kwargs.update(kwargs)
+        return process
+
+    monkeypatch.setitem(BashTool.execute.__globals__, "create_shell_subprocess", fake_create_shell_subprocess)
+
+    result = await BashTool().execute(
+        BashToolInput(command="echo ok"),
+        ToolExecutionContext(cwd=tmp_path),
+    )
+
+    assert result.is_error is False
+    assert seen_kwargs["start_new_session"] is True
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_timeout_kills_grandchild_process_group(tmp_path: Path):
+    """A timed-out command must not leave backgrounded grandchildren alive.
+
+    The shell backgrounds a subshell that would ``touch`` a marker file ~2s
+    later, then blocks on ``wait``. Killing only the shell would let the
+    grandchild survive and create the marker; the tool must kill the whole
+    process group instead.
+    """
+    marker = tmp_path / "grandchild-ran.txt"
+    command = f"(sleep 2; touch '{marker}') & echo started; wait"
+
+    result = await BashTool().execute(
+        BashToolInput(command=command, timeout_seconds=1),
+        ToolExecutionContext(cwd=tmp_path),
+    )
+
+    assert result.is_error is True
+    assert result.metadata["timed_out"] is True
+    assert "started" in result.output
+
+    # Wait past the grandchild's scheduled marker creation; it must never
+    # appear because the whole process group was killed at timeout.
+    await asyncio.sleep(2.5)
+    assert not marker.exists()

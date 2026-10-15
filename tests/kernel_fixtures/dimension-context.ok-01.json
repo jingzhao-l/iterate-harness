@@ -1,0 +1,50 @@
+{
+  "comment": "Cross-implementation anchor for dimensionContext (kernel/src/dimension-context.ts). The rules a second implementation must reproduce, written so it can be coded from this file without reading the TypeScript: (1) planned entries keep the caller's order; status is `verified` iff recorded[id].decisions >= 1, else `unverified`, and an absent id is the same as a recorded zero — `{decisions: 0}`. (2) A recorded id absent from the plan becomes one `unplanned` entry, sorted by id ascending in UTF-16 code unit order. (3) totals.decisions sums planned and unplanned alike, each decision counted once; verified + unverified === planned always. (4) A duplicate planned id throws KERNEL_E_DIMENSION_DUPLICATE rather than collapsing. The ids here are the nine the iterate config owns (config/config.schema.json $defs.dimension.enum); the kernel validates their *shape* and never enumerates them, which is why this fixture may name them without the kernel knowing they exist.",
+  "input": {
+    "planned": [
+      { "id": "correctness", "label": "正确性", "focus": "Crash risks, logic errors, concurrency." },
+      { "id": "security" },
+      { "id": "performance" },
+      { "id": "architecture" },
+      { "id": "style-tests" },
+      { "id": "tech-debt" },
+      { "id": "spec-compliance" },
+      { "id": "frontend-backend" },
+      { "id": "ui-ux", "label": "UI/UX" }
+    ],
+    "recorded": {
+      "correctness": { "decisions": 6, "operationIds": ["op_01K2ABCDEFGHJKMNPQRSTVWXZ9"] },
+      "security": { "decisions": 3 },
+      "performance": { "decisions": 0 },
+      "architecture": { "decisions": 2 },
+      "style-tests": { "decisions": 1 },
+      "tech-debt": { "decisions": 1 },
+      "spec-compliance": { "decisions": 0 },
+      "frontend-backend": { "decisions": 4 },
+      "ui-ux": { "decisions": 1 },
+      "concurrency": { "decisions": 2 }
+    }
+  },
+  "expected": {
+    "planned": [
+      {
+        "id": "correctness",
+        "status": "verified",
+        "label": "正确性",
+        "focus": "Crash risks, logic errors, concurrency.",
+        "evidence": { "decisions": 6, "operationIds": ["op_01K2ABCDEFGHJKMNPQRSTVWXZ9"] }
+      },
+      { "id": "security", "status": "verified", "evidence": { "decisions": 3 } },
+      { "id": "performance", "status": "unverified", "evidence": { "decisions": 0 } },
+      { "id": "architecture", "status": "verified", "evidence": { "decisions": 2 } },
+      { "id": "style-tests", "status": "verified", "evidence": { "decisions": 1 } },
+      { "id": "tech-debt", "status": "verified", "evidence": { "decisions": 1 } },
+      { "id": "spec-compliance", "status": "unverified", "evidence": { "decisions": 0 } },
+      { "id": "frontend-backend", "status": "verified", "evidence": { "decisions": 4 } },
+      { "id": "ui-ux", "status": "verified", "label": "UI/UX", "evidence": { "decisions": 1 } }
+    ],
+    "unplanned": [{ "id": "concurrency", "status": "unplanned", "evidence": { "decisions": 2 } }],
+    "totals": { "planned": 9, "verified": 7, "unverified": 2, "unplanned": 1, "decisions": 20 }
+  },
+  "expectedLine": "7/9 dimensions verified, 2 unverified (performance, spec-compliance), 1 unplanned (concurrency), 20 decisions"
+}

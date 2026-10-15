@@ -36,6 +36,21 @@ from iterate_harness.utils.shell import create_shell_subprocess
 
 log = logging.getLogger(__name__)
 
+#: Cap for command/http hook output captured into the conversation. A hook
+#: command that prints gigabytes (a stray debug echo, an LLM hook returning a
+#: whole repo dump) must not balloon the parent process or flood the model
+#: context: the captured text is truncated with an explicit marker so the
+#: truncation is visible to whoever reads the hook reason.
+_HOOK_OUTPUT_MAX_CHARS = 8192
+
+
+def _bounded_hook_output(text: str) -> str:
+    """Truncate *text* to ``_HOOK_OUTPUT_MAX_CHARS`` with a visible marker."""
+    if len(text) <= _HOOK_OUTPUT_MAX_CHARS:
+        return text
+    omitted = len(text) - _HOOK_OUTPUT_MAX_CHARS
+    return f"{text[:_HOOK_OUTPUT_MAX_CHARS]}\n...[hook output truncated, {omitted} chars omitted]..."
+
 
 @dataclass
 class HookExecutionContext:
@@ -75,14 +90,31 @@ class HookExecutor:
         for hook in self._registry.get(event):
             if not _matches_hook(hook, payload):
                 continue
-            if isinstance(hook, CommandHookDefinition):
-                results.append(await self._run_command_hook(hook, event, payload))
-            elif isinstance(hook, HttpHookDefinition):
-                results.append(await self._run_http_hook(hook, event, payload))
-            elif isinstance(hook, PromptHookDefinition):
-                results.append(await self._run_prompt_like_hook(hook, event, payload, agent_mode=False))
-            elif isinstance(hook, AgentHookDefinition):
-                results.append(await self._run_prompt_like_hook(hook, event, payload, agent_mode=True))
+            try:
+                if isinstance(hook, CommandHookDefinition):
+                    results.append(await self._run_command_hook(hook, event, payload))
+                elif isinstance(hook, HttpHookDefinition):
+                    results.append(await self._run_http_hook(hook, event, payload))
+                elif isinstance(hook, PromptHookDefinition):
+                    results.append(await self._run_prompt_like_hook(hook, event, payload, agent_mode=False))
+                elif isinstance(hook, AgentHookDefinition):
+                    results.append(await self._run_prompt_like_hook(hook, event, payload, agent_mode=True))
+            except Exception as exc:
+                # A hook failure must never escape the executor: callers (tool
+                # execution, prompt submission, turn boundaries) run hooks
+                # inline, so an escaping exception would either fail a tool
+                # that already succeeded or tear down the whole query loop.
+                # Degrade to a failed hook result instead, matching the
+                # per-hook-kind containment the sub-runners already do.
+                log.warning("hook %r raised during %s", getattr(hook, "type", hook), event.value, exc_info=True)
+                results.append(
+                    HookResult(
+                        hook_type=getattr(hook, "type", "unknown"),
+                        success=False,
+                        blocked=getattr(hook, "block_on_failure", False),
+                        reason=f"hook raised {exc.__class__.__name__}: {_bounded_hook_output(str(exc))}",
+                    )
+                )
         return AggregatedHookResult(results=results)
 
     async def _run_command_hook(
@@ -111,6 +143,18 @@ class HookExecutor:
                 blocked=hook.block_on_failure,
                 reason=str(exc),
             )
+        except OSError as exc:
+            # A subprocess that cannot be spawned at all (git bash missing,
+            # ARG_MAX overflow from a huge payload in argv and
+            # ITERATE_HOOK_PAYLOAD, …) is a hook failure — not a crash for
+            # the caller that is mid-tool-execution.
+            log.warning("command hook %r failed to spawn: %s", getattr(hook, "type", "command"), exc)
+            return HookResult(
+                hook_type=hook.type,
+                success=False,
+                blocked=hook.block_on_failure,
+                reason=f"command hook failed to spawn: {exc.__class__.__name__}: {exc}",
+            )
 
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -133,6 +177,7 @@ class HookExecutor:
                 stderr.decode("utf-8", errors="replace").strip(),
             ) if part
         )
+        output = _bounded_hook_output(output)
         success = process.returncode == 0
         return HookResult(
             hook_type=hook.type,
@@ -157,13 +202,13 @@ class HookExecutor:
                     headers=hook.headers,
                 )
             success = response.is_success
-            output = response.text
+            output = _bounded_hook_output(response.text)
             return HookResult(
                 hook_type=hook.type,
                 success=success,
                 output=output,
                 blocked=hook.block_on_failure and not success,
-                reason=output or f"http hook returned {response.status_code}",
+                reason=_bounded_hook_output(output or f"http hook returned {response.status_code}"),
                 metadata={"status_code": response.status_code},
             )
         except Exception as exc:
@@ -249,7 +294,18 @@ def _matches_hook(hook: HookDefinition, payload: dict[str, Any]) -> bool:
     matcher = getattr(hook, "matcher", None)
     if not matcher:
         return True
-    subject = str(payload.get("tool_name") or payload.get("prompt") or payload.get("event") or "")
+    # The matcher subject is the first of: tool name (tool events), prompt
+    # text (prompt events), event name, then — for notifications — the
+    # notification_type (``permission_prompt`` / ``iterate_pause``). Without
+    # the last fallback a matcher of "permission_prompt" could never match,
+    # because the subject resolved to the literal "notification".
+    subject = str(
+        payload.get("tool_name")
+        or payload.get("prompt")
+        or payload.get("notification_type")
+        or payload.get("event")
+        or ""
+    )
     return fnmatch.fnmatch(subject, matcher)
 
 

@@ -1,5 +1,7 @@
 """Built-in tool registration."""
 
+import logging
+
 from iterate_harness.mcp.client import McpClientManager
 from iterate_harness.tools.agent_tool import AgentTool
 from iterate_harness.tools.ask_user_question_tool import AskUserQuestionTool
@@ -33,7 +35,7 @@ from iterate_harness.tools.iterate_tools import (
 from iterate_harness.tools.list_mcp_resources_tool import ListMcpResourcesTool
 from iterate_harness.tools.lsp_tool import LspTool
 from iterate_harness.tools.mcp_auth_tool import McpAuthTool
-from iterate_harness.tools.mcp_tool import McpToolAdapter
+from iterate_harness.tools.mcp_tool import McpToolAdapter, uniquify_tool_name
 from iterate_harness.tools.notebook_edit_tool import NotebookEditTool
 from iterate_harness.tools.read_mcp_resource_tool import ReadMcpResourceTool
 from iterate_harness.tools.remote_trigger_tool import RemoteTriggerTool
@@ -52,6 +54,9 @@ from iterate_harness.tools.todo_write_tool import TodoWriteTool
 from iterate_harness.tools.tool_search_tool import ToolSearchTool
 from iterate_harness.tools.web_fetch_tool import WebFetchTool
 from iterate_harness.tools.web_search_tool import WebSearchTool
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_default_tool_registry(mcp_manager: McpClientManager | None = None) -> ToolRegistry:
@@ -109,7 +114,26 @@ def create_default_tool_registry(mcp_manager: McpClientManager | None = None) ->
         registry.register(ListMcpResourcesTool(mcp_manager))
         registry.register(ReadMcpResourceTool(mcp_manager))
         for tool_info in mcp_manager.list_tools():
-            registry.register(McpToolAdapter(mcp_manager, tool_info))
+            adapter = McpToolAdapter(mcp_manager, tool_info)
+            if registry.get(adapter.name) is not None:
+                # Two MCP servers can sanitize/truncate to the same adapter
+                # name (e.g. "my server" vs "my-server"). Registering over the
+                # existing entry would silently shadow a tool, so the newcomer
+                # gets a deterministic __2/__3/... suffix and a loud warning.
+                original_name = adapter.name
+                adapter.name = uniquify_tool_name(
+                    adapter.name,
+                    lambda candidate: registry.get(candidate) is not None,
+                )
+                logger.warning(
+                    "MCP tool name collision: %s/%s resolves to '%s' which is "
+                    "already registered; exposing it as '%s' instead",
+                    tool_info.server_name,
+                    tool_info.name,
+                    original_name,
+                    adapter.name,
+                )
+            registry.register(adapter)
     return registry
 
 

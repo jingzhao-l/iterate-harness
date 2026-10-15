@@ -80,7 +80,7 @@ class TestHubReaping:
         assert len(ch._subscribers) == 1
 
         ch._subscribers[stale].loop = _closed_loop()
-        assert ch.reap() == 1
+        assert await ch.reap() == 1
         assert len(ch._subscribers) == 0
 
     @pytest.mark.asyncio
@@ -110,7 +110,7 @@ class TestHubReaping:
     async def test_reap_keeps_live_subscribers(self):
         ch = ChatHub()
         live = await ch.subscribe()
-        assert ch.reap() == 0
+        assert await ch.reap() == 0
         assert live in ch._subscribers
 
     @pytest.mark.asyncio
@@ -118,8 +118,8 @@ class TestHubReaping:
         ch = ChatHub()
         stale = await ch.subscribe()
         ch._subscribers[stale].loop = _closed_loop()
-        assert ch.reap() == 1
-        assert ch.reap() == 0
+        assert await ch.reap() == 1
+        assert await ch.reap() == 0
 
 
 def _closed_loop() -> asyncio.AbstractEventLoop:

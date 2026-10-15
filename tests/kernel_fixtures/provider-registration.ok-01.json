@@ -1,0 +1,309 @@
+{
+  "comment": "Cross-implementation anchor for the provider-registration contract (kernel/src/provider-registration.ts): how a judgement producer says what it offers, so both harnesses consume the same provider through the same shape (5.7 R40 scenario 5). Rules a second implementation must reproduce, stated here so it need not read the TypeScript: (1) schemaVersion is exactly `iterate.provider/0.1`. (2) Required: `id` and `kind` and `version` and `methods`. `id` matches `^[a-z0-9]+(?:-[a-z0-9]+)*$` and is <=64 chars; `kind` is `ae-diagnosis|report-render|evidence-source`; `version` is 1..64 chars; `origin` is optional and one of `kernel|glasspane|iterate|plugin`. (3) `methods` is 1..32 entries, each with a required `name` (same kebab pattern, <=64) and a required `requires` array (0..16 entries, same kebab pattern, <=64 each). An empty `requires` is a claim the provider makes — 'this needs nothing' — not an absence. (4) A method name repeated inside one registration is refused, not collapsed: the two declarations can carry different prerequisites, and last-write-wins would let a provider offer a method under prerequisites nobody agreed to. JSON Schema cannot express name-level uniqueness (`uniqueItems` compares whole objects), so the case named `duplicate-method-differs-only-by-requires` below is the documented shape where the published schema accepts and the validator refuses. (5) REGISTRY SEMANTICS, which are functions rather than schema features: registering an id already present is refused rather than overwriting it (a silent override means one product runs a provider the other never saw); resolution is exact — no default provider, no fuzzy match, no 'the only one registered'; asking a provider for a method it does not offer is refused and the error names what it does offer; a registry is replaced whole on each registration, never mutated, so a half-applied registration cannot leave one map with the provider and the next without it. (6) What two harnesses must not do is let the same id mean two different things across the boundary, so the ids in common between two registries are a question to settle before a run, not during one. PROVENANCE: the diagnosis classes and the prerequisite names are the evidence-pack contract's own vocabulary (`DiagnosisClassSchema` values T0..T9/NO_ANOMALY/INCONCLUSIVE, and `SignalsSchema` keys axEvent/handlerProbe/stateDiff/pixelDiff/responsiveness/crash rendered in kebab case) — a provider that requires `pixel-diff` is requiring the signal an evidence pack actually carries. `glasspane-engine` is the engine that produces those packs, and the report-render provider is the engine's markdown/HTML report (the two renderings shipped as `report.ok-01.md` and `report.ok-01.html` in this same corpus). The version strings are the package/engine versions at the time of writing, not placeholders.",
+  "input": {
+    "schemaVersion": "iterate.provider/0.1",
+    "id": "glasspane-engine-ae",
+    "kind": "ae-diagnosis",
+    "version": "1.11.0",
+    "origin": "glasspane",
+    "methods": [
+      {
+        "name": "diagnose",
+        "requires": ["ax-event", "attribution", "circuit-breaker"]
+      },
+      {
+        "name": "diagnose-pixel",
+        "requires": ["ax-event", "pixel-diff", "attribution", "circuit-breaker"]
+      },
+      {
+        "name": "diagnose-probed",
+        "requires": ["ax-event", "handler-probe", "state-diff", "attribution"]
+      }
+    ]
+  },
+  "expectedMethods": ["diagnose", "diagnose-pixel", "diagnose-probed"],
+  "cases": [
+    {
+      "name": "duplicate-method-differs-only-by-requires",
+      "input": {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "glasspane-engine-ae",
+        "kind": "ae-diagnosis",
+        "version": "1.11.0",
+        "methods": [
+          {
+            "name": "diagnose",
+            "requires": []
+          },
+          {
+            "name": "diagnose",
+            "requires": ["pixel-diff"]
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "methods.1.name",
+      "jsonSchemaAccepts": true
+    },
+    {
+      "name": "uppercase-id",
+      "input": {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "GlasspaneEngine",
+        "kind": "ae-diagnosis",
+        "version": "1.11.0",
+        "methods": [
+          {
+            "name": "diagnose",
+            "requires": []
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "id"
+    },
+    {
+      "name": "unknown-kind",
+      "input": {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "glasspane-engine-ae",
+        "kind": "vibes",
+        "version": "1.11.0",
+        "methods": [
+          {
+            "name": "diagnose",
+            "requires": []
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "kind"
+    },
+    {
+      "name": "no-methods",
+      "input": {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "glasspane-engine-ae",
+        "kind": "ae-diagnosis",
+        "version": "1.11.0",
+        "methods": []
+      },
+      "expect": "refused",
+      "path": "methods"
+    },
+    {
+      "name": "empty-version",
+      "input": {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "glasspane-engine-ae",
+        "kind": "ae-diagnosis",
+        "version": "",
+        "methods": [
+          {
+            "name": "diagnose",
+            "requires": []
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "version"
+    },
+    {
+      "name": "method-without-requires",
+      "input": {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "iterate-report-render",
+        "kind": "report-render",
+        "version": "0.1.4",
+        "origin": "iterate",
+        "methods": [
+          {
+            "name": "render-markdown"
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "methods.0.requires"
+    },
+    {
+      "name": "uppercase-requires-name",
+      "input": {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "iterate-report-render",
+        "kind": "report-render",
+        "version": "0.1.4",
+        "methods": [
+          {
+            "name": "render-markdown",
+            "requires": ["SSH"]
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "methods.0.requires.0"
+    },
+    {
+      "name": "extra-top-level-key",
+      "input": {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "glasspane-engine-ae",
+        "kind": "ae-diagnosis",
+        "version": "1.11.0",
+        "methods": [
+          {
+            "name": "diagnose",
+            "requires": []
+          }
+        ],
+        "default": true
+      },
+      "expect": "refused",
+      "path": "",
+      "messageIncludes": "default"
+    },
+    {
+      "name": "no-origin",
+      "input": {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "iterate-report-render",
+        "kind": "report-render",
+        "version": "0.1.4",
+        "methods": [
+          {
+            "name": "render-markdown",
+            "requires": ["decision-log"]
+          },
+          {
+            "name": "render-html",
+            "requires": ["decision-log", "evidence-pack"]
+          }
+        ]
+      },
+      "expect": "accepted"
+    }
+  ],
+  "registry": {
+    "note": "The registry half of the contract is functions, and its cases are in kernel/test/provider-registration.test.mjs. What is pinned here is the two-harness shape: one registry per consumer, ids that must not silently mean different things, and a resolution that refuses rather than guessing.",
+    "glasspane": [
+      {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "glasspane-engine-ae",
+        "kind": "ae-diagnosis",
+        "version": "1.11.0",
+        "origin": "glasspane",
+        "methods": [
+          {
+            "name": "diagnose",
+            "requires": ["ax-event", "attribution", "circuit-breaker"]
+          }
+        ]
+      },
+      {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "glasspane-evidence",
+        "kind": "evidence-source",
+        "version": "1.11.0",
+        "origin": "glasspane",
+        "methods": [
+          {
+            "name": "capture",
+            "requires": ["ax-tree"]
+          },
+          {
+            "name": "last-evidence",
+            "requires": []
+          }
+        ]
+      }
+    ],
+    "iterate": [
+      {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "iterate-report-render",
+        "kind": "report-render",
+        "version": "0.1.4",
+        "origin": "iterate",
+        "methods": [
+          {
+            "name": "render-markdown",
+            "requires": ["decision-log"]
+          }
+        ]
+      },
+      {
+        "schemaVersion": "iterate.provider/0.1",
+        "id": "iterate-engine-ae",
+        "kind": "ae-diagnosis",
+        "version": "0.1.4",
+        "origin": "iterate",
+        "methods": [
+          {
+            "name": "diagnose",
+            "requires": ["evidence-pack"]
+          }
+        ]
+      }
+    ],
+    "idsInCommon": [],
+    "collision": {
+      "note": "What must be caught before a run: the same id offered by both sides. `glasspane-ae` means two different diagnoses here — one requiring the AX event stream, one requiring an evidence pack — so 'the AE provider' would name a different judgement in each product while both looked satisfied. `providerIdsInCommon` returns exactly the ids to settle, and the answer is a rename or one registry, never 'whichever map was consulted first'.",
+      "a": [
+        {
+          "schemaVersion": "iterate.provider/0.1",
+          "id": "glasspane-ae",
+          "kind": "ae-diagnosis",
+          "version": "1.11.0",
+          "origin": "glasspane",
+          "methods": [
+            {
+              "name": "diagnose",
+              "requires": ["ax-event"]
+            }
+          ]
+        },
+        {
+          "schemaVersion": "iterate.provider/0.1",
+          "id": "shared-render",
+          "kind": "report-render",
+          "version": "1.11.0",
+          "origin": "glasspane",
+          "methods": [
+            {
+              "name": "render-markdown",
+              "requires": []
+            }
+          ]
+        }
+      ],
+      "b": [
+        {
+          "schemaVersion": "iterate.provider/0.1",
+          "id": "glasspane-ae",
+          "kind": "ae-diagnosis",
+          "version": "0.1.4",
+          "origin": "iterate",
+          "methods": [
+            {
+              "name": "diagnose",
+              "requires": ["evidence-pack"]
+            }
+          ]
+        },
+        {
+          "schemaVersion": "iterate.provider/0.1",
+          "id": "shared-render",
+          "kind": "report-render",
+          "version": "0.1.4",
+          "origin": "iterate",
+          "methods": [
+            {
+              "name": "render-markdown",
+              "requires": []
+            }
+          ]
+        }
+      ],
+      "expect": ["glasspane-ae", "shared-render"]
+    }
+  }
+}

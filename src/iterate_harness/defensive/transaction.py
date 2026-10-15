@@ -33,6 +33,15 @@ class FileTransactionBuffer:
         self._project_root = Path(project_root).resolve()
         #: Original file bytes keyed by resolved absolute path.
         self._snapshots: dict[Path, bytes] = {}
+        #: In-flight mutation count per resolved path. A snapshot is a SHARED
+        #: safety net for every mutation pending on that path: while two
+        #: parallel edits of the same file are in flight, the snapshot taken
+        #: by the first must stay available to the second's rollback — the
+        #: old first-commit-wins rule dropped it as soon as the first edit
+        #: committed, so the second edit's rollback found nothing and the
+        #: atomic-mutation guarantee silently degraded to "partial write
+        #: kept".
+        self._pending: dict[Path, int] = {}
         #: Guards the snapshot map so two concurrent mutations of the SAME
         #: path (parallel file tools inside one turn, or tool calls running on
         #: a worker thread) cannot interleave a read with a write to
@@ -45,22 +54,34 @@ class FileTransactionBuffer:
 
         Files that do not exist yet (a brand-new file being written) are
         remembered as a "create" so a rollback can remove them again. A path
-        that is already snapshotted is left untouched (first snapshot wins).
+        that is already snapshotted is left untouched (first snapshot wins),
+        but the in-flight counter still increments: only the LAST pending
+        mutation releases the snapshot.
         """
         resolved = self._resolve(path)
         with self._lock:
-            if resolved in self._snapshots:
-                return
-            try:
-                self._snapshots[resolved] = resolved.read_bytes()
-            except OSError:
-                # Missing file -> remember as absent so rollback removes it.
-                self._snapshots[resolved] = _MISSING_SENTINEL
+            if resolved not in self._snapshots:
+                try:
+                    self._snapshots[resolved] = resolved.read_bytes()
+                except OSError:
+                    # Missing file -> remember as absent so rollback removes it.
+                    self._snapshots[resolved] = _MISSING_SENTINEL
+            self._pending[resolved] = self._pending.get(resolved, 0) + 1
 
     def commit(self, path: str | Path) -> None:
-        """Accept the edit: drop the snapshot for ``path`` (verified good)."""
+        """Accept the edit: drop the snapshot for ``path`` (verified good).
+
+        The snapshot only disappears once the FINAL pending mutation for the
+        path commits, so a sibling edit of the same file can still roll back
+        to the shared original if it fails afterwards.
+        """
         resolved = self._resolve(path)
         with self._lock:
+            remaining = self._pending.get(resolved, 0) - 1
+            if remaining > 0:
+                self._pending[resolved] = remaining
+                return
+            self._pending.pop(resolved, None)
             self._snapshots.pop(resolved, None)
 
     def rollback(
@@ -125,6 +146,20 @@ class FileTransactionBuffer:
                 log.warning("defensive rollback failed for %s: %s", resolved, exc)
                 continue
             with self._lock:
+                if paths is None:
+                    # Full rollback: every pending mutation on this path is
+                    # terminated by the restore, so drop snapshot and count.
+                    self._snapshots.pop(resolved, None)
+                    self._pending.pop(resolved, None)
+                    continue
+                # Scoped rollback: one pending mutation ended here; the
+                # snapshot stays available for any sibling mutation of the
+                # same path that is still in flight.
+                remaining = self._pending.get(resolved, 0) - 1
+                if remaining > 0:
+                    self._pending[resolved] = remaining
+                    continue
+                self._pending.pop(resolved, None)
                 self._snapshots.pop(resolved, None)
         return restored
 

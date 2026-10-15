@@ -1,0 +1,306 @@
+{
+  "comment": "Cross-implementation anchor for the invariant-report contract (kernel/src/invariant-report.ts): what a run may state about its own invariant checks, and how to digest one so a re-verification can cite the failure it answers. Rules a second implementation must reproduce, stated here so it need not read the TypeScript: (1) schemaVersion is exactly `iterate.invariant-report/0.1`. (2) `outcome` is `pass|fail|error`. (3) `checks` is 1..256 entries, each an object with required `name` (1..256 chars), required `kind` in `ensure|command|refused`, required `ok` boolean, and optional `detail` (<=4096); no other keys. (4) THE ONE RULE THAT MATTERS: `outcome` must follow from `checks`. `pass` requires every check to have ok true. `fail` requires at least one check with ok false. `error` is unconstrained. A report that says pass over a failed check is refused by both validators — the JSON Schema expresses this with `allOf`/`if`/`then`/`contains`, so a schema-only consumer refuses it too. (5) `kind` `refused` means the runner declined to execute a configured command because it carries shell metacharacters or is empty; it is a violation, so a report whose only failing check was refused is `fail`, never `error`. `error` is reserved for checks that could not be evaluated at all, and it produces no re-verification request. (6) `round` (>=1) and `durationMs` (>=0) are optional integers. (7) The digest is `iv_` + sha256 of the canonical JSON form: UTF-16-code-unit-sorted keys, no insignificant whitespace, arrays in order, strings as JSON escapes them; numbers use the host's shortest roundtrip form (integral values print without a fraction). (8) A re-verification request is `iterate.reverification/0.1` with `trigger.kind` exactly `invariant`, `trigger.reportDigest` matching `^iv_[0-9a-f]{64}$`, and `targets` carrying at least one of `recipeSteps` (1..64), `dimensions` (1..64 kebab-case ids <=64 chars), `operationIds` (1..64 matching `^op_[0-9A-HJKMNP-TV-Z]{26}$`); an empty target set is refused, by `anyOf` in the schema and by `superRefine` in the validator. PROVENANCE: every name, kind and detail string below was captured from `iterate_harness.defensive.invariants.check_invariants` running against the real repo — the ensure entries are the config's own `invariants.ensure` plus a file the run does not have, the command label is the real `<module>:<command>` format, the `exit 1 | ...` tail is real npm output truncated the way the runner truncates it (last three lines, joined by ' | '), and `python:ruff check src/ ; rm -rf /` is the metacharacter case the runner refuses with the exact string it uses. The runner records only violations plus a count, so the ok=true entries here are the configured check names minus the violating ones — that is how a producer derives `checks`, not an invention for this fixture.",
+  "input": {
+    "schemaVersion": "iterate.invariant-report/0.1",
+    "outcome": "fail",
+    "round": 3,
+    "durationMs": 917,
+    "checks": [
+      {
+        "name": "ensure:README.md",
+        "kind": "ensure",
+        "ok": true
+      },
+      {
+        "name": "ensure:iterate.config.yaml",
+        "kind": "ensure",
+        "ok": false,
+        "detail": "missing file: iterate.config.yaml"
+      },
+      {
+        "name": "typescript:npm run compile",
+        "kind": "command",
+        "ok": false,
+        "detail": "exit 1 | npm error To see a list of scripts, run: | npm error   npm run | npm error A complete log of this run can be found in: /Users/ethanlin/.npm/_logs/2026-10-11T01_07_36_468Z-debug-0.log"
+      },
+      {
+        "name": "python:ruff check src/ ; rm -rf /",
+        "kind": "refused",
+        "ok": false,
+        "detail": "refused: unsafe command (shell metacharacter or empty)"
+      }
+    ]
+  },
+  "expectedDigest": "iv_81373b5040663b9f56a4a0bc671ab55e0d92bc33e5980b5580f3e7cec5902332",
+  "expectedFailingChecks": [
+    "ensure:iterate.config.yaml",
+    "typescript:npm run compile",
+    "python:ruff check src/ ; rm -rf /"
+  ],
+  "passInput": {
+    "schemaVersion": "iterate.invariant-report/0.1",
+    "outcome": "pass",
+    "round": 4,
+    "checks": [
+      {
+        "name": "ensure:README.md",
+        "kind": "ensure",
+        "ok": true
+      },
+      {
+        "name": "typescript:npm run compile",
+        "kind": "command",
+        "ok": true
+      }
+    ]
+  },
+  "passDigest": "iv_2038dfde43106446a87212196d1e6738ed4cdd9c1a90d6d55f94429401e8e501",
+  "errorInput": {
+    "schemaVersion": "iterate.invariant-report/0.1",
+    "outcome": "error",
+    "checks": [
+      {
+        "name": "python:pytest tests/ -x -q --timeout=60",
+        "kind": "command",
+        "ok": false,
+        "detail": "not measured: the runner could not start (timeout=60 requires pytest-timeout)"
+      }
+    ]
+  },
+  "errorDigest": "iv_7fe700d844d8c7ee60ce34220b55e6cbfca220d4aed27de0b22f091159c0c063",
+  "cases": [
+    {
+      "name": "pass-over-a-failed-check",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "pass",
+        "checks": [
+          {
+            "name": "ensure:README.md",
+            "kind": "ensure",
+            "ok": false,
+            "detail": "missing file: README.md"
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "outcome"
+    },
+    {
+      "name": "fail-with-every-check-ok",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "fail",
+        "checks": [
+          {
+            "name": "ensure:README.md",
+            "kind": "ensure",
+            "ok": true
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "outcome"
+    },
+    {
+      "name": "no-checks",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "pass",
+        "checks": []
+      },
+      "expect": "refused",
+      "path": "checks"
+    },
+    {
+      "name": "unknown-check-kind",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "fail",
+        "checks": [
+          {
+            "name": "ensure:README.md",
+            "kind": "vibes",
+            "ok": false
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "checks.0.kind"
+    },
+    {
+      "name": "check-without-ok",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "fail",
+        "checks": [
+          {
+            "name": "ensure:README.md",
+            "kind": "ensure",
+            "detail": "missing file: README.md"
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "checks.0.ok"
+    },
+    {
+      "name": "invented-outcome",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "probably",
+        "checks": [
+          {
+            "name": "ensure:README.md",
+            "kind": "ensure",
+            "ok": true
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "outcome"
+    },
+    {
+      "name": "extra-top-level-key",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "pass",
+        "checks": [
+          {
+            "name": "ensure:README.md",
+            "kind": "ensure",
+            "ok": true
+          }
+        ],
+        "note": "not part of the contract"
+      },
+      "expect": "refused",
+      "path": "",
+      "messageIncludes": "note"
+    },
+    {
+      "name": "zero-round",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "pass",
+        "round": 0,
+        "checks": [
+          {
+            "name": "ensure:README.md",
+            "kind": "ensure",
+            "ok": true
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "round"
+    },
+    {
+      "name": "error-report-is-accepted",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "error",
+        "checks": [
+          {
+            "name": "python:pytest tests/ -x -q --timeout=60",
+            "kind": "command",
+            "ok": false
+          }
+        ]
+      },
+      "expect": "accepted",
+      "digest": "iv_6d79b3b909a22c2185b11265ecf34ec04b6e7054530a96797f3dc02034ca2e2b"
+    },
+    {
+      "name": "refused-command-only",
+      "input": {
+        "schemaVersion": "iterate.invariant-report/0.1",
+        "outcome": "fail",
+        "checks": [
+          {
+            "name": "ensure:README.md",
+            "kind": "ensure",
+            "ok": true
+          },
+          {
+            "name": "python:ruff check src/ ; rm -rf /",
+            "kind": "refused",
+            "ok": false,
+            "detail": "refused: unsafe command (shell metacharacter or empty)"
+          }
+        ]
+      },
+      "expect": "accepted",
+      "failingChecks": ["python:ruff check src/ ; rm -rf /"]
+    }
+  ],
+  "reverificationCases": [
+    {
+      "name": "empty-targets",
+      "targets": {},
+      "expect": "refused"
+    },
+    {
+      "name": "dimensions-only",
+      "targets": {
+        "dimensions": ["spec-compliance", "frontend-backend"]
+      },
+      "expect": "accepted"
+    },
+    {
+      "name": "recipe-step-and-operation",
+      "targets": {
+        "recipeSteps": [
+          {
+            "kind": "assert",
+            "params": {
+              "selector": "id:gp-run-button"
+            }
+          }
+        ],
+        "operationIds": ["op_AAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      },
+      "expect": "accepted"
+    },
+    {
+      "name": "uppercase-dimension",
+      "targets": {
+        "dimensions": ["Spec-Compliance"]
+      },
+      "expect": "refused"
+    },
+    {
+      "name": "bad-operation-id",
+      "targets": {
+        "operationIds": ["op_short"]
+      },
+      "expect": "refused"
+    },
+    {
+      "name": "unknown-target-kind",
+      "targets": {
+        "dimensions": ["security"],
+        "screenshots": ["a.png"]
+      },
+      "expect": "refused"
+    }
+  ],
+  "request": {
+    "schemaVersion": "iterate.reverification/0.1",
+    "trigger": {
+      "kind": "invariant",
+      "reportDigest": "iv_81373b5040663b9f56a4a0bc671ab55e0d92bc33e5980b5580f3e7cec5902332"
+    },
+    "targets": {
+      "recipeSteps": [
+        {
+          "kind": "assert",
+          "params": {
+            "selector": "id:gp-run-button"
+          }
+        }
+      ],
+      "dimensions": ["spec-compliance"]
+    }
+  }
+}

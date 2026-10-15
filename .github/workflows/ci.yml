@@ -49,6 +49,15 @@ jobs:
       - name: Run test suite
         run: uv run pytest -q
 
+      - name: Check the vendored kernel corpus against the published package
+        # tests/kernel_fixtures/ is a sha256-pinned copy of the contract published
+        # inside iterate-kernel. Here the kernel is not in reach, so the pin is
+        # checked against the registry artifact — a stale pin goes red rather than
+        # letting this repo assert bytes the shared kernel no longer uses. It
+        # requires the pinned version to be published; the monorepo CI checks the
+        # same manifest against kernel/fixtures (the source of truth) first.
+        run: uv run python scripts/check_kernel_fixtures.py
+
   python-quality:
     name: Python quality
     runs-on: ubuntu-latest

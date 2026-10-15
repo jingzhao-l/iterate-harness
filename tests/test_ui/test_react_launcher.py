@@ -302,6 +302,237 @@ async def test_run_task_worker_decodes_multiline_json_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_repl_forwards_restore_and_append_to_react_launcher(monkeypatch):
+    """--continue/--resume restore state must reach the spawned backend host
+    via the launcher (it used to be silently dropped on the React TUI path)."""
+    seen = {}
+
+    async def _launch(**kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iterate_harness.ui.app.launch_react_tui", _launch)
+    await run_repl(
+        prompt=None,
+        cwd="/tmp/demo",
+        restore_messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        restore_tool_metadata={"permission_mode": "default"},
+        restore_session_id="abc123",
+        append_system_prompt="be brief",
+    )
+
+    assert seen["restore_session_id"] == "abc123"
+    assert seen["append_system_prompt"] == "be brief"
+
+
+@pytest.mark.asyncio
+async def test_run_repl_rejects_react_restore_without_session_id(monkeypatch):
+    async def _launch(**kwargs):  # pragma: no cover - must not be called
+        raise AssertionError(f"launch_react_tui must not be called: {kwargs}")
+
+    monkeypatch.setattr("iterate_harness.ui.app.launch_react_tui", _launch)
+
+    with pytest.raises(RuntimeError, match="restore_session_id"):
+        await run_repl(
+            prompt=None,
+            cwd="/tmp/demo",
+            restore_messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_repl_backend_only_forwards_restore_and_append(monkeypatch):
+    seen = {}
+
+    async def _run_backend_host(**kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iterate_harness.ui.app.run_backend_host", _run_backend_host)
+    messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    await run_repl(
+        backend_only=True,
+        cwd="/tmp/demo",
+        restore_messages=messages,
+        restore_tool_metadata={"permission_mode": "default"},
+        append_system_prompt="be brief",
+    )
+
+    assert seen["restore_messages"] == messages
+    assert seen["restore_tool_metadata"] == {"permission_mode": "default"}
+    assert seen["append_system_prompt"] == "be brief"
+
+
+def test_build_backend_command_includes_restore_and_append_flags():
+    command = build_backend_command(
+        cwd="/tmp/demo",
+        system_prompt="system",
+        append_system_prompt="also do X",
+        restore_session_id="abc123",
+    )
+    append_idx = command.index("--append-system-prompt")
+    assert command[append_idx + 1] == "also do X"
+    restore_idx = command.index("--restore-session")
+    assert command[restore_idx + 1] == "abc123"
+    # Without the flags they must not appear at all.
+    plain = build_backend_command(cwd="/tmp/demo")
+    assert "--restore-session" not in plain
+    assert "--append-system-prompt" not in plain
+
+
+@pytest.mark.asyncio
+async def test_run_print_mode_passes_append_system_prompt_to_build_runtime(monkeypatch):
+    seen = {}
+
+    async def _build_runtime(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(
+            app_state=SimpleNamespace(get=lambda: None),
+            mcp_manager=SimpleNamespace(list_statuses=lambda: []),
+            commands=SimpleNamespace(list_commands=lambda: []),
+            events=_AsyncIterator(),
+        )
+
+    async def _start_runtime(_bundle):
+        return None
+
+    async def _handle_line(*_args, **_kwargs):
+        return True
+
+    async def _close_runtime(_bundle):
+        return None
+
+    monkeypatch.setattr("iterate_harness.ui.app.build_runtime", _build_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.start_runtime", _start_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.handle_line", _handle_line)
+    monkeypatch.setattr("iterate_harness.ui.app.close_runtime", _close_runtime)
+
+    await run_print_mode(prompt="hi", cwd="/tmp/demo", append_system_prompt="also do X")
+
+    assert seen["append_system_prompt"] == "also do X"
+
+
+@pytest.mark.asyncio
+async def test_run_print_mode_permission_prompt_fails_closed(monkeypatch, capsys):
+    """No TTY in print mode: the permission prompt must DENY with a clear
+    message instead of auto-approving (fail open)."""
+    captured = {}
+
+    async def _build_runtime(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            app_state=SimpleNamespace(get=lambda: None),
+            mcp_manager=SimpleNamespace(list_statuses=lambda: []),
+            commands=SimpleNamespace(list_commands=lambda: []),
+            events=_AsyncIterator(),
+        )
+
+    async def _start_runtime(_bundle):
+        return None
+
+    async def _handle_line(*_args, **_kwargs):
+        return True
+
+    async def _close_runtime(_bundle):
+        return None
+
+    monkeypatch.setattr("iterate_harness.ui.app.build_runtime", _build_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.start_runtime", _start_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.handle_line", _handle_line)
+    monkeypatch.setattr("iterate_harness.ui.app.close_runtime", _close_runtime)
+
+    await run_print_mode(prompt="hi", cwd="/tmp/demo")
+
+    permission_prompt = captured["permission_prompt"]
+    assert await permission_prompt("bash", "runs a command") is False
+    err = capsys.readouterr().err
+    assert "Permission denied (non-interactive mode)" in err
+    assert "bash" in err
+    assert "full_auto" in err
+
+
+@pytest.mark.asyncio
+async def test_run_print_mode_propagates_model_failures(monkeypatch):
+    """Print mode must not contain model-turn failures: they surface so the
+    CLI can exit non-zero (interactive consoles keep containing them)."""
+    closed = []
+
+    async def _build_runtime(**kwargs):
+        return SimpleNamespace(
+            app_state=SimpleNamespace(get=lambda: None),
+            mcp_manager=SimpleNamespace(list_statuses=lambda: []),
+            commands=SimpleNamespace(list_commands=lambda: []),
+        )
+
+    async def _start_runtime(_bundle):
+        return None
+
+    async def _handle_line(*_args, **kwargs):
+        assert kwargs.get("propagate_errors") is True
+        raise RuntimeError("model backend exploded")
+
+    async def _close_runtime(_bundle):
+        closed.append(True)
+
+    monkeypatch.setattr("iterate_harness.ui.app.build_runtime", _build_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.start_runtime", _start_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.handle_line", _handle_line)
+    monkeypatch.setattr("iterate_harness.ui.app.close_runtime", _close_runtime)
+
+    with pytest.raises(RuntimeError, match="model backend exploded"):
+        await run_print_mode(prompt="hi", cwd="/tmp/demo")
+
+    # The runtime must still be torn down on the failure path.
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_run_task_worker_passes_append_system_prompt(monkeypatch):
+    seen = {}
+
+    class _FakeStdin:
+        def readline(self):
+            return ""
+
+    async def _build_runtime(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(
+            cwd=kwargs.get("cwd"),
+            engine=SimpleNamespace(),
+            external_api_client=False,
+            extra_skill_dirs=(),
+            extra_plugin_roots=(),
+            current_settings=lambda: None,
+            current_plugins=lambda: [],
+            hook_summary=lambda: "",
+            plugin_summary=lambda: "",
+            mcp_summary=lambda: "",
+            app_state=SimpleNamespace(set=lambda **_kwargs: None),
+            mcp_manager=SimpleNamespace(close=lambda: None, list_statuses=lambda: []),
+            hook_executor=SimpleNamespace(execute=lambda *_args, **_kwargs: None, update_registry=lambda *_a, **_k: None),
+            commands=SimpleNamespace(lookup=lambda _line: None),
+            session_backend=SimpleNamespace(save_snapshot=lambda **_kwargs: None),
+            enforce_max_turns=False,
+            session_id="s1",
+        )
+
+    async def _start_runtime(_bundle):
+        return None
+
+    async def _close_runtime(_bundle):
+        return None
+
+    monkeypatch.setattr("iterate_harness.ui.app.build_runtime", _build_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.start_runtime", _start_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.close_runtime", _close_runtime)
+    monkeypatch.setattr("iterate_harness.ui.app.sys.stdin", _FakeStdin())
+
+    await run_task_worker(cwd="/tmp/demo", append_system_prompt="also do X")
+
+    assert seen["append_system_prompt"] == "also do X"
+
+
+@pytest.mark.asyncio
 async def test_run_print_mode_waits_for_coordinator_async_agents(monkeypatch):
     class _FakeEngine:
         def __init__(self) -> None:
@@ -349,6 +580,7 @@ async def test_run_print_mode_waits_for_coordinator_async_agents(monkeypatch):
             extra_skill_dirs=(),
             extra_plugin_roots=(),
             current_settings=lambda: SimpleNamespace(model="claude-test", max_turns=200),
+            session_system_prompt=lambda latest_user_prompt=None: "coordinator",
             current_plugins=lambda: [],
             hook_summary=lambda: "",
             plugin_summary=lambda: "",
@@ -394,10 +626,6 @@ async def test_run_print_mode_waits_for_coordinator_async_agents(monkeypatch):
     monkeypatch.setattr("iterate_harness.ui.app.close_runtime", _close_runtime)
     monkeypatch.setattr("iterate_harness.ui.coordinator_drain.get_task_manager", lambda: fake_manager)
     monkeypatch.setattr("iterate_harness.ui.app.is_coordinator_mode", lambda: True)
-    monkeypatch.setattr(
-        "iterate_harness.ui.coordinator_drain.build_runtime_system_prompt",
-        lambda *args, **kwargs: "coordinator",
-    )
 
     async def _sleep(_seconds):
         return None

@@ -407,3 +407,48 @@ async def test_remove_worktree_refuses_ambiguous_slug_across_repos(tmp_path, mon
         await mgr.remove_worktree("shared")
     # Neither repository's worktree was deleted.
     assert len(await mgr.list_worktrees()) == 2
+
+
+# ---------------------------------------------------------------------------
+# _run_git timeout containment
+# ---------------------------------------------------------------------------
+
+
+async def test_run_git_timeout_kills_process_and_returns(tmp_path, monkeypatch):
+    """A hung git (stale lock, pathological repo) must be killed and reaped
+    instead of blocking the caller forever."""
+    import asyncio
+
+    class _HungProcess:
+        def __init__(self):
+            self.returncode = None
+            self.killed = False
+            self.waited = False
+
+        async def communicate(self):
+            await asyncio.sleep(60)
+            return b"", b""
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            self.waited = True
+            return self.returncode
+
+    hung = _HungProcess()
+
+    async def _fake_exec(*args, **kwargs):
+        return hung
+
+    monkeypatch.setattr(worktree_mod.asyncio, "create_subprocess_exec", _fake_exec)
+
+    code, stdout, stderr = await worktree_mod._run_git("status", cwd=tmp_path, timeout=0.05)
+
+    assert code != 0
+    assert "timed out" in stderr
+    assert stdout == ""
+    # The child was killed AND reaped — no lingering zombie.
+    assert hung.killed is True
+    assert hung.waited is True

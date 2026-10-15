@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field
 
 #: Operation outcome values used across mutating endpoints.
 OperationStatus = Literal["ok", "conflict", "error"]
+"""``conflict`` is reserved for concurrent-edit outcomes (e.g. a stale
+config version); routes currently surface conflicts as HTTP 409 with a
+``{"detail"}`` body instead, so only ``ok``/``error`` are produced today."""
 
 #: Live iterate loop states (design §18.3 run state machine).
 #:
@@ -28,17 +31,6 @@ RunState = Literal[
 
 #: What kind of user input the loop is currently waiting for.
 WaitingKind = Literal["none", "user_prompt", "user_select", "permission"]
-
-#: HTTP statuses the API may return (mirrors design §17.4 error contract).
-ErrorStatus = Literal[400, 401, 404, 409, 422, 500]
-
-
-class ErrorResponse(BaseModel):
-    """Uniform error payload."""
-
-    error: str = Field(..., description="Machine-readable error code")
-    message: str = Field(..., description="Human-readable message")
-    detail: dict[str, Any] | None = None
 
 
 class OperationResult(BaseModel):
@@ -269,7 +261,6 @@ __all__ = [
     "CheckpointView",
     "ConfigView",
     "ControlRequest",
-    "ErrorResponse",
     "FindingsTriageDismissRequest",
     "FindingsTriageRequest",
     "OperationResult",

@@ -107,6 +107,8 @@ class RuntimeBundle:
     memory_backend: MemoryCommandBackend | None = None
     include_project_memory: bool = True
     config_path: str | None = None
+    #: ``--append-system-prompt`` text re-applied on every prompt rebuild.
+    append_system_prompt: str | None = None
 
     def current_settings(self) -> Settings:
         """Return the effective settings for this session.
@@ -120,6 +122,26 @@ class RuntimeBundle:
         return load_settings(
             Path(self.config_path).expanduser().resolve() if self.config_path else None
         ).merge_cli_overrides(**self.settings_overrides)
+
+    def session_system_prompt(self, *, latest_user_prompt: str | None = None) -> str:
+        """Build the runtime system prompt with ``--append-system-prompt`` applied.
+
+        Every prompt rebuild (plain turn, ``/command`` submission, pending
+        continuation) must route through here: rebuilding without the
+        appended text silently dropped the flag after the first rebuild.
+        """
+        prompt = build_runtime_system_prompt(
+            self.current_settings(),
+            cwd=self.cwd,
+            latest_user_prompt=latest_user_prompt,
+            extra_skill_dirs=self.extra_skill_dirs,
+            extra_plugin_roots=self.extra_plugin_roots,
+            include_project_memory=self.include_project_memory,
+        )
+        extra = (self.append_system_prompt or "").strip()
+        if extra:
+            prompt = f"{prompt}\n\n{extra}"
+        return prompt
 
     def current_plugins(self) -> list[LoadedPlugin]:
         """Return currently visible plugins for the working tree."""
@@ -221,6 +243,7 @@ async def build_runtime(
     verbose: bool | None = None,
     allowed_tools: Iterable[str] | None = None,
     disallowed_tools: Iterable[str] | None = None,
+    append_system_prompt: str | None = None,
 ) -> RuntimeBundle:
     """Build the shared runtime for an IterateHarness session."""
     settings_overrides: dict[str, Any] = {
@@ -324,6 +347,13 @@ async def build_runtime(
         extra_plugin_roots=normalized_plugin_roots,
         include_project_memory=include_project_memory,
     )
+    appended_prompt = (append_system_prompt or "").strip()
+    if appended_prompt:
+        # ``--append-system-prompt`` extends the assembled prompt (the flag
+        # used to be parsed but silently dropped). ``build_system_prompt``
+        # treats a custom prompt as a REPLACEMENT, so the append must happen
+        # after assembly — mirroring ``RuntimeBundle.session_system_prompt``.
+        system_prompt_text = f"{system_prompt_text}\n\n{appended_prompt}"
     from uuid import uuid4
 
     session_id = uuid4().hex[:12]
@@ -433,6 +463,7 @@ async def build_runtime(
         memory_backend=memory_backend,
         include_project_memory=include_project_memory,
         config_path=resolved_config_path,
+        append_system_prompt=append_system_prompt,
     )
 
 
@@ -592,6 +623,7 @@ async def handle_line(
     clear_output: ClearHandler,
     remote_context: bool = False,
     remote_admin_opt_in_requested: bool = False,
+    propagate_errors: bool = False,
 ) -> bool:
     """Handle one submitted line for either headless or TUI rendering.
 
@@ -600,6 +632,11 @@ async def handle_line(
     slash commands (``remote_invocable=False``) are refused unless the caller
     explicitly opts in. Interactive consoles pass the default and keep full
     access.
+
+    ``propagate_errors=True`` is the non-interactive contract: a failed model
+    turn is surfaced AND re-raised (after the session snapshot) so the caller
+    can exit non-zero. Interactive consoles keep the default (contain the
+    error and stay alive).
     """
     if not bundle.external_api_client:
         bundle.hook_executor.update_registry(
@@ -644,16 +681,8 @@ async def handle_line(
             original_model = bundle.engine.model
             if result.submit_model:
                 bundle.engine.set_model(result.submit_model)
-            settings = bundle.current_settings()
             submit_prompt = result.submit_prompt
-            system_prompt = build_runtime_system_prompt(
-                settings,
-                cwd=bundle.cwd,
-                latest_user_prompt=submit_prompt,
-                extra_skill_dirs=bundle.extra_skill_dirs,
-                extra_plugin_roots=bundle.extra_plugin_roots,
-                include_project_memory=bundle.include_project_memory,
-            )
+            system_prompt = bundle.session_system_prompt(latest_user_prompt=submit_prompt)
             bundle.engine.set_system_prompt(system_prompt)
             try:
                 async for event in bundle.engine.submit_message(submit_prompt):
@@ -682,13 +711,8 @@ async def handle_line(
             settings = bundle.current_settings()
             if bundle.enforce_max_turns:
                 bundle.engine.set_max_turns(settings.max_turns)
-            system_prompt = build_runtime_system_prompt(
-                settings,
-                cwd=bundle.cwd,
-                latest_user_prompt=_last_user_text(bundle.engine.messages),
-                extra_skill_dirs=bundle.extra_skill_dirs,
-                extra_plugin_roots=bundle.extra_plugin_roots,
-                include_project_memory=bundle.include_project_memory,
+            system_prompt = bundle.session_system_prompt(
+                latest_user_prompt=_last_user_text(bundle.engine.messages)
             )
             bundle.engine.set_system_prompt(system_prompt)
             turns = result.continue_turns if result.continue_turns is not None else bundle.engine.max_turns
@@ -715,15 +739,9 @@ async def handle_line(
     settings = bundle.current_settings()
     if bundle.enforce_max_turns:
         bundle.engine.set_max_turns(settings.max_turns)
-    system_prompt = build_runtime_system_prompt(
-        settings,
-        cwd=bundle.cwd,
-        latest_user_prompt=line,
-        extra_skill_dirs=bundle.extra_skill_dirs,
-        extra_plugin_roots=bundle.extra_plugin_roots,
-        include_project_memory=bundle.include_project_memory,
-    )
+    system_prompt = bundle.session_system_prompt(latest_user_prompt=line)
     bundle.engine.set_system_prompt(system_prompt)
+    failure: Exception | None = None
     try:
         async for event in bundle.engine.submit_message(line):
             await render_event(event)
@@ -740,11 +758,16 @@ async def handle_line(
         # An unexpected query failure must never crash the whole backend: the
         # TUI request loop and backend_host have no except clause, so a bare
         # escape here would tear down the process (or wedge the web session).
-        # Surface it, snapshot whatever survived, and keep the loop alive.
+        # Surface it, snapshot whatever survived, and keep the loop alive —
+        # unless the caller asked for the non-interactive contract
+        # (``propagate_errors``), where the error is re-raised after the
+        # snapshot so the process can exit non-zero.
         log.exception("submit_message raised for line: %.200s", line)
-        await print_system(
-            f"Session error: {type(exc).__name__}: {exc}\nThe session is still healthy."
-        )
+        if not propagate_errors:
+            await print_system(
+                f"Session error: {type(exc).__name__}: {exc}\nThe session is still healthy."
+            )
+        failure = exc
     try:
         bundle.session_backend.save_snapshot(
             cwd=bundle.cwd,
@@ -758,6 +781,8 @@ async def handle_line(
     except Exception:
         log.exception("snapshot save failed (session continues)")
     sync_app_state(bundle)
+    if failure is not None:
+        raise failure
     return True
 
 

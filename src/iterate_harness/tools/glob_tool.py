@@ -140,7 +140,8 @@ async def _glob(root: Path, pattern: str, *, limit: int, project_root: Path) -> 
         lines: list[str] = []
 
         async def _read_stdout() -> None:
-            assert process.stdout is not None
+            if process.stdout is None:
+                raise RuntimeError("rg subprocess has no stdout pipe to read")
             while len(lines) < limit:
                 raw = await process.stdout.readline()
                 if not raw:

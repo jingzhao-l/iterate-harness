@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from iterate_harness.config import load_settings
 from iterate_harness.hooks.loader import HookRegistry, load_hook_registry
+
+log = logging.getLogger(__name__)
 
 
 class HookReloader:
@@ -26,6 +29,20 @@ class HookReloader:
             return self._registry
 
         if stat.st_mtime_ns != self._last_mtime_ns:
+            try:
+                registry = load_hook_registry(load_settings(self._settings_path))
+            except Exception:
+                # "Best-effort" means exactly this: a broken settings file
+                # must keep the previous working registry active AND must not
+                # mark the file as consumed — otherwise the broken state is
+                # never retried until the file changes again. The mtime is
+                # only recorded after a successful load.
+                log.warning(
+                    "hook reload failed for %s; keeping the previous registry",
+                    self._settings_path,
+                    exc_info=True,
+                )
+                return self._registry
+            self._registry = registry
             self._last_mtime_ns = stat.st_mtime_ns
-            self._registry = load_hook_registry(load_settings(self._settings_path))
         return self._registry

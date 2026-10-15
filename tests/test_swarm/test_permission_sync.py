@@ -11,12 +11,20 @@ from iterate_harness.swarm.permission_sync import (
     PermissionResolution,
     SwarmPermissionResponse,
     _is_read_only,
+    _pending_request_path,
+    _resolved_request_path,
+    cleanup_old_resolutions,
     create_permission_request,
+    delete_resolved_permission,
     handle_permission_request,
     poll_permission_response,
+    read_resolved_permission,
+    resolve_permission,
     send_permission_request,
     send_permission_response,
     send_permission_response_via_mailbox,
+    validate_request_id,
+    write_permission_request,
 )
 
 
@@ -230,3 +238,113 @@ async def test_poll_permission_response_decodes_text_envelope_rejection(tmp_path
     assert result.feedback == "cannot write to secrets"
     # The matched message is marked read so a later poll does not re-deliver it.
     assert await poll_permission_response("myteam", "worker1", "req-rej", timeout=0.1) is None
+
+
+# ---------------------------------------------------------------------------
+# request_id validation (path traversal guard)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "request_id",
+    [
+        "../../etc/passwd",
+        "..",
+        ".",
+        "a/b",
+        "a\\b",
+        "/abs/path",
+        "perm-1\n",
+        "perm-1\x00",
+        "",
+        "x" * 129,  # over the 128-char cap
+    ],
+)
+def test_validate_request_id_rejects_unsafe_ids(request_id):
+    """Request IDs become ``permissions/{pending,resolved}/<id>.json``; an ID
+    with ``../`` (or a separator / NUL / oversized) must be rejected so no
+    caller can read, move, or delete files outside the permissions dir."""
+    with pytest.raises(ValueError):
+        validate_request_id(request_id)
+
+
+def test_validate_request_id_accepts_generated_ids():
+    assert validate_request_id("perm-1712345678901-abc1234")
+    assert validate_request_id("sandbox-1712345678901-xyz9876")
+    assert validate_request_id(create_permission_request("Bash", "tu-1", {}).id)
+
+
+def test_pending_and_resolved_paths_reject_traversal(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with pytest.raises(ValueError):
+        _pending_request_path("myteam", "../escape")
+    with pytest.raises(ValueError):
+        _resolved_request_path("myteam", "../escape")
+    assert not (tmp_path / "escape").exists()
+
+
+async def test_resolve_permission_rejects_traversal_request_id(tmp_path, monkeypatch):
+    """``resolve_permission`` used to interpolate the caller-supplied ID straight
+    into both the pending and resolved paths; a ``../`` ID could read a file
+    outside the pending dir and DELETE it (unlink after the "move")."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    victim = tmp_path / "victim.json"
+    victim.write_text('{"secret": true}', encoding="utf-8")
+
+    resolution = PermissionResolution(decision="approved", resolved_by="leader")
+    with pytest.raises(ValueError):
+        await resolve_permission("../victim", resolution, team_name="myteam")
+    # The unlink-after-move path must not have deleted the victim.
+    assert victim.exists()
+
+
+async def test_delete_resolved_permission_rejects_traversal(tmp_path, monkeypatch):
+    """``delete_resolved_permission`` unlinks the resolved path directly — with
+    an unvalidated ID it was an arbitrary-file-delete primitive."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    victim = tmp_path / "important.txt"
+    victim.write_text("do not delete", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        await delete_resolved_permission("../important.txt", team_name="myteam")
+    assert victim.exists()
+
+
+async def test_read_resolved_permission_rejects_traversal(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    outside = tmp_path / "leak.json"
+    outside.write_text('{"id": "leak", "created_at": 1.0}', encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        await read_resolved_permission("../leak", team_name="myteam")
+
+
+async def test_write_permission_request_rejects_traversal_request_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    req = create_permission_request("Bash", "tu-1", {"command": "ls"})
+    req.id = "../../evil-write"
+    with pytest.raises(ValueError):
+        await write_permission_request(req)
+    assert not (tmp_path / "evil-write").exists()
+
+
+async def test_cleanup_old_resolutions_handles_non_numeric_timestamp(tmp_path, monkeypatch):
+    """A corrupt resolved file with a non-numeric ``resolved_at`` used to make
+    the age arithmetic raise TypeError, crashing the whole cleanup pass."""
+    import json as _json
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_TEAM_NAME", "myteam")
+    req = create_permission_request("Bash", "tu-1", {"command": "ls"})
+    req.status = "approved"
+    req.resolved_at = "not-a-number"
+    resolved_dir = tmp_path / ".iterate-harness" / "teams" / "myteam" / "permissions" / "resolved"
+    resolved_dir.mkdir(parents=True)
+    (resolved_dir / f"{req.id}.json").write_text(
+        _json.dumps(req.to_dict()), encoding="utf-8"
+    )
+
+    cleaned = await cleanup_old_resolutions(team_name="myteam")
+    # Corrupt file treated as stale and removed instead of raising.
+    assert cleaned == 1
+    assert not (resolved_dir / f"{req.id}.json").exists()

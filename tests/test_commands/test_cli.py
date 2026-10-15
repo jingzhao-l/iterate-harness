@@ -672,3 +672,311 @@ class TestIterateHookCommand:
         assert "action must be install|uninstall|status" in result.output
 
 
+# ---- OptionInfo normalization (direct Python calls) ----
+
+
+class TestTyperDefaultNormalization:
+    def test_helpers_unwrap_optioninfo_and_plain_values(self):
+        from typer.models import ArgumentInfo, OptionInfo
+
+        option_false = OptionInfo(default=False)
+        option_none = OptionInfo(default=None)
+        option_text = OptionInfo(default="high")
+        argument_text = ArgumentInfo(default="low")
+
+        assert cli._typer_flag(option_false) is False
+        assert cli._typer_flag(OptionInfo(default=True)) is True
+        assert cli._typer_flag(True) is True
+
+        assert cli._typer_int(OptionInfo(default=7)) == 7
+        assert cli._typer_int(option_none) == 0
+        assert cli._typer_int("5") == 5
+        assert cli._typer_int("not-a-number") == 0
+
+        assert cli._typer_str(OptionInfo(default=None)) == ""
+        assert cli._typer_str(option_text) == "high"
+        assert cli._typer_str(argument_text) == "low"
+        assert cli._typer_str("") == ""
+        assert cli._typer_str(None) == ""
+
+        # None and "" stay distinguishable where None is meaningful.
+        assert cli._typer_optional_str(option_none) is None
+        assert cli._typer_optional_str("") == ""
+        assert cli._typer_optional_str("x") == "x"
+
+    def test_iterate_report_direct_call_with_untouched_defaults(self, tmp_path, monkeypatch):
+        """Calling iterate_report() with no arguments must behave like the CLI
+        (OptionInfo placeholders normalized) instead of crashing on
+        ``fail_on.strip()`` or treating truthy OptionInfo flags as set."""
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(typer.Exit) as exc_info:
+            cli.iterate_report()
+        assert exc_info.value.exit_code == 0
+
+    def test_iterate_log_direct_call_with_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        cli.iterate_log()  # must not crash on OptionInfo tail/as_json/trend
+
+    def test_iterate_sessions_direct_call_with_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(typer.Exit) as exc_info:
+            cli.iterate_sessions()
+        assert exc_info.value.exit_code == 0
+
+    def test_web_serve_direct_call_normalizes_root(self, tmp_path, monkeypatch):
+        captured = {}
+
+        def fake_serve(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("iterate_harness.web.api.serve", fake_serve)
+        cli.web_serve(project_root="", host="", port=0)
+        assert captured["project_root"] == Path.cwd().resolve()
+        assert captured["host"] == "127.0.0.1"
+        assert captured["port"] == 0
+
+
+# ---- interactive picker validation ----
+
+
+def test_select_from_menu_rejects_zero_and_negative(monkeypatch):
+    monkeypatch.setattr(cli, "_can_use_questionary", lambda: False)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *args, **kwargs: "0")
+    with pytest.raises(typer.BadParameter):
+        cli._select_from_menu(
+            "Choose:",
+            [("a", "A"), ("b", "B")],
+            default_value="a",
+        )
+
+    monkeypatch.setattr(cli.typer, "prompt", lambda *args, **kwargs: "-1")
+    with pytest.raises(typer.BadParameter):
+        cli._select_from_menu("Choose:", [("a", "A"), ("b", "B")], default_value="a")
+
+
+# ---- session restore (--continue / --resume / --restore-session) ----
+
+
+_FULL_SESSION_PAYLOAD = {
+    "session_id": "abc123",
+    "model": "claude-test",
+    "summary": "restore me",
+    "messages": [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    ],
+    "tool_metadata": {"permission_mode": "default"},
+}
+
+
+class TestSessionRestore:
+    def test_continue_passes_restore_state_to_run_repl(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "iterate_harness.services.session_storage.load_session_snapshot",
+            lambda cwd: dict(_FULL_SESSION_PAYLOAD),
+        )
+        captured = {}
+
+        async def fake_run_repl(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("iterate_harness.ui.app.run_repl", fake_run_repl)
+
+        result = CliRunner().invoke(app, ["--continue"])
+
+        assert result.exit_code == 0, result.output
+        assert captured["restore_session_id"] == "abc123"
+        assert captured["restore_messages"] == _FULL_SESSION_PAYLOAD["messages"]
+        assert captured["restore_tool_metadata"] == {"permission_mode": "default"}
+
+    def test_continue_fails_closed_when_snapshot_has_no_history(self, tmp_path, monkeypatch, capsys):
+        """A snapshot without message history must error — not fabricate a resume."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "iterate_harness.services.session_storage.load_session_snapshot",
+            lambda cwd: {"session_id": "abc123", "summary": "hollow"},
+        )
+
+        async def fake_run_repl(**kwargs):  # pragma: no cover - must not run
+            raise AssertionError(f"run_repl must not be called: {kwargs}")
+
+        monkeypatch.setattr("iterate_harness.ui.app.run_repl", fake_run_repl)
+
+        result = CliRunner().invoke(app, ["--continue"])
+
+        assert result.exit_code == 1
+        assert "cannot restore" in result.output
+
+    def test_resume_by_id_fails_closed_when_session_missing(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["--resume", "nope"])
+        assert result.exit_code == 1
+        assert "Session not found: nope" in result.output
+
+    def test_restore_session_flag_loads_history_for_backend(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "iterate_harness.services.session_storage.load_session_by_id",
+            lambda cwd, sid: dict(_FULL_SESSION_PAYLOAD) if sid == "abc123" else None,
+        )
+        captured = {}
+
+        async def fake_run_repl(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("iterate_harness.ui.app.run_repl", fake_run_repl)
+
+        result = CliRunner().invoke(app, ["--backend-only", "--restore-session", "abc123"])
+
+        assert result.exit_code == 0, result.output
+        assert captured["backend_only"] is True
+        assert captured["restore_messages"] == _FULL_SESSION_PAYLOAD["messages"]
+        assert captured["restore_tool_metadata"] == {"permission_mode": "default"}
+        assert captured["model"] == "claude-test"
+
+    def test_restore_session_flag_errors_when_session_missing(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["--backend-only", "--restore-session", "gone"])
+        assert result.exit_code == 1
+        assert "session not found: gone" in result.output
+
+    def test_iterate_resume_forwards_restore_session_id(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "iterate_harness.services.session_storage.load_session_snapshot",
+            lambda cwd: dict(_FULL_SESSION_PAYLOAD),
+        )
+        captured = {}
+
+        async def fake_run_repl(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("iterate_harness.ui.app.run_repl", fake_run_repl)
+
+        result = CliRunner().invoke(app, ["iterate", "resume"])
+
+        assert result.exit_code == 0, result.output
+        assert captured["restore_session_id"] == "abc123"
+        assert captured["restore_messages"] == _FULL_SESSION_PAYLOAD["messages"]
+
+    def test_iterate_resume_errors_on_incomplete_snapshot(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "iterate_harness.services.session_storage.load_session_snapshot",
+            lambda cwd: {"session_id": "abc123", "summary": "hollow"},
+        )
+        result = CliRunner().invoke(app, ["iterate", "resume"])
+        assert result.exit_code == 1
+        assert "cannot resume" in result.output
+
+    def test_iterate_resume_falls_back_to_full_session_payload(self, tmp_path, monkeypatch):
+        """When latest.json is missing, the listing fallback must load the full
+        session payload — not resume off the summary row (fake resume)."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "iterate_harness.services.session_storage.load_session_snapshot",
+            lambda cwd: None,
+        )
+        monkeypatch.setattr(
+            "iterate_harness.services.session_storage.list_session_snapshots",
+            lambda cwd, limit=1: [{"session_id": "abc123", "summary": "restore me"}],
+        )
+
+        loaded_ids = []
+
+        def fake_load_by_id(cwd, session_id):
+            loaded_ids.append(session_id)
+            return dict(_FULL_SESSION_PAYLOAD) if session_id == "abc123" else None
+
+        monkeypatch.setattr(
+            "iterate_harness.services.session_storage.load_session_by_id",
+            fake_load_by_id,
+        )
+        captured = {}
+
+        async def fake_run_repl(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("iterate_harness.ui.app.run_repl", fake_run_repl)
+
+        result = CliRunner().invoke(app, ["iterate", "resume"])
+
+        assert result.exit_code == 0, result.output
+        assert loaded_ids == ["abc123"]
+        assert captured["restore_messages"] == _FULL_SESSION_PAYLOAD["messages"]
+
+
+# ---- --append-system-prompt wiring ----
+
+
+class TestAppendSystemPromptWiring:
+    def test_print_mode_receives_append_system_prompt(self, monkeypatch):
+        captured = {}
+
+        async def fake_run_print_mode(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("iterate_harness.ui.app.run_print_mode", fake_run_print_mode)
+
+        result = CliRunner().invoke(app, ["-p", "hi", "--append-system-prompt", "be brief"])
+
+        assert result.exit_code == 0, result.output
+        assert captured["append_system_prompt"] == "be brief"
+
+    def test_interactive_repl_receives_append_system_prompt(self, monkeypatch):
+        captured = {}
+
+        async def fake_run_repl(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("iterate_harness.ui.app.run_repl", fake_run_repl)
+
+        result = CliRunner().invoke(app, ["--append-system-prompt", "be brief"])
+
+        assert result.exit_code == 0, result.output
+        assert captured["append_system_prompt"] == "be brief"
+
+    def test_task_worker_receives_append_system_prompt(self, monkeypatch):
+        captured = {}
+
+        async def fake_run_task_worker(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("iterate_harness.ui.app.run_task_worker", fake_run_task_worker)
+
+        result = CliRunner().invoke(
+            app, ["--task-worker", "--append-system-prompt", "be brief"]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert captured["append_system_prompt"] == "be brief"
+
+
+# ---- print-mode validation and failure contract ----
+
+
+def test_print_mode_rejects_unknown_output_format(monkeypatch):
+    async def fake_run_print_mode(**kwargs):  # pragma: no cover - must not run
+        raise AssertionError(f"run_print_mode must not be called: {kwargs}")
+
+    monkeypatch.setattr("iterate_harness.ui.app.run_print_mode", fake_run_print_mode)
+
+    result = CliRunner().invoke(app, ["-p", "hi", "--output-format", "yaml"])
+
+    assert result.exit_code == 1
+    assert "--output-format must be one of" in result.output
+
+
+def test_print_mode_failure_exits_nonzero(monkeypatch, capsys):
+    async def fake_run_print_mode(**kwargs):
+        raise RuntimeError("model backend exploded")
+
+    monkeypatch.setattr("iterate_harness.ui.app.run_print_mode", fake_run_print_mode)
+
+    result = CliRunner().invoke(app, ["-p", "hi"])
+
+    assert result.exit_code == 1
+    assert "model backend exploded" in result.output
+
+

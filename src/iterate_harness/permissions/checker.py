@@ -100,21 +100,30 @@ class PermissionChecker:
     def _resolve_mode(self, mode_override: str | None) -> PermissionMode:
         """Return the effective permission mode for one decision.
 
-        A session-scoped ``mode_override`` (set by ``enter_plan_mode`` /
-        ``exit_plan_mode`` tools through the engine's tool metadata) wins over
-        the checker's configured mode. Unknown / empty override values fall
-        back to the configured mode so a malformed session key can never crash
-        a permission decision (fail-closed to the configured behavior).
+        Only ``"plan"`` (written by ``enter_plan_mode``) is a real
+        session-scoped override: it wins over the checker's configured mode.
+        ``"default"`` (the ``exit_plan_mode`` marker) and ``"full_auto"`` are
+        treated as NO override — they fall through to the configured mode.
+        Previously every ``PermissionMode`` value was honored, so a stale
+        ``"default"`` override left an exit_plan_mode'd session pinned to
+        DEFAULT even when the configured mode was FULL_AUTO (and any tool
+        writing ``"full_auto"`` into the session metadata could silently
+        escalate the session). Unknown / empty override values also fall back
+        to the configured mode so a malformed session key can never crash a
+        permission decision (fail-closed to the configured behavior).
         """
+        if mode_override == PermissionMode.PLAN.value:
+            return PermissionMode.PLAN
+        if mode_override in (PermissionMode.DEFAULT.value, PermissionMode.FULL_AUTO.value):
+            # "default" is exit_plan_mode's "no override" marker; "full_auto"
+            # must never be accepted from session metadata (escalation vector).
+            return self._settings.mode
         if mode_override:
-            try:
-                return PermissionMode(mode_override)
-            except ValueError:
-                log.warning(
-                    "Ignoring invalid session permission-mode override %r; "
-                    "using the configured mode",
-                    mode_override,
-                )
+            log.warning(
+                "Ignoring invalid session permission-mode override %r; "
+                "using the configured mode",
+                mode_override,
+            )
         return self._settings.mode
 
     def evaluate(
@@ -139,6 +148,15 @@ class PermissionChecker:
         override can never widen those hard limits.
         """
         effective_mode = self._resolve_mode(mode_override)
+        # Decision ordering (hard boundaries first, mode shortcuts last):
+        #   sensitive paths → forbidden content → denied_tools → path deny
+        #   rules → risk areas → denied_commands → allowed_tools →
+        #   allowed_commands → mode logic.
+        # Deny entries are hard boundaries: they always run BEFORE any
+        # allowlist early return so no allowlist (tool or command) can widen
+        # them, and path deny rules run BEFORE the risk-area confirmation
+        # branch so a deny-listed path is never softened into a prompt.
+
         # Built-in sensitive path protection — always active, cannot be
         # overridden by user settings or permission mode.  This is a
         # defence-in-depth measure against LLM-directed or prompt-injection
@@ -146,7 +164,7 @@ class PermissionChecker:
         if file_path:
             for candidate_path in _policy_match_paths(file_path):
                 for pattern in SENSITIVE_PATH_PATTERNS:
-                    if fnmatch.fnmatch(candidate_path, pattern):
+                    if _path_policy_match(candidate_path, pattern):
                         return PermissionDecision(
                             allowed=False,
                             reason=(
@@ -169,24 +187,6 @@ class PermissionChecker:
                         ),
                     )
 
-        # Iterate risk-area boundary (iterate.risk_area_paths + project
-        # personalization.risk_areas, design §11.2.2): mutating tools that
-        # target a risk-area path require explicit user confirmation even in
-        # full_auto mode. Checked before tool allowlists so the gate cannot
-        # be bypassed by an allowlisted tool. Reads stay ungated.
-        if file_path and self._risk_area_patterns and not is_read_only:
-            for candidate_path in _policy_match_paths(file_path):
-                for pattern in self._risk_area_patterns:
-                    if fnmatch.fnmatch(candidate_path, pattern):
-                        return PermissionDecision(
-                            allowed=False,
-                            requires_confirmation=True,
-                            reason=(
-                                f"Path {file_path} is in a configured risk area "
-                                f"(matched '{pattern}'); explicit approval required"
-                            ),
-                        )
-
         # Explicit tool deny list
         if tool_name in self._settings.denied_tools:
             return PermissionDecision(allowed=False, reason=f"{tool_name} is explicitly denied")
@@ -198,16 +198,49 @@ class PermissionChecker:
         # before the ``allowed_tools`` early return: allowlisting a tool is a
         # mode shortcut, never a license to touch deny-listed paths (a deny
         # rule is an iterate hard boundary and cannot be widened by any
-        # session override or allowlist).
+        # session override or allowlist). It also MUST run before the
+        # risk-area branch below: a path that is BOTH protected (deny) and a
+        # risk area must be denied outright, not softened into a
+        # confirmation prompt.
         if file_path and self._path_rules:
             for candidate_path in _policy_match_paths(file_path):
                 for rule in self._path_rules:
-                    if fnmatch.fnmatch(candidate_path, rule.pattern):
+                    if _path_policy_match(candidate_path, rule.pattern):
                         if not rule.allow:
                             return PermissionDecision(
                                 allowed=False,
                                 reason=f"Path {file_path} matches deny rule: {rule.pattern}",
                             )
+
+        # Iterate risk-area boundary (iterate.risk_area_paths + project
+        # personalization.risk_areas, design §11.2.2): mutating tools that
+        # target a risk-area path require explicit user confirmation even in
+        # full_auto mode. Checked before tool allowlists so the gate cannot
+        # be bypassed by an allowlisted tool. Reads stay ungated.
+        if file_path and self._risk_area_patterns and not is_read_only:
+            for candidate_path in _policy_match_paths(file_path):
+                for pattern in self._risk_area_patterns:
+                    if _path_policy_match(candidate_path, pattern):
+                        return PermissionDecision(
+                            allowed=False,
+                            requires_confirmation=True,
+                            reason=(
+                                f"Path {file_path} is in a configured risk area "
+                                f"(matched '{pattern}'); explicit approval required"
+                            ),
+                        )
+
+        # Command deny patterns (e.g. deny "rm -rf /") — a hard boundary
+        # that MUST run before the ``allowed_tools`` / ``allowed_commands``
+        # early returns: allowlisting the ``bash`` tool (or an exact command)
+        # is a mode shortcut, never a license to run a denied command.
+        if command:
+            for pattern in getattr(self._settings, "denied_commands", []):
+                if isinstance(pattern, str) and fnmatch.fnmatch(command, pattern):
+                    return PermissionDecision(
+                        allowed=False,
+                        reason=f"Command matches deny pattern: {pattern}",
+                    )
 
         # Explicit tool allow list
         if tool_name in self._settings.allowed_tools:
@@ -221,15 +254,6 @@ class PermissionChecker:
                 allowed=True,
                 reason="Command is exactly allowlisted",
             )
-
-        # Check command deny patterns (e.g. deny "rm -rf /")
-        if command:
-            for pattern in getattr(self._settings, "denied_commands", []):
-                if isinstance(pattern, str) and fnmatch.fnmatch(command, pattern):
-                    return PermissionDecision(
-                        allowed=False,
-                        reason=f"Command matches deny pattern: {pattern}",
-                    )
 
         # Full auto: allow everything
         if effective_mode == PermissionMode.FULL_AUTO:
@@ -413,6 +437,21 @@ def _policy_match_paths(file_path: str) -> tuple[str, ...]:
     if not normalized:
         return (file_path,)
     return (normalized, normalized + "/")
+
+
+def _path_policy_match(candidate_path: str, pattern: str) -> bool:
+    """Match a path against a policy glob with filesystem case-folding semantics.
+
+    Path policy matching must agree with how the filesystem folds case: on
+    case-insensitive filesystems (macOS default, Windows) ``/home/me/.SSH/id_rsa``
+    IS ``/home/me/.ssh/id_rsa``, so a case-sensitive deny pattern would miss a
+    credential file simply because the model spelled the directory differently.
+    Both sides are therefore lowercased before fnmatch. On case-sensitive
+    filesystems this only ever over-matches on the DENY side (a deny rule may
+    fire for a path that differs only by case) — which is the safe direction:
+    a path policy must never under-match.
+    """
+    return fnmatch.fnmatch(candidate_path.lower(), pattern.lower())
 
 
 def _bash_permission_hint(command: str | None) -> str:

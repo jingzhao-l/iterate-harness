@@ -117,6 +117,89 @@ def test_clear_provider_credentials(tmp_path: Path):
     assert "openai" not in _read_file_store(tmp_path)
 
 
+def test_clear_provider_credentials_removes_every_known_keyring_key(
+    tmp_path: Path, monkeypatch
+):
+    """``ih auth clear`` must empty the keyring, not just the three keys
+    that used to be hard-coded — a refresh_token survived the clear."""
+    fake = _install_fake_keyring(monkeypatch)
+
+    store_credential("openai", "api_key", "sk-a", use_keyring=True)
+    store_credential("openai", "refresh_token", "rt-b", use_keyring=True)
+    store_credential("openai", "pat", "ghp_c", use_keyring=True)
+
+    clear_provider_credentials("openai", use_keyring=True)
+
+    assert ("iterate_harness", "openai:api_key") not in fake.store
+    assert ("iterate_harness", "openai:refresh_token") not in fake.store
+    assert ("iterate_harness", "openai:pat") not in fake.store
+    assert fake.store == {}
+
+
+def test_clear_provider_credentials_removes_file_only_keys_from_keyring(
+    tmp_path: Path, monkeypatch
+):
+    """Keys this code has never heard of are read from the file store and
+    removed from the keyring too."""
+    fake = _install_fake_keyring(monkeypatch)
+    # Write the file backend directly (as an older release would have).
+    monkeypatch.setattr(storage_module, "_keyring_available", lambda: False)
+    store_credential("openai", "custom_slot", "legacy-value", use_keyring=False)
+    monkeypatch.setattr(storage_module, "_keyring_available", lambda: True)
+    fake.store[("iterate_harness", "openai:custom_slot")] = "legacy-value"
+
+    clear_provider_credentials("openai", use_keyring=True)
+
+    assert ("iterate_harness", "openai:custom_slot") not in fake.store
+    assert "openai" not in _read_file_store(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Malformed file contents
+# ---------------------------------------------------------------------------
+
+
+def test_non_mapping_root_is_ignored(tmp_path: Path, caplog):
+    _creds_path(tmp_path).write_text(json.dumps(["not", "a", "mapping"]), encoding="utf-8")
+
+    assert load_credential("openai", "api_key", use_keyring=False) is None
+    assert list_stored_providers() == []
+
+    # The file recovers on the next write instead of crashing on `.items()`.
+    store_credential("openai", "api_key", "sk-recovered", use_keyring=False)
+    assert load_credential("openai", "api_key", use_keyring=False) == "sk-recovered"
+
+
+def test_non_mapping_provider_entry_is_dropped(tmp_path: Path):
+    _creds_path(tmp_path).write_text(
+        json.dumps({"openai": "oops", "anthropic": {"api_key": "sk-a"}}),
+        encoding="utf-8",
+    )
+
+    assert list_stored_providers() == ["anthropic"]
+    assert load_credential("anthropic", "api_key", use_keyring=False) == "sk-a"
+
+    # Persisting must not resurrect the malformed entry.
+    store_credential("deepseek", "api_key", "sk-d", use_keyring=False)
+    assert sorted(list_stored_providers()) == ["anthropic", "deepseek"]
+
+
+def test_non_string_credential_values_are_dropped(tmp_path: Path):
+    _creds_path(tmp_path).write_text(
+        json.dumps({"openai": {"api_key": 12345, "token": "tok-keep"}}),
+        encoding="utf-8",
+    )
+
+    assert load_credential("openai", "api_key", use_keyring=False) is None
+    assert load_credential("openai", "token", use_keyring=False) == "tok-keep"
+
+    # Saving must not raise AttributeError from `_encrypt_if_needed(12345)`.
+    store_credential("anthropic", "api_key", "sk-a", use_keyring=False)
+    data = _read_file_store(tmp_path)
+    assert data["anthropic"]["api_key"].startswith(_FERNET_MARKER)
+    assert "api_key" not in data["openai"]
+
+
 # ---------------------------------------------------------------------------
 # Keyring routing
 # ---------------------------------------------------------------------------

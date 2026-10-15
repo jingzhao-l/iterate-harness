@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
 from iterate_harness.hooks.schemas import HookDefinition
 from iterate_harness.iterate.settings import IterateSettings
@@ -562,6 +562,14 @@ class Settings(BaseModel):
     # Vision model (image-to-text fallback)
     vision: VisionModelConfig = Field(default_factory=VisionModelConfig)
 
+    # Bookkeeping for environment overrides (never serialized):
+    # ``_env_api_key`` is the key stamped from the environment by
+    # ``_apply_env_overrides``; ``_file_api_key`` is the value the config file
+    # itself held before that override. ``save_settings`` needs both so it can
+    # avoid persisting a secret that only ever came from the environment.
+    _env_api_key: str = PrivateAttr(default="")
+    _file_api_key: str | None = PrivateAttr(default=None)
+
     def merged_profiles(self) -> dict[str, ProviderProfile]:
         """Return the saved profiles merged over the built-in catalog."""
         merged = default_provider_profiles()
@@ -846,6 +854,11 @@ class Settings(BaseModel):
         return merged.sync_active_profile_from_flat_fields().materialize_active_profile()
 
 
+#: ``api_format`` values that speak the OpenAI wire protocol (including the
+#: historical spellings used by older settings files).
+_OPENAI_API_FORMATS = frozenset({"openai", "openai_compat", "openai-compatible"})
+
+
 def _apply_env_overrides(settings: Settings) -> Settings:
     """Apply supported environment variable overrides over loaded settings.
 
@@ -915,7 +928,17 @@ def _apply_env_overrides(settings: Settings) -> Settings:
         except ValueError:
             log.warning("Invalid ITERATE_AUTO_COMPACT_THRESHOLD_TOKENS value: %r (skipping)", auto_compact_threshold_tokens)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    # Provider-format-aware key selection: the flat ``api_key`` field must
+    # carry a key that matches the format actually in use, otherwise an
+    # OpenAI-format profile silently receives an Anthropic key (and vice
+    # versa) whenever both environment variables happen to be set.
+    effective_api_format = (
+        os.environ.get("ITERATE_API_FORMAT") or settings.api_format or ""
+    ).strip().lower()
+    if effective_api_format in _OPENAI_API_FORMATS:
+        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    else:
+        api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if api_key:
         updates["api_key"] = api_key
 
@@ -949,9 +972,21 @@ def _apply_env_overrides(settings: Settings) -> Settings:
     if sandbox_updates:
         updates["sandbox"] = settings.sandbox.model_copy(update=sandbox_updates)
 
+    # Bookkeeping for ``save_settings``: remember which key the environment
+    # contributed and which one the config file itself held, so a later save
+    # never persists a secret that only ever came from the environment.
+    # Read the *pre-override* state first: on the first pass ``api_key`` is
+    # the file's value unless an earlier pass already stamped an env key.
+    file_api_key = settings._file_api_key
+    if file_api_key is None and not settings._env_api_key:
+        file_api_key = settings.api_key or None
     if not updates:
-        return settings
-    return settings.model_copy(update=updates)
+        result = settings
+    else:
+        result = settings.model_copy(update=updates)
+    result._env_api_key = api_key or ""
+    result._file_api_key = file_api_key
+    return result
 
 
 def _parse_bool_env(value: str) -> bool:
@@ -976,10 +1011,16 @@ def load_settings(config_path: Path | None = None) -> Settings:
     if config_path.exists():
         try:
             raw = json.loads(config_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, ValueError) as exc:
-            log.error("Malformed settings file %s: %s — using defaults", config_path, exc)
+            settings = Settings.model_validate(raw)
+        except ValidationError as exc:
+            # ``ValidationError`` subclasses ValueError, so it must be caught
+            # first: a syntactically valid file with the wrong value types
+            # used to escape this handler and crash the CLI on startup.
+            log.warning("Invalid settings in %s: %s — using defaults", config_path, exc)
             return _apply_env_overrides(Settings().materialize_active_profile())
-        settings = Settings.model_validate(raw)
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            log.warning("Invalid settings in %s: %s — using defaults", config_path, exc)
+            return _apply_env_overrides(Settings().materialize_active_profile())
         if "profiles" not in raw or "active_profile" not in raw:
             profile_name, profile = _profile_from_flat_settings(settings)
             merged_profiles = settings.merged_profiles()
@@ -1008,6 +1049,11 @@ def save_settings(settings: Settings, config_path: Path | None = None) -> None:
         config_path = get_config_file_path()
 
     settings = settings.sync_active_profile_from_flat_fields().materialize_active_profile()
+    if settings.api_key and settings.api_key == settings._env_api_key:
+        # The live key was stamped from the environment. Persisting it would
+        # write a secret the user never put in settings.json and would shadow
+        # the environment variable from then on — keep the file's own value.
+        settings = settings.model_copy(update={"api_key": settings._file_api_key or ""})
     lock_path = config_path.with_suffix(config_path.suffix + ".lock")
     with exclusive_file_lock(lock_path):
         atomic_write_text(

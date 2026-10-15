@@ -152,3 +152,40 @@ class TestCorruptData:
             lambda: bad_file,
         )
         assert load_cron_jobs() == []
+
+    def test_corrupt_registry_is_logged_with_its_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Silently returning [] hid every 'my cron jobs vanished' report:
+        the warning must name the file and the reason."""
+        bad_file = tmp_path / "data" / "cron_jobs.json"
+        bad_file.parent.mkdir(parents=True, exist_ok=True)
+        bad_file.write_text("{not valid json", encoding="utf-8")
+        monkeypatch.setattr(
+            "iterate_harness.services.cron.get_cron_registry_path",
+            lambda: bad_file,
+        )
+
+        with caplog.at_level("WARNING", logger="iterate_harness.services.cron"):
+            assert load_cron_jobs() == []
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(str(bad_file) in message for message in messages)
+
+    def test_non_list_registry_is_logged_as_a_type_mismatch(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        bad_file = tmp_path / "data" / "cron_jobs.json"
+        bad_file.parent.mkdir(parents=True, exist_ok=True)
+        bad_file.write_text(json.dumps({"jobs": []}), encoding="utf-8")
+        monkeypatch.setattr(
+            "iterate_harness.services.cron.get_cron_registry_path",
+            lambda: bad_file,
+        )
+
+        with caplog.at_level("WARNING", logger="iterate_harness.services.cron"):
+            assert load_cron_jobs() == []
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(str(bad_file) in message for message in messages)
+        assert any("expected a list" in message for message in messages)

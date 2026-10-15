@@ -1,0 +1,13 @@
+{
+  "comment": "Cross-implementation anchor for the decision log chain (kernel/src/decision-log.ts). A line's bytes ARE canonicalJson(entry) — keys sorted by UTF-16 code unit, no insignificant whitespace — so prevEntryHash of line i+1 equals sha256_hex of line i, and genesis carries an empty prevEntryHash. Any language that can sort keys and sha256 can verify this file; the kernel test recomputes the hashes with an external tool (shasum/openssl), so a TypeScript-only chain cannot pass silently.",
+  "lines": [
+    "{\"createdAt\":\"2026-09-25T04:00:00.000Z\",\"entryId\":\"dl_01K2ABCDEFGHJKMNPQRSTVWXZ0\",\"outcome\":\"pass\",\"prevEntryHash\":\"\",\"sequence\":0,\"summary\":\"attach Finder; window matched the attached pid\"}",
+    "{\"createdAt\":\"2026-09-25T04:00:01.000Z\",\"entryId\":\"dl_01K2ABCDEFGHJKMNPQRSTVWXZ1\",\"operationId\":\"op_01K2ABCDEFGHJKMNPQRSTVWXZ9\",\"outcome\":\"fail\",\"prevEntryHash\":\"f7c3b4198c27ad0e5947efd2d50dedced3e02f0171411fbf6c67f07e22d13d4d\",\"sequence\":1,\"summary\":\"act set-value refused: element not focusable\"}",
+    "{\"createdAt\":\"2026-09-25T04:00:02.000Z\",\"entryId\":\"dl_01K2ABCDEFGHJKMNPQRSTVWXZ2\",\"outcome\":\"inconclusive\",\"prevEntryHash\":\"db250a8182952a7ceb4240bcfcc48f639d452514e6ee9e8401111a57127f69c3\",\"sequence\":2,\"summary\":\"observe timed out while the app was modal\"}"
+  ],
+  "hashes": [
+    "f7c3b4198c27ad0e5947efd2d50dedced3e02f0171411fbf6c67f07e22d13d4d",
+    "db250a8182952a7ceb4240bcfcc48f639d452514e6ee9e8401111a57127f69c3",
+    "7b89c488c39f680343eec27cee805092140a43ef50e15f25a81133c1f154076b"
+  ]
+}

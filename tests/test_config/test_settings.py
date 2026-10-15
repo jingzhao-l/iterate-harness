@@ -892,3 +892,128 @@ class TestOpenAIProvider:
         assert materialized.model == "gpt-5.4"
         assert materialized.provider == "openai"
         assert materialized.api_format == "openai"
+
+
+class TestEnvApiKeySelection:
+    """The env key stamped onto ``api_key`` must match the active format."""
+
+    def test_openai_format_prefers_openai_key(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anthropic")
+        monkeypatch.setenv("ITERATE_API_FORMAT", "openai")
+        assert _apply_env_overrides(Settings()).api_key == "sk-openai"
+
+    def test_anthropic_format_prefers_anthropic_key(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anthropic")
+        monkeypatch.setenv("ITERATE_API_FORMAT", "anthropic")
+        assert _apply_env_overrides(Settings()).api_key == "sk-anthropic"
+
+    def test_openai_format_falls_back_to_anthropic_key(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anthropic")
+        monkeypatch.setenv("ITERATE_API_FORMAT", "openai")
+        assert _apply_env_overrides(Settings()).api_key == "sk-anthropic"
+
+    def test_settings_api_format_decides_when_env_format_absent(self, monkeypatch):
+        monkeypatch.delenv("ITERATE_API_FORMAT", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anthropic")
+        updated = _apply_env_overrides(Settings(api_format="openai"))
+        assert updated.api_key == "sk-openai"
+
+    def test_no_env_key_leaves_api_key_untouched(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        assert _apply_env_overrides(Settings(api_key="sk-file")).api_key == "sk-file"
+
+
+def _clear_key_env(monkeypatch) -> None:
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ITERATE_API_FORMAT"):
+        monkeypatch.delenv(name, raising=False)
+
+
+class TestEnvKeyIsNotPersisted:
+    """An env-provided key must never be written into settings.json."""
+
+    def test_file_value_survives_a_save_after_env_override(
+        self, tmp_path: Path, monkeypatch
+    ):
+        _clear_key_env(monkeypatch)
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"api_key": "sk-from-file"}), encoding="utf-8")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
+
+        loaded = load_settings(path)
+        assert loaded.api_key == "sk-from-env"
+
+        save_settings(loaded, path)
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        assert raw["api_key"] == "sk-from-file"
+        monkeypatch.delenv("ANTHROPIC_API_KEY")
+        assert load_settings(path).api_key == "sk-from-file"
+
+    def test_env_key_is_not_written_when_file_has_none(
+        self, tmp_path: Path, monkeypatch
+    ):
+        _clear_key_env(monkeypatch)
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"model": "from-file"}), encoding="utf-8")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
+
+        loaded = load_settings(path)
+        assert loaded.api_key == "sk-from-env"
+
+        save_settings(loaded, path)
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        assert raw.get("api_key", "") == ""
+        monkeypatch.delenv("ANTHROPIC_API_KEY")
+        assert load_settings(path).api_key == ""
+
+    def test_explicit_file_key_is_still_saved(self, tmp_path: Path, monkeypatch):
+        _clear_key_env(monkeypatch)
+        path = tmp_path / "settings.json"
+        save_settings(Settings(api_key="sk-explicit"), path)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        assert raw["api_key"] == "sk-explicit"
+
+
+class TestInvalidSettingsFile:
+    """A bad settings file degrades to defaults instead of crashing."""
+
+    def test_wrong_value_types_fall_back_to_defaults(
+        self, tmp_path: Path, monkeypatch, caplog
+    ):
+        _clear_key_env(monkeypatch)
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"max_tokens": "not-a-number"}), encoding="utf-8")
+
+        with caplog.at_level("WARNING", logger="iterate_harness.config.settings"):
+            loaded = load_settings(path)
+
+        assert loaded.max_tokens == Settings().max_tokens
+        assert any("Invalid settings" in record.getMessage() for record in caplog.records)
+
+    def test_non_mapping_root_falls_back_to_defaults(self, tmp_path: Path, monkeypatch):
+        _clear_key_env(monkeypatch)
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps(["not", "a", "mapping"]), encoding="utf-8")
+
+        loaded = load_settings(path)
+
+        assert loaded.max_tokens == Settings().max_tokens
+
+    def test_malformed_json_falls_back_to_defaults(
+        self, tmp_path: Path, monkeypatch, caplog
+    ):
+        _clear_key_env(monkeypatch)
+        path = tmp_path / "settings.json"
+        path.write_text("{ not json ", encoding="utf-8")
+
+        with caplog.at_level("WARNING", logger="iterate_harness.config.settings"):
+            loaded = load_settings(path)
+
+        assert loaded.max_tokens == Settings().max_tokens
+        assert any("Invalid settings" in record.getMessage() for record in caplog.records)

@@ -122,3 +122,36 @@ def test_store_notifies_listeners_and_returns_updated_state():
     unsubscribe()
     store.set(theme="dark")
     assert store.get().theme == "dark"
+
+
+def test_listener_failure_does_not_break_the_update(caplog):
+    """One bad subscriber used to abort the notification loop and surface as
+    an error inside whatever state mutation triggered it."""
+    store = AppStateStore(_make_state())
+    seen: list[str] = []
+
+    def _explodes(state: AppState) -> None:
+        raise RuntimeError("listener boom")
+
+    store.subscribe(_explodes)
+    store.subscribe(lambda state: seen.append(state.theme))
+
+    with caplog.at_level("ERROR", logger="iterate_harness.state.store"):
+        updated = store.set(theme="light")
+
+    assert updated is store.get()
+    assert store.get().theme == "light"
+    assert seen == ["light"]  # the healthy listener still ran
+    assert any("listener" in record.getMessage() for record in caplog.records)
+
+
+def test_set_succeeds_when_every_listener_fails():
+    store = AppStateStore(_make_state())
+
+    def _explodes(state: AppState) -> None:
+        raise RuntimeError("listener boom")
+
+    store.subscribe(_explodes)
+    store.subscribe(_explodes)
+
+    assert store.set(theme="dark").theme == "dark"

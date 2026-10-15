@@ -99,6 +99,11 @@ def _default_iterate_policy(cwd: Path) -> IterateLoopPolicy | None:
             },
         )
     except Exception:  # noqa: BLE001 - policy wiring must never break the engine
+        # The fail-open stance is deliberate, but the silence is not: if the
+        # iterate loop silently turns off (malformed project config,
+        # unreadable YAML), the session still "succeeds" while the review
+        # loop the user asked for never runs. Log the cause loudly.
+        log.warning("iterate loop policy wiring failed; review loop disabled", exc_info=True)
         return None
 
 
@@ -113,6 +118,7 @@ def _default_reasoning_effort(cwd: Path) -> str | None:
 
         return project_config(cwd).config.reasoning_effort
     except Exception:  # noqa: BLE001 - config wiring must never break the engine
+        log.warning("reasoning effort wiring failed; using provider default", exc_info=True)
         return None
 
 
@@ -154,7 +160,7 @@ class QueryEngine:
         self._ask_user_prompt = ask_user_prompt
         self._ask_user_select = ask_user_select
         self._hook_executor = hook_executor
-        self._tool_metadata = tool_metadata or {}
+        self._tool_metadata = tool_metadata if tool_metadata is not None else {}
         self._messages: list[ConversationMessage] = []
         self._cost_tracker = CostTracker()
         # Dual-mode architecture (design §20.2): task_mode decides whether the
@@ -410,15 +416,31 @@ class QueryEngine:
         )
         if user_message.text.strip() and not self._tool_metadata.pop("_suppress_next_user_goal", False):
             remember_user_goal(self._tool_metadata, user_message.text)
-        self._messages.append(user_message)
         if self._hook_executor is not None:
-            await self._hook_executor.execute(
+            # USER_PROMPT_SUBMIT hooks run BEFORE the message joins history:
+            # a blocked prompt must be rejected outright (reason surfaced to
+            # the user/assistant), not appended and then ignored — the
+            # aggregated ``blocked`` flag was previously discarded here.
+            hook_result = await self._hook_executor.execute(
                 HookEvent.USER_PROMPT_SUBMIT,
                 {
                     "event": HookEvent.USER_PROMPT_SUBMIT.value,
                     "prompt": user_message.text,
                 },
             )
+            if hook_result.blocked:
+                reason = hook_result.reason or "prompt rejected by user_prompt_submit hook"
+                log.warning("user prompt blocked by hook: %s", reason)
+                rejection = ConversationMessage(
+                    role="assistant",
+                    content=[TextBlock(text=f"[prompt blocked by hook] {reason}")],
+                )
+                yield AssistantTurnComplete(
+                    message=rejection,
+                    usage=UsageSnapshot(),
+                )
+                return
+        self._messages.append(user_message)
         context = QueryContext(
             api_client=self._api_client,
             tool_registry=self._tool_registry,

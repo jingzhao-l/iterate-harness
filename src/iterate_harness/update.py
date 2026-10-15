@@ -87,7 +87,6 @@ NPM_TIMEOUT_SECONDS = 300
 PIP_TIMEOUT_SECONDS = 600
 
 GIT_PULL_MAX_ATTEMPTS = 1
-MIN_VERSION_PARTS = 3
 VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+")
 
 
@@ -136,24 +135,92 @@ def normalize_version(raw: object) -> Optional[str]:
     return match.group(0) if match else None
 
 
-def _version_tuple(version: str) -> tuple[int, int, int]:
-    numbers = [int(part) for part in re.findall(r"\d+", version) if part]
-    while len(numbers) < MIN_VERSION_PARTS:
-        numbers.append(0)
-    return (numbers[0], numbers[1], numbers[2])
+#: Ranking of the numeric core vs. its pre-release suffix: a released
+#: ``1.2.3`` is newer than any ``1.2.3-<label>``.
+_RELEASE_RANK = 1
+_PRERELEASE_RANK = 0
+_RELEASE_KEY: tuple[int, str, int] = (0, "", 0)
+
+#: Pre-release label ranking (PEP 440-ish ordering, oldest first).
+_PRERELEASE_LABEL_RANKS: dict[str, int] = {
+    "dev": -2,
+    "pre": -1,
+    "preview": -1,
+    "a": 0,
+    "alpha": 0,
+    "b": 1,
+    "beta": 1,
+    "c": 2,
+    "rc": 2,
+}
+
+#: Unknown labels rank above every known one so an unrecognized suffix never
+#: silently compares equal to a release of the same core.
+_PRERELEASE_UNKNOWN_RANK = 3
+
+_VERSION_CORE_PATTERN = re.compile(r"(\d+(?:\.\d+)*)")
+_PRERELEASE_PATTERN = re.compile(r"([A-Za-z]+)(.*)")
+
+
+def _prerelease_key(suffix: str) -> tuple[int, str, int] | None:
+    """Parse the text after the numeric core into a comparable key.
+
+    Handles ``-rc1``, ``rc1``, ``.beta.2``, ``-dev`` … Returns ``None`` for
+    an empty suffix (a plain release).
+    """
+    tail = suffix.lstrip("-_.+ ")
+    if not tail:
+        return None
+    match = _PRERELEASE_PATTERN.match(tail)
+    if match is None:
+        return _PRERELEASE_UNKNOWN_RANK, tail.lower(), 0
+    label = match.group(1).lower()
+    number_match = re.search(r"\d+", match.group(2))
+    number = int(number_match.group(0)) if number_match else 0
+    rank = _PRERELEASE_LABEL_RANKS.get(label, _PRERELEASE_UNKNOWN_RANK)
+    return rank, label, number
+
+
+def _version_tuple(version: str) -> tuple[tuple[int, ...], int, tuple[int, str, int]]:
+    """Split *version* into ``(numeric core, release rank, pre-release key)``.
+
+    The old implementation took the first three integers of the string, so
+    ``1.2.3-beta`` compared *equal* to ``1.2.3`` and a pre-release could be
+    reported as "already up to date" against its own release.
+    """
+    text = str(version).strip()
+    if text[:1] in {"v", "V"}:
+        text = text[1:]
+    text = text.split("+", 1)[0]  # drop build metadata (+build)
+    match = _VERSION_CORE_PATTERN.search(text)
+    if match is None:
+        return (), _PRERELEASE_RANK, _prerelease_key(text) or _RELEASE_KEY
+    numbers = tuple(int(part) for part in match.group(1).split("."))
+    key = _prerelease_key(text[match.end():])
+    if key is None:
+        return numbers, _RELEASE_RANK, _RELEASE_KEY
+    return numbers, _PRERELEASE_RANK, key
 
 
 def compare_versions(current: str, latest: str) -> int:
     """Return ``-1``/``0``/``1`` comparing ``latest`` against ``current``.
 
-    A positive result means ``latest`` is newer than ``current``.
+    A positive result means ``latest`` is newer than ``current``. Numeric
+    cores of different lengths are compared zero-padded (``1.2`` == ``1.2.0``),
+    then the release/pre-release rank, then the pre-release label itself.
     """
     current_tuple = _version_tuple(current)
     latest_tuple = _version_tuple(latest)
-    if latest_tuple > current_tuple:
-        return 1
-    if latest_tuple < current_tuple:
-        return -1
+
+    length = max(len(current_tuple[0]), len(latest_tuple[0]))
+    current_numbers = current_tuple[0] + (0,) * (length - len(current_tuple[0]))
+    latest_numbers = latest_tuple[0] + (0,) * (length - len(latest_tuple[0]))
+    if current_numbers != latest_numbers:
+        return 1 if latest_numbers > current_numbers else -1
+    if current_tuple[1] != latest_tuple[1]:
+        return 1 if latest_tuple[1] > current_tuple[1] else -1
+    if current_tuple[2] != latest_tuple[2]:
+        return 1 if latest_tuple[2] > current_tuple[2] else -1
     return 0
 
 
@@ -267,7 +334,12 @@ def _fetch_from_raw_file(get_fn: _GetFn, timeout: float) -> Optional[str]:
         return None
     if response.status_code != 200:
         return None
-    return normalize_version(re.search(r"__version__\s*=\s*[\"']([^\"']+)[\"']", response.text))
+    match = re.search(r"__version__\s*=\s*[\"']([^\"']+)[\"']", response.text)
+    if match is None:
+        return None
+    # Passing the Match object itself made ``str(repr)`` the input, so the
+    # digits in the repr ("span=(12, 25)") could be read as the version.
+    return normalize_version(match.group(1))
 
 
 def fetch_latest_version(get_fn: Optional[_GetFn] = None, timeout: float = HTTP_TIMEOUT_SECONDS) -> Optional[str]:
@@ -556,8 +628,20 @@ def perform_update(
     if not result.success:
         return result
     verified = verify_installed_version(runner=runner)
-    if verified and compare_versions(current, verified) > 0:
-        result.message = f"{result.message} (now running {verified})"
+    if verified is None:
+        result.success = False
+        result.message = (
+            f"{result.message} (could not verify the installed version after the update)"
+        )
+        return result
+    if compare_versions(current, verified) <= 0:
+        # The installer reported success but the interpreter still runs the
+        # old code — reporting success would tell the user to restart into
+        # a version that was never installed.
+        result.success = False
+        result.message = f"{result.message} (still running {verified}, expected {latest})"
+        return result
+    result.message = f"{result.message} (now running {verified})"
     return result
 
 

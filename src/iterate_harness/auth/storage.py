@@ -35,7 +35,7 @@ import logging
 import socket
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from iterate_harness.config.paths import get_config_dir
 from iterate_harness.utils.file_lock import exclusive_file_lock
@@ -219,22 +219,56 @@ def _creds_lock_path() -> Path:
     return _creds_path().with_suffix(".json.lock")
 
 
-def _load_creds_file() -> dict[str, Any]:
+def _load_creds_file() -> dict[str, dict[str, str]]:
+    """Read the file backend, defensively.
+
+    The on-disk file is untrusted input (it may have been hand-edited or
+    truncated by another tool): a non-mapping root, a non-mapping provider
+    entry, or a non-string credential value would otherwise crash the
+    encrypt-on-save path with ``AttributeError`` deep inside
+    :func:`_save_creds_file`. Such entries are dropped with a warning.
+    """
     path = _creds_path()
     if not path.exists():
         return {}
     try:
-        return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         log.warning("Failed to read credentials file: %s", exc)
         return {}
+    if not isinstance(raw, dict):
+        log.warning("Credentials file %s has a non-mapping root — ignoring it", path)
+        return {}
+    cleaned: dict[str, dict[str, str]] = {}
+    for provider, credentials in raw.items():
+        if not isinstance(credentials, dict):
+            log.warning(
+                "Dropping malformed credentials entry for %r in %s (expected a mapping)",
+                provider,
+                path,
+            )
+            continue
+        values = {str(key): value for key, value in credentials.items() if isinstance(value, str)}
+        dropped = len(credentials) - len(values)
+        if dropped:
+            log.warning(
+                "Dropping %d non-string credential value(s) for %r in %s",
+                dropped,
+                provider,
+                path,
+            )
+        cleaned[str(provider)] = values
+    return cleaned
 
 
 def _save_creds_file(data: dict[str, Any]) -> None:
     """Persist *data*, encrypting every not-yet-encrypted string value."""
     encrypted = {
-        provider: {key: _encrypt_if_needed(value) for key, value in credentials.items()}
+        provider: {
+            key: _encrypt_if_needed(value) for key, value in credentials.items() if isinstance(value, str)
+        }
         for provider, credentials in data.items()
+        if isinstance(credentials, dict)
     }
     path = _creds_path()
     atomic_write_text(
@@ -264,9 +298,12 @@ def _migrate_legacy_credentials() -> None:
         if not data:
             return
         has_legacy = any(
-            isinstance(value, str) and not value.startswith(_FERNET_MARKER)
+            isinstance(credentials, dict)
+            and any(
+                isinstance(value, str) and not value.startswith(_FERNET_MARKER)
+                for value in credentials.values()
+            )
             for credentials in data.values()
-            for value in credentials.values()
         )
         if has_legacy:
             _save_creds_file(data)
@@ -367,24 +404,44 @@ def load_credential(provider: str, key: str, *, use_keyring: bool | None = None)
     return _decrypt_value(stored)
 
 
+#: Credential keys the harness may have written for a provider. Clearing a
+#: provider must delete all of them from the keyring, not just the three that
+#: used to be hard-coded — otherwise a ``refresh_token``/``pat``/… survives in
+#: the keyring after ``ih auth clear`` reports success.
+_KNOWN_CREDENTIAL_KEYS: tuple[str, ...] = (
+    "api_key",
+    "token",
+    "github_token",
+    "refresh_token",
+    "pat",
+    "org_token",
+    "access_token",
+    "client_secret",
+    "password",
+)
+
+
 def clear_provider_credentials(provider: str, *, use_keyring: bool | None = None) -> None:
     """Remove all stored credentials for *provider*."""
     if use_keyring is None:
         use_keyring = _keyring_available()
 
+    # The file store may hold keys this code has never heard of (older
+    # releases, other tools writing the same file): union both sources.
+    file_keys = list(_load_creds_file().get(provider, {}))
+    candidate_keys = dict.fromkeys([*_KNOWN_CREDENTIAL_KEYS, *file_keys])
+
     if use_keyring:
         try:
             import keyring
-            from keyring.errors import PasswordDeleteError
-
-            # Try common keys; silently ignore missing ones.
-            for key in ("api_key", "token", "github_token"):
-                try:
-                    keyring.delete_password(_KEYRING_SERVICE, _keyring_key(provider, key))
-                except (PasswordDeleteError, Exception) as exc:  # noqa: BLE001 - best-effort cleanup
-                    log.debug("Could not delete keyring password for %s/%s: %s", provider, key, exc)
         except ImportError:
             log.debug("keyring not installed; skipping keyring credential deletion")
+        else:
+            for key in candidate_keys:
+                try:
+                    keyring.delete_password(_KEYRING_SERVICE, _keyring_key(provider, key))
+                except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                    log.debug("Could not delete keyring password for %s/%s: %s", provider, key, exc)
 
     with exclusive_file_lock(_creds_lock_path()):
         data = _load_creds_file()

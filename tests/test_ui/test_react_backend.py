@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import io
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -828,3 +829,68 @@ async def test_concurrent_ask_permission_are_serialised():
     # distinct request IDs must have been emitted.
     assert len(emitted_order) == 2
     assert emitted_order[0] != emitted_order[1]
+
+
+@pytest.mark.asyncio
+async def test_restored_transcript_is_replayed_to_frontend():
+    """A restored session must be reflected in the UI: the backend host has to
+    replay the restored conversation as transcript items (state restored but
+    not applied to the UI was the old behavior)."""
+    restored = [
+        ConversationMessage(role="user", content=[TextBlock(text="restore my question")]),
+        ConversationMessage(role="assistant", content=[TextBlock(text="restored answer")]),
+    ]
+    host = ReactBackendHost(
+        BackendHostConfig(api_client=StaticApiClient("unused"), restore_messages=[{}])
+    )
+    host._bundle = SimpleNamespace(engine=SimpleNamespace(messages=restored))
+    events = []
+
+    async def _emit(event):
+        events.append(event)
+
+    host._emit = _emit  # type: ignore[method-assign]
+    await host._replay_restored_transcript()
+
+    items = [event.item for event in events if event.type == "transcript_item" and event.item]
+    assert [(item.role, item.text) for item in items] == [
+        ("user", "restore my question"),
+        ("assistant", "restored answer"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_replay_without_restore_messages():
+    host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("unused")))
+    host._bundle = SimpleNamespace(
+        engine=SimpleNamespace(
+            messages=[ConversationMessage(role="user", content=[TextBlock(text="hi")])]
+        )
+    )
+    emitted = []
+
+    async def _emit(event):
+        emitted.append(event)
+
+    host._emit = _emit  # type: ignore[method-assign]
+    await host._replay_restored_transcript()
+    assert emitted == []
+
+
+@pytest.mark.asyncio
+async def test_run_backend_host_forwards_append_system_prompt(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _fake_run(self):
+        captured["append_system_prompt"] = self._config.append_system_prompt
+        return 0
+
+    monkeypatch.setattr("iterate_harness.ui.backend_host.ReactBackendHost.run", _fake_run)
+
+    result = await run_backend_host(
+        api_client=StaticApiClient("unused"),
+        append_system_prompt="also do X",
+    )
+
+    assert result == 0
+    assert captured["append_system_prompt"] == "also do X"

@@ -186,3 +186,150 @@ class TestCorruptInput:
 
     def test_empty_project_has_no_lease(self, tmp_path: Path) -> None:
         assert read_lease(tmp_path / "not-a-project") is None
+
+
+# ---------------------------------------------------------------------------
+# Claim races and half-written payloads (regression)
+# ---------------------------------------------------------------------------
+
+_RACE_SCRIPT = """
+import sys, time
+from pathlib import Path
+
+from iterate_harness.iterate.run_lock import RunLeaseConflictError, claim_run_lease
+
+project, go_file, ready_file, result_file = sys.argv[1:5]
+hold = float(sys.argv[5])
+
+Path(ready_file).write_text("ready", encoding="utf-8")
+while not Path(go_file).exists():
+    time.sleep(0.01)
+try:
+    with claim_run_lease(project, role="console"):
+        Path(result_file).write_text("held", encoding="utf-8")
+        time.sleep(hold)
+except RunLeaseConflictError:
+    Path(result_file).write_text("conflict", encoding="utf-8")
+"""
+
+
+class TestClaimRace:
+    def test_two_processes_cannot_hold_the_lease_at_once(self, project: Path) -> None:
+        """Two claimants racing on an empty project: exactly one wins.
+
+        The loser must see a *complete* lease (the payload lands atomically
+        with the file) and raise a conflict instead of silently discarding
+        the winner's not-yet-parsed file and taking over.
+        """
+        import subprocess
+        import sys
+
+        barrier = project / ".iterate"
+        go_file = barrier / "go"
+        procs = []
+        results = []
+        for index in range(2):
+            ready = barrier / f"ready-{index}"
+            result = barrier / f"result-{index}"
+            results.append(result)
+            procs.append(
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        _RACE_SCRIPT,
+                        str(project),
+                        str(go_file),
+                        str(ready),
+                        str(result),
+                        "0.5",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            )
+
+        deadline = time.time() + 30.0
+        while not all((barrier / f"ready-{i}").exists() for i in range(2)):
+            assert time.time() < deadline, "race subprocesses never became ready"
+            time.sleep(0.02)
+        go_file.write_text("go", encoding="utf-8")
+
+        for proc in procs:
+            _out, err = proc.communicate(timeout=60)
+            assert proc.returncode == 0, err
+
+        assert all(path.exists() for path in results), "a racer wrote no outcome"
+        outcomes = sorted(path.read_text(encoding="utf-8") for path in results)
+        assert outcomes == ["conflict", "held"], outcomes
+        # The winner released on exit; nothing is left behind.
+        assert read_lease(project) is None
+        assert not lease_path(project).exists()
+
+    def test_in_flight_empty_lease_file_is_not_stolen(
+        self, project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fresh unparseable lease file belongs to an in-flight claim:
+        wait for it, then conflict — never discard it and take over."""
+        monkeypatch.setattr(
+            "iterate_harness.iterate.run_lock._IN_FLIGHT_WAIT_SECONDS", 0.2
+        )
+        path = lease_path(project)
+        path.write_text("", encoding="utf-8")
+
+        with pytest.raises(RunLeaseConflictError):
+            with claim_run_lease(project, role=ROLE_CONSOLE):
+                pass  # pragma: no cover
+
+        assert path.exists()
+        assert path.read_text(encoding="utf-8") == ""
+
+    def test_stale_unparseable_lease_file_is_reclaimed(self, project: Path) -> None:
+        """Garbage old enough to be nobody's in-flight write is reclaimed."""
+        path = lease_path(project)
+        path.write_text("", encoding="utf-8")
+        stale = time.time() - 30
+        os.utime(path, (stale, stale))
+
+        with claim_run_lease(project, role=ROLE_CONSOLE) as lease:
+            assert lease.pid == os.getpid()
+            stored = read_lease(project)
+            assert stored is not None
+            assert stored.has_holder is True
+        assert read_lease(project) is None
+
+
+class TestReleaseOwnership:
+    def test_release_keeps_replacement_with_same_pid_but_other_holder(
+        self, project: Path
+    ) -> None:
+        """Release keys off the holder identity, not just pid+host: a lease
+        re-taken by a different holder must survive our exit."""
+        path = lease_path(project)
+        with claim_run_lease(project, role=ROLE_WEBUI) as lease:
+            taken_over = {
+                "holder": f"console:{lease.pid}@{lease.host}#taken-over",
+                "role": ROLE_CONSOLE,
+                "pid": lease.pid,
+                "host": lease.host,
+                "acquired_at": time.time(),
+            }
+            path.write_text(json.dumps(taken_over), encoding="utf-8")
+
+        stored = read_lease(project)
+        assert stored is not None
+        assert stored.holder == taken_over["holder"]
+
+    def test_release_discards_holderless_payload_of_this_process(
+        self, project: Path
+    ) -> None:
+        """A payload without a ``holder`` identity still falls back to
+        pid+host so our own file is cleaned up on release."""
+        path = lease_path(project)
+        with claim_run_lease(project, role=ROLE_CONSOLE):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            del payload["holder"]
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+        assert read_lease(project) is None

@@ -5,10 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import time
 
 import pytest
 
-from iterate_harness.tasks.manager import BackgroundTaskManager, _encode_task_worker_payload
+from iterate_harness.tasks.manager import (
+    BackgroundTaskManager,
+    _encode_task_worker_payload,
+    _MAX_TERMINAL_RECORDS,
+)
+from iterate_harness.tasks.types import TaskRecord
 
 
 @pytest.mark.asyncio
@@ -360,3 +366,74 @@ async def test_mark_in_process_terminal_fires_listener_and_keeps_killed(
     stopped = manager.get_task("in_process_stopped")
     assert stopped is not None
     assert stopped.status == "killed"
+
+
+@pytest.mark.asyncio
+async def test_stop_task_in_process_abort_failure_reraises_and_preserves_record(
+    tmp_path: Path, monkeypatch
+):
+    """Regression test: when the in-process abort raises, ``stop_task`` must
+    surface the failure instead of claiming success — and the record (still
+    running) plus the abort mapping must survive so a retry can settle it."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    manager = BackgroundTaskManager()
+
+    async def _failing_abort() -> None:
+        raise RuntimeError("backend refused to stop")
+
+    manager.register_in_process_task(
+        "in_process_fail",
+        task_type="in_process_teammate",
+        description="teammate",
+        cwd=str(tmp_path),
+        agent_id="worker@test",
+        team="test",
+        abort=_failing_abort,
+    )
+
+    with pytest.raises(RuntimeError, match="backend refused to stop"):
+        await manager.stop_task("in_process_fail")
+
+    record = manager.get_task("in_process_fail")
+    assert record is not None
+    # Not finalized as killed: the stop never happened.
+    assert record.status == "running"
+    assert record.ended_at is None
+    # Abort mapping preserved so a retry can still settle the task.
+    assert "in_process_fail" in manager._in_process_aborts  # type: ignore[attr-defined]
+
+
+def test_evict_old_terminal_records_pops_generations(tmp_path: Path, monkeypatch):
+    """Regression test: evicting a terminal record must also drop its
+    generation counter, otherwise ``_generations`` grows once per spawned
+    task for the whole session even after the record is gone."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    manager = BackgroundTaskManager()
+
+    excess = 5
+    total = _MAX_TERMINAL_RECORDS + excess
+    now = time.time()
+    for index in range(total):
+        task_id = f"task_{index}"
+        record = TaskRecord(
+            id=task_id,
+            type="local_bash",
+            status="completed",
+            description="done",
+            cwd=str(tmp_path),
+            output_file=tmp_path / f"{task_id}.log",
+            created_at=now + index,
+        )
+        record.ended_at = now + index
+        manager._tasks[task_id] = record  # type: ignore[attr-defined]
+        manager._generations[task_id] = 1  # type: ignore[attr-defined]
+
+    manager._evict_old_terminal_records()  # type: ignore[attr-defined]
+
+    # Oldest ``excess`` records (and their generations) evicted; newest kept.
+    assert len(manager._tasks) == _MAX_TERMINAL_RECORDS  # type: ignore[attr-defined]
+    assert len(manager._generations) == _MAX_TERMINAL_RECORDS  # type: ignore[attr-defined]
+    assert "task_0" not in manager._tasks  # type: ignore[attr-defined]
+    assert "task_0" not in manager._generations  # type: ignore[attr-defined]
+    assert f"task_{total - 1}" in manager._tasks  # type: ignore[attr-defined]
+    assert f"task_{total - 1}" in manager._generations  # type: ignore[attr-defined]

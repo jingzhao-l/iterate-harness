@@ -1023,6 +1023,15 @@ def _run_headless(kickoff: str, branch: str | None = None) -> None:
     except RunLeaseConflictError as exc:
         print(str(exc), file=sys.stderr)
         raise typer.Exit(1) from exc
+    except typer.Exit:
+        raise
+    except SystemExit:
+        raise
+    except Exception as exc:
+        # A failed print-mode turn must fail the run (non-zero exit) with a
+        # concise message instead of a traceback the caller has to parse.
+        print(f"iterate run failed: {exc}", file=sys.stderr)
+        raise typer.Exit(1) from exc
     print(
         "\nRun finished. "
         "View the report with `ih iterate report --html` "
@@ -1069,6 +1078,10 @@ def iterate_onboard(
     """Full onboarding: model-driven project scan -> ITERATE.md + config + fingerprints."""
     from iterate_harness.iterate.onboard_cmd import run_onboard
 
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    yes = _typer_flag(yes)
+    goal = _typer_str(goal)
+    no_ai = _typer_flag(no_ai)
     raise typer.Exit(run_onboard(yes=yes, goal=goal, no_ai=no_ai))
 
 
@@ -1089,6 +1102,10 @@ def iterate_reonboard(
     """Backup artifacts, re-run the full onboarding, preserve the user region verbatim."""
     from iterate_harness.iterate.onboard_cmd import run_reonboard
 
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    yes = _typer_flag(yes)
+    goal = _typer_str(goal)
+    no_ai = _typer_flag(no_ai)
     raise typer.Exit(run_reonboard(yes=yes, goal=goal, no_ai=no_ai))
 
 
@@ -1151,6 +1168,11 @@ def iterate_init(
 ) -> None:
     """Detection-driven config wizard: probe the project, suggest, write."""
     from iterate_harness.iterate import init_wizard
+
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    yes = _typer_flag(yes)
+    force = _typer_flag(force)
+    goal = _typer_str(goal)
 
     cwd = Path.cwd()
     config_path = init_wizard.existing_config_path(cwd)
@@ -1229,6 +1251,14 @@ def iterate_review(
     from iterate_harness.iterate import prompts as iterate_prompts
     from iterate_harness.iterate.config_loader import load_effective_config
 
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    rounds = _typer_int(rounds)
+    changed = _typer_flag(changed)
+    ref = _typer_str(ref)
+    clean_ok = _typer_flag(clean_ok)
+    branch = _typer_str(branch)
+    template = _typer_str(template)
+
     prev_cwd = _ensure_review_branch(branch) if branch else None
     try:
         effective_goal = load_effective_config(str(Path.cwd())).config.goal
@@ -1267,6 +1297,14 @@ def iterate_run(
     from iterate_harness.iterate import prompts as iterate_prompts
     from iterate_harness.iterate.config_loader import load_effective_config
 
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    rounds = _typer_int(rounds)
+    changed = _typer_flag(changed)
+    ref = _typer_str(ref)
+    clean_ok = _typer_flag(clean_ok)
+    branch = _typer_str(branch)
+    template = _typer_str(template)
+
     prev_cwd = _ensure_review_branch(branch) if branch else None
     try:
         effective_goal = load_effective_config(str(Path.cwd())).config.goal
@@ -1294,6 +1332,13 @@ def iterate_batch_review(
 
     from iterate_harness.iterate import batch as iterate_batch
 
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    ref = _typer_str(ref)
+    rounds = _typer_int(rounds)
+    full = _typer_flag(full)
+    mode = _typer_str(mode)
+    as_json = _typer_flag(as_json)
+
     if mode not in ("dry-run", "normal"):
         raise typer.BadParameter("mode must be dry-run|normal")
     records = asyncio.run(
@@ -1319,6 +1364,9 @@ def iterate_resume(
     )
     from iterate_harness.ui.app import run_repl
 
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    session_id = _typer_str(session_id)
+
     cwd = str(Path.cwd())
     session_data = None
     if session_id:
@@ -1328,19 +1376,39 @@ def iterate_resume(
             print("Run `ih iterate sessions` to list available sessions.", file=sys.stderr)
             raise typer.Exit(1)
     else:
-        snapshots = list_session_snapshots(cwd, limit=1)
-        session_data = load_session_snapshot(cwd) or (snapshots[0] if snapshots else None)
+        session_data = load_session_snapshot(cwd)
+        if session_data is None:
+            # ``latest.json`` may be missing while named session files exist;
+            # fall back to the newest one — but load its FULL payload, not the
+            # summary row from the listing (resuming a summary fabricates a
+            # session with no history).
+            snapshots = list_session_snapshots(cwd, limit=1)
+            if snapshots:
+                session_data = load_session_by_id(cwd, str(snapshots[0].get("session_id") or ""))
         if session_data is None:
             print("No previous session found in this directory.", file=sys.stderr)
             raise typer.Exit(1)
+
+    restore_messages = session_data.get("messages")
+    restore_tool_metadata = session_data.get("tool_metadata")
+    resumed_id = str(session_data.get("session_id") or "")
+    if not resumed_id or not isinstance(restore_messages, list):
+        # Fail closed: a snapshot without an id or message history cannot be
+        # restored — error instead of pretending to resume.
+        print(
+            "Session snapshot is incomplete (missing session id or message history); cannot resume.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
     print(f"Resuming session: {session_data.get('summary', '(untitled)')[:60]}")
     asyncio.run(
         run_repl(
             prompt=None,
             cwd=cwd,
             model=session_data.get("model"),
-            restore_messages=session_data.get("messages"),
-            restore_tool_metadata=session_data.get("tool_metadata"),
+            restore_messages=restore_messages,
+            restore_tool_metadata=restore_tool_metadata,
+            restore_session_id=resumed_id,
         )
     )
 
@@ -1386,6 +1454,10 @@ def iterate_sessions(
     """
     from iterate_harness.services.session_storage import list_session_snapshots
 
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    limit = _typer_int(limit)
+    as_json = _typer_flag(as_json)
+
     cwd = str(Path.cwd())
     sessions = list_session_snapshots(cwd, limit=limit)
     if not sessions:
@@ -1428,6 +1500,12 @@ def iterate_log(
     from iterate_harness.iterate import decision_log as iter_log
     from iterate_harness.iterate import replay as replay_mod
     from iterate_harness.iterate import trend_store
+
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    tail = _typer_int(tail)
+    as_json = _typer_flag(as_json)
+    trend = _typer_flag(trend)
+    replay = _typer_flag(replay)
 
     if trend:
         summary = trend_store.summarize(str(Path.cwd()))
@@ -1504,9 +1582,13 @@ def iterate_report(
     # Normalize typer OptionInfo defaults so direct Python calls (tests /
     # embedding) behave like the CLI: OptionInfo is always truthy, which
     # would otherwise make every boolean flag evaluate True.
+    github = _typer_flag(github)
+    pr = _typer_flag(pr)
     serve = _typer_flag(serve)
     persist = _typer_flag(persist)
     serve_port = _typer_int(serve_port)
+    html_out = _typer_str(html_out)
+    fail_on = _typer_str(fail_on)
     lang = _typer_str(lang)
     csv_out = _typer_str(csv_out)
 
@@ -1598,7 +1680,7 @@ def iterate_schedule(
         min=60,
         help="Max seconds a scheduled run may take before it is killed",
     ),
-    timezone: str = typer.Option(
+    timezone: str | None = typer.Option(
         None,
         "--timezone",
         help="IANA timezone for evaluating the cron expression (default: UTC)",
@@ -1607,7 +1689,15 @@ def iterate_schedule(
     """Manage the unattended scheduled quick-review cron job. [schedule]"""
     from iterate_harness.iterate import batch as iterate_batch_mod
 
-    action = action.strip().lower()
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    action = _typer_str(action).strip().lower()
+    cron = _typer_str(cron)
+    ref = _typer_str(ref)
+    rounds = _typer_int(rounds)
+    mode = _typer_str(mode)
+    timeout = _typer_int(timeout)
+    timezone = _typer_optional_str(timezone)
+
     if action not in ("add", "remove", "status"):
         raise typer.BadParameter("action must be add|remove|status")
 
@@ -1666,7 +1756,10 @@ def iterate_hook(
     """Manage the git pre-commit hook that gate-keeps commits on findings. [hook]"""
     from iterate_harness.iterate import git_hook
 
-    action = action.strip().lower()
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    action = _typer_str(action).strip().lower()
+    fail_on = _typer_str(fail_on)
+
     if action not in ("install", "uninstall", "status"):
         raise typer.BadParameter("action must be install|uninstall|status")
 
@@ -1704,7 +1797,11 @@ def iterate_cron(
     """Manage the background cron scheduler daemon that executes scheduled jobs. [cron]"""
     from iterate_harness.services import cron_scheduler
 
-    action = action.strip().lower()
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    action = _typer_str(action).strip().lower()
+    limit = _typer_int(limit)
+    as_json = _typer_flag(as_json)
+
     if action not in ("start", "stop", "status", "history"):
         raise typer.BadParameter("action must be start|stop|status|history")
 
@@ -1741,49 +1838,52 @@ def iterate_cron(
                 print(f"{started}  {status_value:<10} {name}")
 
 
-def _typer_flag(value: object) -> bool:
-    """Normalize a typer OptionInfo default to a plain bool.
+def _typer_default(value: object) -> object:
+    """Unwrap a typer ``OptionInfo``/``ArgumentInfo`` placeholder to its default.
 
-    ``typer.Option(False)`` passes an ``OptionInfo`` object rather than
-    ``False`` when the function is called directly (not through the CLI
-    parser).  This helper strips the wrapper so that direct calls behave
-    identically to CLI invocation.
+    Calling a typer command function directly (tests / embedding) passes the
+    declared ``typer.Option``/``typer.Argument`` placeholder object instead of
+    a plain value whenever the caller omits that parameter. Placeholders are
+    always truthy, so every command that can be invoked from Python must
+    normalize them through these helpers.
     """
-    # OptionInfo is always truthy, so check for the type explicitly.
-    from typer.models import OptionInfo
+    from typer.models import ArgumentInfo, OptionInfo
 
-    if isinstance(value, OptionInfo):
-        return bool(value.default)
-    return bool(value)
+    if isinstance(value, (OptionInfo, ArgumentInfo)):
+        return value.default
+    return value
+
+
+def _typer_flag(value: object) -> bool:
+    """Normalize a typer OptionInfo default to a plain bool."""
+    return bool(_typer_default(value))
 
 
 def _typer_int(value: object) -> int:
     """Normalize a typer OptionInfo default to a plain int."""
-    from typer.models import OptionInfo
-
-    if isinstance(value, OptionInfo):
-        v = value.default
-        return int(v) if v is not None else 0
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
+    raw = _typer_default(value)
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
         try:
-            return int(value)
+            return int(raw.strip())
         except ValueError:
             return 0
     return 0
 
 
 def _typer_str(value: object) -> str:
-    """Normalize a typer OptionInfo default to a plain str."""
-    from typer.models import OptionInfo
+    """Normalize a typer OptionInfo default to a plain str (None -> ``""``)."""
+    raw = _typer_default(value)
+    return str(raw) if raw is not None else ""
 
-    if isinstance(value, OptionInfo):
-        v = value.default
-        return str(v) if v is not None else ""
-    if isinstance(value, str):
-        return value
-    return str(value) if value is not None else ""
+
+def _typer_optional_str(value: object) -> str | None:
+    """Normalize a typer OptionInfo default to ``str | None`` (preserving None)."""
+    raw = _typer_default(value)
+    return str(raw) if raw is not None else None
 
 
 def _write_html_report(html_report: ModuleType, entries: list[DecisionLogEntry], html_out: str) -> None:
@@ -1842,6 +1942,11 @@ def web_serve(
     binds to 127.0.0.1 by default and never exposes itself externally.
     """
     from iterate_harness.web.api import serve as web_serve_backend
+
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    project_root = _typer_str(project_root)
+    host = _typer_str(host) or "127.0.0.1"
+    port = _typer_int(port)
 
     root = project_root or str(Path.cwd())
     root_path = Path(root).resolve()
@@ -1982,10 +2087,14 @@ def _select_from_menu(
         print(f"  {index}. {label}{marker}", flush=True)
     raw = typer.prompt("Choose", default=str(default_index))
     try:
-        selected = options[int(raw) - 1]
-    except (ValueError, IndexError):
+        index = int(raw)
+    except ValueError:
         raise typer.BadParameter(f"Invalid selection: {raw}") from None
-    return selected[0]
+    # Reject 0/negative input explicitly: Python's negative indexing would
+    # silently wrap "0" to the last option instead of reporting a bad choice.
+    if not 1 <= index <= len(options):
+        raise typer.BadParameter(f"Invalid selection: {raw}")
+    return options[index - 1][0]
 
 
 def _prompt_model_for_profile(profile: ProviderProfile) -> str:
@@ -2369,6 +2478,9 @@ def setup_cmd(
     from iterate_harness.auth.manager import AuthManager
     from iterate_harness.config.settings import display_model_setting
 
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    profile = _typer_optional_str(profile)
+
     manager = AuthManager()
     statuses = manager.get_profile_statuses()
     if not statuses:
@@ -2441,6 +2553,11 @@ def update_cmd(
     """Check for a newer iterate-harness release and apply it."""
     from iterate_harness import update as update_module
 
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    check = _typer_flag(check)
+    yes = _typer_flag(yes)
+    force = _typer_flag(force)
+
     home = Path.home()
     method = update_module.current_install_method()
     method_label = update_module.INSTALL_METHOD_LABELS.get(method, method)
@@ -2491,6 +2608,9 @@ def auth_login(
     Run without arguments to choose a provider from a menu.
     Supported providers: anthropic, openai, deepseek, dashscope, moonshot, gemini, minimax, zhipu, siliconflow, nvidia.
     """
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    provider = _typer_optional_str(provider)
+
     if provider is None:
         print("Select a provider to authenticate:", flush=True)
         labels = list(_PROVIDER_LABELS.items())
@@ -2546,6 +2666,9 @@ def auth_logout(
 ) -> None:
     """Clear stored authentication for a provider."""
     from iterate_harness.auth.manager import AuthManager
+
+    # Normalize typer defaults so direct Python calls behave like the CLI.
+    provider = _typer_optional_str(provider)
 
     manager = AuthManager()
     if provider is None:
@@ -2872,9 +2995,9 @@ def main(
         rich_help_panel="Advanced",
     ),
     cwd: str = typer.Option(
-        str(Path.cwd()),
+        "",
         "--cwd",
-        help="Working directory for the session",
+        help="Working directory for the session (default: current directory)",
         hidden=True,
     ),
     backend_only: bool = typer.Option(
@@ -2894,6 +3017,13 @@ def main(
         "--task-mode",
         help="Task mode ('code' or 'iterate') for the session; workers inherit "
         "the leader's mode so subagents run the same defensive kernel",
+        hidden=True,
+    ),
+    restore_session: str | None = typer.Option(
+        None,
+        "--restore-session",
+        help="Internal: restore the given session id when the React frontend "
+        "spawns the backend host (errors out when the session is missing)",
         hidden=True,
     ),
 ) -> None:
@@ -2947,11 +3077,45 @@ def main(
         save_settings(settings)
         print(f"Theme set to {theme} (persisted to global settings).", file=sys.stderr)
 
+    # Resolve the working directory at call time (the typer default is
+    # evaluated at import time, which is stale for any long-lived process).
+    cwd = str(Path(cwd).expanduser()) if cwd else str(Path.cwd())
+
     from iterate_harness.ui.app import run_print_mode, run_repl, run_task_worker
 
     if dry_run and (continue_session or resume is not None):
         print("Error: --dry-run does not support --continue/--resume yet.", file=sys.stderr)
         raise typer.Exit(1)
+
+    if restore_session and dry_run:
+        print("Error: --dry-run does not support --restore-session.", file=sys.stderr)
+        raise typer.Exit(1)
+
+    # ``--restore-session`` is how the React frontend's spawned backend host
+    # receives the resumed conversation. Fail closed when the session cannot
+    # be loaded: silently starting an empty session would fabricate a resume.
+    restore_messages: list[dict[str, object]] | None = None
+    restore_tool_metadata: dict[str, object] | None = None
+    if restore_session:
+        from iterate_harness.services.session_storage import load_session_by_id
+
+        restored = load_session_by_id(cwd, restore_session)
+        if restored is None:
+            print(f"Error: --restore-session session not found: {restore_session}", file=sys.stderr)
+            raise typer.Exit(1)
+        messages = restored.get("messages")
+        if not isinstance(messages, list):
+            print(
+                f"Error: session {restore_session} has no message history; cannot restore.",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
+        restore_messages = messages
+        metadata = restored.get("tool_metadata")
+        restore_tool_metadata = metadata if isinstance(metadata, dict) else None
+        restored_model = restored.get("model")
+        if model is None and isinstance(restored_model, str) and restored_model:
+            model = restored_model
 
     if dry_run:
         prompt = print_mode.strip() if print_mode is not None else None
@@ -3033,6 +3197,19 @@ def main(
                 print(f"Session not found: {resume}", file=sys.stderr)
                 raise typer.Exit(1)
 
+        restored_messages = session_data.get("messages")
+        if not isinstance(restored_messages, list):
+            # Fail closed: a snapshot without message history cannot be
+            # restored — error instead of opening an empty session that only
+            # claims to be resumed.
+            print(
+                "Session snapshot is incomplete (no message history); cannot restore.",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
+        restored_metadata = session_data.get("tool_metadata")
+        restore_session_id = str(session_data.get("session_id") or "")
+
         # Pass restored session to the REPL
         asyncio.run(
             run_repl(
@@ -3042,9 +3219,11 @@ def main(
                 backend_only=backend_only,
                 base_url=base_url,
                 system_prompt=system_prompt,
+                append_system_prompt=append_system_prompt,
                 api_key=api_key,
-                restore_messages=session_data.get("messages"),
-                restore_tool_metadata=session_data.get("tool_metadata"),
+                restore_messages=restored_messages,
+                restore_tool_metadata=restored_metadata if isinstance(restored_metadata, dict) else None,
+                restore_session_id=restore_session_id,
                 permission_mode=permission_mode,
                 api_format=api_format,
                 config_path=settings_file,
@@ -3061,27 +3240,45 @@ def main(
         if not prompt:
             print("Error: -p/--print requires a prompt value, e.g. -p 'your prompt'", file=sys.stderr)
             raise typer.Exit(1)
-        asyncio.run(
-            run_print_mode(
-                prompt=prompt,
-                output_format=output_format or "text",
-                cwd=cwd,
-                model=model,
-                base_url=base_url,
-                system_prompt=system_prompt,
-                append_system_prompt=append_system_prompt,
-                api_key=api_key,
-                api_format=api_format,
-                permission_mode=permission_mode,
-                max_turns=max_turns,
-                config_path=settings_file,
-                effort=effort,
-                verbose=verbose or None,
-                allowed_tools=allowed_tools,
-                disallowed_tools=disallowed_tools,
-                admin_opt_in=admin_opt_in,
+        effective_output_format = output_format or "text"
+        if effective_output_format not in ("text", "json", "stream-json"):
+            print(
+                "Error: --output-format must be one of: text, json, stream-json "
+                f"(got '{output_format}')",
+                file=sys.stderr,
             )
-        )
+            raise typer.Exit(1)
+        try:
+            asyncio.run(
+                run_print_mode(
+                    prompt=prompt,
+                    output_format=effective_output_format,
+                    cwd=cwd,
+                    model=model,
+                    base_url=base_url,
+                    system_prompt=system_prompt,
+                    append_system_prompt=append_system_prompt,
+                    api_key=api_key,
+                    api_format=api_format,
+                    permission_mode=permission_mode,
+                    max_turns=max_turns,
+                    config_path=settings_file,
+                    effort=effort,
+                    verbose=verbose or None,
+                    allowed_tools=allowed_tools,
+                    disallowed_tools=disallowed_tools,
+                    admin_opt_in=admin_opt_in,
+                )
+            )
+        except typer.Exit:
+            raise
+        except SystemExit:
+            raise
+        except Exception as exc:
+            # A failed print-mode run must exit non-zero with a concise
+            # message, not a bare traceback or a silent success.
+            print(f"Error: print run failed: {exc}", file=sys.stderr)
+            raise typer.Exit(1) from exc
         return
 
     if task_worker:
@@ -3092,6 +3289,7 @@ def main(
                 max_turns=max_turns,
                 base_url=base_url,
                 system_prompt=system_prompt,
+                append_system_prompt=append_system_prompt,
                 api_key=api_key,
                 api_format=api_format,
                 permission_mode=permission_mode,
@@ -3114,8 +3312,12 @@ def main(
             backend_only=backend_only,
             base_url=base_url,
             system_prompt=system_prompt,
+            append_system_prompt=append_system_prompt,
             api_key=api_key,
             api_format=api_format,
+            restore_messages=restore_messages,
+            restore_tool_metadata=restore_tool_metadata,
+            restore_session_id=restore_session or "",
             permission_mode=permission_mode,
             config_path=settings_file,
             effort=effort,

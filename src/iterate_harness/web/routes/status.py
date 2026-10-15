@@ -144,8 +144,6 @@ def get_status(project_root: str = "") -> StatusResponse:
     root = Path(project_root) if project_root else Path.cwd()
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
-    if not root.is_dir():
-        raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     # ``project_root`` is caller-controlled, so containment inside the root is
     # not enough on its own: without this the parameter *selects* the root, and
     # a valid token granted read/write over any directory on the machine.

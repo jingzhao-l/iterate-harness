@@ -1,0 +1,152 @@
+{
+  "comment": "Cross-implementation anchor for the run-plan contract (kernel/src/run-plan.ts): what a plan is, and how to digest one so two shells and a ledger can say 'this run was held to this plan'. Rules a second implementation must reproduce, stated here so it need not read the TypeScript: (1) schemaVersion is exactly `iterate.run-plan/0.1`. (2) `dimensions` is 1..64 entries, each an object with a required `id` matching `^[a-z0-9]+(?:-[a-z0-9]+)*$` and at most 64 chars, and optional `label` (<=256) and `focus` (<=4096); no other keys. An empty plan is refused: a run with nothing to verify has a configuration problem, and reporting 0/0 dimensions as success is how that gets hidden. (3) Planned order is the caller's and is never sorted. (4) A repeated id is refused, not collapsed — the two entries can carry different focus, so collapsing picks one silently. JSON Schema cannot express id-level uniqueness (`uniqueItems` compares whole objects), so that rule lives on the validator side; the case named `duplicate-ids-differ-only-by-focus` below is the documented shape where the published schema accepts and the validator refuses. (5) `source`, when present, has a required `kind` in `config|recipe|session|manual` and an optional non-empty `name` <=512; nothing here reads a config file to invent a source. (6) The digest is `rp_` + sha256 of the canonical JSON form: UTF-16-code-unit-sorted keys, no insignificant whitespace, arrays in order, strings as JSON escapes them; numbers use the host's shortest roundtrip form, which is why none appear in this fixture — that concern is pinned by the canonical-JSON cases in the C35 suite instead. Provenance: the nine ids and both focus strings are taken verbatim from GlassPane's own iterate.config.yaml (`dimensions:` and `dimension_sets.engine|gui.focus`), because a vocabulary invented for a fixture would let both sides agree on something neither product uses. The one `label` value is NOT from that config — it has no label vocabulary at all — and is written here to pin that a label is accepted, is optional, and is part of the digest; treat that string as fixture vocabulary, not as a name either product displays.",
+  "input": {
+    "schemaVersion": "iterate.run-plan/0.1",
+    "dimensions": [
+      {
+        "id": "correctness",
+        "focus": "归因/证据语义不可让步：不得为通过断言而伪造测量或借用他卡读数"
+      },
+      {
+        "id": "security"
+      },
+      {
+        "id": "performance",
+        "focus": "注意 latency budget 与快照保留上限（EngineCore 常量）"
+      },
+      {
+        "id": "architecture"
+      },
+      {
+        "id": "style-tests"
+      },
+      {
+        "id": "tech-debt"
+      },
+      {
+        "id": "spec-compliance"
+      },
+      {
+        "id": "frontend-backend"
+      },
+      {
+        "id": "ui-ux",
+        "label": "UI/UX"
+      }
+    ],
+    "source": {
+      "kind": "config",
+      "name": "iterate.config.yaml"
+    }
+  },
+  "expectedDigest": "rp_f90ea606d2697278fb6e0c1cfd84cc6d21536332ca88970740e48d4b2429d61a",
+  "expectedIds": [
+    "correctness",
+    "security",
+    "performance",
+    "architecture",
+    "style-tests",
+    "tech-debt",
+    "spec-compliance",
+    "frontend-backend",
+    "ui-ux"
+  ],
+  "cases": [
+    {
+      "name": "empty-plan",
+      "input": {
+        "schemaVersion": "iterate.run-plan/0.1",
+        "dimensions": []
+      },
+      "expect": "refused",
+      "path": "dimensions"
+    },
+    {
+      "name": "uppercase-id",
+      "input": {
+        "schemaVersion": "iterate.run-plan/0.1",
+        "dimensions": [
+          {
+            "id": "Security"
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "dimensions.0.id"
+    },
+    {
+      "name": "duplicate-ids-differ-only-by-focus",
+      "input": {
+        "schemaVersion": "iterate.run-plan/0.1",
+        "dimensions": [
+          {
+            "id": "security"
+          },
+          {
+            "id": "security",
+            "focus": "auth surface"
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "dimensions.1.id",
+      "jsonSchemaAccepts": true
+    },
+    {
+      "name": "unknown-source-kind",
+      "input": {
+        "schemaVersion": "iterate.run-plan/0.1",
+        "dimensions": [
+          {
+            "id": "correctness"
+          }
+        ],
+        "source": {
+          "kind": "vibe"
+        }
+      },
+      "expect": "refused",
+      "path": "source.kind"
+    },
+    {
+      "name": "extra-top-level-key",
+      "input": {
+        "schemaVersion": "iterate.run-plan/0.1",
+        "dimensions": [
+          {
+            "id": "correctness"
+          }
+        ],
+        "notes": "not part of the contract"
+      },
+      "expect": "refused",
+      "path": "",
+      "messageIncludes": "notes"
+    },
+    {
+      "name": "missing-schemaVersion",
+      "input": {
+        "dimensions": [
+          {
+            "id": "correctness"
+          }
+        ]
+      },
+      "expect": "refused",
+      "path": "schemaVersion"
+    },
+    {
+      "name": "minimal-plan-no-source",
+      "input": {
+        "schemaVersion": "iterate.run-plan/0.1",
+        "dimensions": [
+          {
+            "id": "correctness"
+          }
+        ]
+      },
+      "expect": "accepted",
+      "digestPrefix": "rp_"
+    }
+  ]
+}

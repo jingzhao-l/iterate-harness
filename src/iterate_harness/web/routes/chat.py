@@ -26,7 +26,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from ..run_manager import RunManagerError, run_manager
+from ..run_manager import RunConflictError, RunManagerError, run_manager
 from ..security import AuditLog, allowed_roots, root_is_allowed
 from ..schemas import (
     ChatMessage,
@@ -48,8 +48,6 @@ def _resolve_project(request: Request, project_root: str) -> str:
     if not resolved:
         resolved = str(Path.cwd())
     root = Path(resolved)
-    if not root.is_dir():
-        raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     # ``project_root`` is caller-controlled, so containment inside the root is
@@ -84,7 +82,15 @@ async def start_run(
             root, body.mode, body.changed, body.ref, body.permission_mode
         )
     except RunManagerError as exc:
-        status = 409 if "运行中" in str(exc) else 400
+        # Conflicts (an in-process run is active, or another driver holds the
+        # project lease) are a structural 409 — decided by exception class,
+        # not by matching a substring in the message. Everything else (bad
+        # ref, clean worktree, no prior run for resume) stays a 400.
+        status = (
+            409
+            if isinstance(exc, RunConflictError) or "运行中" in str(exc)
+            else 400
+        )
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     return {"runId": run_id, "status": run_manager.state}
 
@@ -165,7 +171,14 @@ async def reset_run(
     root = _resolve_project(request, project_root)
     run_id = run_manager.run_id
     await run_manager.reset()
-    AuditLog(root).record("run.reset", run_id or "(no active run)", summary={"project": root})
+    # Audit off the event loop: this is an async route, and the journal
+    # append is blocking disk I/O.
+    await asyncio.to_thread(
+        AuditLog(root).record,
+        "run.reset",
+        run_id or "(no active run)",
+        summary={"project": root},
+    )
     return {"ok": True, "status": "idle", "cancelledRunId": run_id}
 
 

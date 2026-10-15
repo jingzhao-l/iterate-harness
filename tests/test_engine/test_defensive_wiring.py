@@ -149,7 +149,13 @@ async def test_mutating_tool_that_raises_rolls_back_snapshot(tmp_path: Path) -> 
             target.write_text("partial", encoding="utf-8")
             raise OSError("simulated disk failure")
 
-    registry = create_default_tool_registry()
+    from iterate_harness.tools.base import ToolRegistry
+
+    # A fresh registry instead of the default one: ``ToolRegistry.register``
+    # now rejects duplicate names (silent shadowing of the real write_file
+    # tool is exactly the collision bug that check prevents), and this test
+    # only needs "write_file" to resolve to BoomTool.
+    registry = ToolRegistry()
     registry.register(BoomTool())
     context = QueryContext(
         api_client=None,  # type: ignore[arg-type]

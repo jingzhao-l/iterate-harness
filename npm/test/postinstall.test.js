@@ -115,6 +115,35 @@ test("postinstall reuses an up-to-date runtime instead of reinstalling", { skip:
   fs.rmSync(artifact.dir, { recursive: true, force: true });
 });
 
+test("postinstall re-bootstraps when the venv disappeared although the stamp matches", { skip: hermeticOnly }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ih-ps-heal-"));
+  const artifact = localArtifact();
+  const pipLog = path.join(artifact.dir, "pip.log");
+  const env = {
+    ITERATE_HARNESS_NPM_HOME: home,
+    ITERATE_HARNESS_SKIP_INSTALL: "",
+    ITERATE_HARNESS_PYTHON: FAKE_PYTHON,
+    ITERATE_HARNESS_INSTALL_URL: artifact.file,
+    ITERATE_HARNESS_FAKE_PIP_LOG: pipLog,
+  };
+  const first = await runPostinstall(env);
+  assert.equal(first.code, 0);
+  const afterFirst = fs.readFileSync(pipLog, "utf8").split("\n").filter(Boolean).length;
+  assert.ok(afterFirst >= 1, "first run should have pip-installed");
+
+  // User deleted the venv but the version stamp survived. The wrapper must
+  // self-heal (re-create venv + reinstall) instead of demanding `rm -rf` of
+  // the runtime dir on every subsequent run.
+  fs.rmSync(path.join(home, "venv"), { recursive: true, force: true });
+  const second = await runPostinstall(env);
+  assert.equal(second.code, 0);
+  const afterSecond = fs.readFileSync(pipLog, "utf8").split("\n").filter(Boolean).length;
+  assert.ok(afterSecond > afterFirst, "a missing venv must trigger a re-install");
+  assert.equal(fs.existsSync(path.join(home, "venv", "bin", "ih")), true);
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(artifact.dir, { recursive: true, force: true });
+});
+
 test("postinstall reports a failing interpreter without a non-zero exit", { skip: hermeticOnly }, async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "ih-ps-nopy-"));
   // Pin PATH to a directory containing no interpreter or `node`, so the

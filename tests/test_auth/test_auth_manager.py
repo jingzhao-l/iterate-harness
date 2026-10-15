@@ -159,6 +159,18 @@ def test_switch_provider_unknown_raises():
         manager.switch_provider("nope")
 
 
+def test_switch_provider_unmapped_known_provider_raises(monkeypatch):
+    """A provider listed as known but with no profile mapping must fail
+    loudly instead of silently activating an unrelated (claude-api) profile."""
+    from iterate_harness.auth import manager as manager_module
+
+    monkeypatch.setattr(manager_module, "_KNOWN_PROVIDERS", ["half-wired-provider"])
+    manager = _manager(active_profile="deepseek")
+    with pytest.raises(ValueError, match="no default profile mapping"):
+        manager.switch_provider("half-wired-provider")
+    assert manager.get_active_profile() == "deepseek"
+
+
 # ---------------------------------------------------------------------------
 # Credential storage via the manager
 # ---------------------------------------------------------------------------

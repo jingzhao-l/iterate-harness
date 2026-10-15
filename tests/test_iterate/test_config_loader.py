@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from iterate_harness.iterate.config_loader import (
     _default_config_dict,
     config_from_dict,
@@ -335,6 +337,185 @@ class TestValidateConfig:
         from iterate_harness.iterate.config_loader import _default_config_dict
 
         assert validate_config(_default_config_dict()) == []
+
+
+class TestLoadConfigDiagnostics:
+    """A silently-ignored config is indistinguishable from no config at all:
+    every failure except "file not present" must be logged with its path."""
+
+    def _warnings(self, caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "iterate_harness.iterate.config_loader"
+        ]
+
+    def test_missing_file_is_not_logged(self, tmp_path, caplog):
+        d = make_temp_dir(tmp_path)
+        d.mkdir()
+        with caplog.at_level("WARNING"):
+            assert load_config(d) is None
+        assert self._warnings(caplog) == []
+
+    def test_unreadable_file_is_logged_with_its_path(self, tmp_path, caplog):
+        d = make_temp_dir(tmp_path)
+        # A directory where the file should be raises IsADirectoryError (OSError).
+        (d / "iterate.config.yaml").mkdir(parents=True)
+        with caplog.at_level("WARNING"):
+            assert load_config(d) is None
+        messages = self._warnings(caplog)
+        assert any("iterate.config.yaml" in message for message in messages)
+
+    def test_invalid_yaml_is_logged_with_its_path(self, tmp_path, caplog):
+        d = make_temp_dir(tmp_path)
+        write_config(d, "goal: [unclosed")
+        with caplog.at_level("WARNING"):
+            assert load_config(d) is None
+        messages = self._warnings(caplog)
+        assert any("iterate.config.yaml" in message for message in messages)
+
+    def test_non_mapping_document_is_logged_as_a_type_mismatch(self, tmp_path, caplog):
+        d = make_temp_dir(tmp_path)
+        write_config(d, "- just\n- a\n- list\n")
+        with caplog.at_level("WARNING"):
+            assert load_config(d) is None
+        messages = self._warnings(caplog)
+        assert any("iterate.config.yaml" in message for message in messages)
+
+    def test_empty_file_stays_silent(self, tmp_path, caplog):
+        d = make_temp_dir(tmp_path)
+        write_config(d, "")
+        with caplog.at_level("WARNING"):
+            assert load_config(d) is None
+        assert self._warnings(caplog) == []
+
+
+class TestGitSectionValidation:
+    def test_unknown_git_key_is_reported(self, tmp_path):
+        """``git: {auto_commit: false}`` used to be dropped silently, so the
+        setting never took effect and was never questioned."""
+        d = make_temp_dir(tmp_path)
+        write_config(d, "git:\n  auto_commit: false\n")
+        effective = load_effective_config(d)
+        assert effective.config.git.auto_merge is False
+
+    def test_unknown_git_key_is_named_in_the_warning(self, tmp_path, caplog):
+        d = make_temp_dir(tmp_path)
+        write_config(d, "git:\n  auto_commit: false\n")
+        with caplog.at_level("WARNING", logger="iterate_harness.iterate.config_loader"):
+            load_effective_config(d)
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("git.auto_commit" in message for message in messages)
+
+    def test_string_boolean_falls_back_to_the_default(self, tmp_path, caplog):
+        """``use_worktree: "no"`` is a *truthy* string: storing it verbatim
+        silently enabled worktree isolation for every round."""
+        d = make_temp_dir(tmp_path)
+        write_config(d, 'git:\n  use_worktree: "no"\n  auto_merge: 1\n')
+        with caplog.at_level("WARNING", logger="iterate_harness.iterate.config_loader"):
+            effective = load_effective_config(d)
+        assert effective.config.git.use_worktree is False
+        assert effective.config.git.auto_merge is False
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("git.use_worktree" in message for message in messages)
+        assert any("git.auto_merge" in message for message in messages)
+
+    def test_blank_target_branch_is_rejected(self, tmp_path, caplog):
+        d = make_temp_dir(tmp_path)
+        write_config(d, 'git:\n  target_branch: "  "\n')
+        with caplog.at_level("WARNING", logger="iterate_harness.iterate.config_loader"):
+            effective = load_effective_config(d)
+        assert effective.config.git.target_branch == "main"
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("git.target_branch" in message for message in messages)
+
+    def test_valid_git_values_still_pass(self, tmp_path):
+        d = make_temp_dir(tmp_path)
+        write_config(
+            d,
+            "git:\n  target_branch: develop\n  use_worktree: true\n"
+            "  push_per_round: true\n  auto_merge: true\n",
+        )
+        effective = load_effective_config(d)
+        assert effective.config.git.target_branch == "develop"
+        assert effective.config.git.use_worktree is True
+        assert effective.config.git.push_per_round is True
+        assert effective.config.git.auto_merge is True
+
+    def test_git_section_that_is_not_a_mapping_falls_back(self, tmp_path):
+        d = make_temp_dir(tmp_path)
+        write_config(d, "git: [main]\n")
+        effective = load_effective_config(d)
+        assert effective.config.git.target_branch == "main"
+
+
+class TestHarnessBudgetDefaults:
+    """``~/.iterate-harness/settings.json`` supplies the budget fallbacks for
+    projects that never mention them; the project config still wins."""
+
+    @staticmethod
+    def _stub_settings(monkeypatch, budget_usd, max_turns_per_minute):
+        from iterate_harness.config.settings import Settings
+
+        settings = Settings()
+        settings.iterate.budget_usd = budget_usd
+        settings.iterate.max_turns_per_minute = max_turns_per_minute
+        monkeypatch.setattr(
+            "iterate_harness.config.settings.load_settings", lambda *a, **k: settings
+        )
+
+    def test_defaults_apply_when_the_project_is_silent(self, tmp_path, monkeypatch):
+        self._stub_settings(monkeypatch, 7.5, 30)
+        d = make_temp_dir(tmp_path)
+        d.mkdir()
+        effective = load_effective_config(d)
+        assert effective.config.budget_usd == 7.5
+        assert effective.config.max_turns_per_minute == 30
+
+    def test_project_values_win_over_the_harness_defaults(self, tmp_path, monkeypatch):
+        self._stub_settings(monkeypatch, 7.5, 30)
+        d = make_temp_dir(tmp_path)
+        write_config(d, "budget_usd: 2.5\n")
+        effective = load_effective_config(d)
+        assert effective.config.budget_usd == 2.5
+        # The key the project left unset still comes from the harness.
+        assert effective.config.max_turns_per_minute == 30
+
+    def test_config_from_dict_fills_only_unset_keys(self, monkeypatch):
+        self._stub_settings(monkeypatch, 7.5, 30)
+        cfg = config_from_dict({"budget_usd": 2.5})
+        assert cfg.budget_usd == 2.5
+        assert cfg.max_turns_per_minute == 30
+
+    def test_unconfigured_harness_budgets_leave_the_defaults(self, tmp_path, monkeypatch):
+        self._stub_settings(monkeypatch, None, None)
+        d = make_temp_dir(tmp_path)
+        d.mkdir()
+        effective = load_effective_config(d)
+        assert effective.config.budget_usd is None
+        assert effective.config.max_turns_per_minute is None
+
+    def test_invalid_project_budget_is_reported_not_silently_replaced(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        self._stub_settings(monkeypatch, 7.5, 30)
+        d = make_temp_dir(tmp_path)
+        write_config(d, "budget_usd: -1\n")
+        with caplog.at_level("WARNING", logger="iterate_harness.iterate.config_loader"):
+            effective = load_effective_config(d)
+        assert effective.config.budget_usd is None
+        assert any("budget_usd" in record.getMessage() for record in caplog.records)
+
+    def test_unreadable_settings_do_not_break_config_loading(self, tmp_path, monkeypatch):
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("settings.json is unreadable")
+
+        monkeypatch.setattr("iterate_harness.config.settings.load_settings", _boom)
+        d = make_temp_dir(tmp_path)
+        d.mkdir()
+        effective = load_effective_config(d)
+        assert effective.config.budget_usd is None
+        assert effective.config.max_turns_per_minute is None
 
 
 def test_config_filename_constant_matches_skill_convention():

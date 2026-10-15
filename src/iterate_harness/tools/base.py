@@ -69,7 +69,17 @@ class ToolRegistry:
         self._tools: dict[str, BaseTool[Any]] = {}
 
     def register(self, tool: BaseTool[Any]) -> None:
-        """Register a tool instance."""
+        """Register a tool instance, rejecting duplicate names.
+
+        A silent overwrite would shadow the previously registered tool, so a
+        collision between tool names is always a bug that must surface loudly
+        instead of quietly changing which implementation runs.
+        """
+        if tool.name in self._tools:
+            raise ValueError(
+                f"Tool '{tool.name}' is already registered; "
+                "registering it again would silently shadow the existing tool"
+            )
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> BaseTool[Any] | None:

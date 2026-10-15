@@ -98,7 +98,12 @@ def _guard_api(token: str, request: "Request") -> JSONResponse | None:
     return None
 
 
-def create_app(project_root: str | Path | None = None, *, token: str | None = None) -> FastAPI:
+def create_app(
+    project_root: str | Path | None = None,
+    *,
+    token: str | None = None,
+    enable_docs: bool = False,
+) -> FastAPI:
     """Build the WebUI ASGI app.
 
     Args:
@@ -109,6 +114,10 @@ def create_app(project_root: str | Path | None = None, *, token: str | None = No
             ``None``, API authentication is disabled (backwards-compatible
             default for embedding and tests); :func:`serve` always passes a
             generated token.
+        enable_docs: Expose the unauthenticated ``/docs``, ``/redoc`` and
+            ``/openapi.json`` endpoints. Off by default: they bypass the
+            access-token guard (it only covers ``/api/v1``) and would leak
+            the full API surface to any local process.
 
     Returns:
         A configured :class:`FastAPI` instance.
@@ -117,6 +126,9 @@ def create_app(project_root: str | Path | None = None, *, token: str | None = No
         title="iterate-harness WebUI",
         description="Local management console for iterate-harness (design §17).",
         version=__version__,
+        docs_url="/docs" if enable_docs else None,
+        redoc_url="/redoc" if enable_docs else None,
+        openapi_url="/openapi.json" if enable_docs else None,
     )
 
     # Expose the resolved project root to routes via app state.
@@ -236,6 +248,8 @@ def serve(
     # ephemeral port for ``port == 0`` and lets us fall back cleanly when the
     # requested port is already in use.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    requested_port = port
+    bound_via_fallback = False
     try:
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -254,10 +268,16 @@ def serve(
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind((host, 0))
+            bound_via_fallback = True
         port = sock.getsockname()[1]
     except OSError:
         sock.close()
         raise
+    if bound_via_fallback:
+        # Say so on stdout, not just in the log: the operator asked for a
+        # specific port (e.g. a bookmarked URL or an open-firewall rule) and
+        # must see that the console actually landed on a different one.
+        print(f"Port {requested_port} busy; bound to {port} instead.")
 
     config = uvicorn.Config(
         app,

@@ -12,7 +12,7 @@ payloads degrade to a truncated JSON preview instead of raising.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .decision_log import DecisionLogEntry
 
@@ -33,13 +33,23 @@ _SUMMARY_KEYS: dict[str, tuple[str, ...]] = {
 
 
 def _parse_timestamp(raw: str) -> datetime | None:
-    """Parse an ISO-8601 timestamp; ``None`` when unparseable."""
+    """Parse an ISO-8601 timestamp; ``None`` when unparseable.
+
+    ``Z`` is rewritten to ``+00:00`` because ``datetime.fromisoformat`` only
+    learned the UTC designator in Python 3.11 — on 3.10 every ``...Z``
+    timestamp parsed as ``None`` and the replay showed only ``[+?s]``.
+    Naive timestamps are assumed UTC so all entries sit on one clock.
+    """
     if not raw:
         return None
+    normalized = raw[:-1] + "+00:00" if raw[-1:] in ("Z", "z") else raw
     try:
-        return datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _truncate(text: str, width: int = MAX_SUMMARY_WIDTH) -> str:

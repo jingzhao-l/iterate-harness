@@ -29,8 +29,10 @@ Design:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
+import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -38,6 +40,8 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from iterate_harness.utils.fs import atomic_write_text
+
+log = logging.getLogger(__name__)
 
 #: Lease file name inside ``.iterate/``.
 LEASE_FILENAME = "run-lease.json"
@@ -55,6 +59,22 @@ _STALE_GRACE_SECONDS = 5.0
 #: check its liveness.
 _REMOTE_STALE_SECONDS = 6 * 60 * 60.0
 
+#: An unparseable lease file younger than this is assumed to belong to a
+#: claimant whose payload has not landed yet — never stolen. Older garbage
+#: is nobody's in-flight write and is safe to reclaim.
+_UNPARSEABLE_GRACE_SECONDS = 2.0
+
+#: How long a claimant waits for an in-flight (unparseable) lease file to
+#: become readable before giving up and reporting a conflict.
+_IN_FLIGHT_WAIT_SECONDS = 2.0
+
+#: Poll interval while waiting for an in-flight lease payload.
+_CLAIM_POLL_INTERVAL_SECONDS = 0.05
+
+#: Upper bound on create/re-read iterations per claim, so a pathological
+#: mix of concurrent claimants cannot spin forever.
+_MAX_CLAIM_ATTEMPTS = 50
+
 
 @dataclass(frozen=True)
 class RunLease:
@@ -66,6 +86,9 @@ class RunLease:
     pid: int
     host: str
     acquired_at: float
+    #: False when the payload carried no ``holder`` identity (legacy or
+    #: half-written file) — release then falls back to pid+host.
+    has_holder: bool = True
 
     @property
     def is_ours(self) -> bool:
@@ -121,14 +144,16 @@ def read_lease(project_root: str | Path) -> RunLease | None:
         return None
     if not isinstance(payload, dict):
         return None
+    holder_raw = payload.get("holder")
     try:
         return RunLease(
             path=path,
-            holder=str(payload.get("holder") or "unknown"),
+            holder=str(holder_raw or "unknown"),
             role=str(payload.get("role") or "unknown"),
             pid=int(payload.get("pid") or 0),
             host=str(payload.get("host") or ""),
             acquired_at=float(payload.get("acquired_at") or 0.0),
+            has_holder=bool(holder_raw),
         )
     except (TypeError, ValueError):
         return None
@@ -178,6 +203,91 @@ class RunLeaseConflictError(RuntimeError):
         )
 
 
+def _synthetic_lease(path: Path) -> RunLease:
+    """A placeholder for a conflict against a file we could not parse."""
+    return RunLease(
+        path=path,
+        holder="unknown",
+        role="unknown",
+        pid=0,
+        host=socket.gethostname(),
+        acquired_at=time.time(),
+        has_holder=False,
+    )
+
+
+def _file_age(path: Path) -> float | None:
+    """Seconds since *path* was modified, or ``None`` when unreadable."""
+    try:
+        return time.time() - path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _create_lease_file(path: Path, payload_text: str) -> None:
+    """Create *path* atomically with *payload_text* already inside it.
+
+    The payload is written to a sibling temp file first and hard-linked into
+    place, so no concurrent reader can observe the empty placeholder an
+    ``O_EXCL`` create produces before its payload lands — that window is what
+    used to let a second claimant "reclaim" a lease that was actively being
+    claimed. ``os.link`` fails with :class:`FileExistsError` when the lease is
+    already held, which is exactly the claim's race check.
+
+    Raises ``FileExistsError`` when *path* already exists; other ``OSError``
+    from the link (filesystems without hard links) falls back to the classic
+    ``O_EXCL`` create plus atomic replace.
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=LEASE_FILENAME, suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
+    linked = False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            tmp.write(payload_text)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        try:
+            os.link(tmp_path, path)
+            linked = True
+        except FileExistsError:
+            raise
+        except OSError as exc:
+            # No hard-link support on this filesystem: fall back to O_EXCL.
+            log.debug("hard-link lease create failed (%s); using O_EXCL fallback", exc)
+    finally:
+        # The link (when it worked) keeps the data alive under *path*.
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+    if linked:
+        return
+    fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(fd)
+    atomic_write_text(path, payload_text, encoding="utf-8")
+
+
+def _wait_for_in_flight_payload(project_root: str | Path, path: Path) -> RunLease | None:
+    """Wait briefly for an unparseable lease to become a readable payload.
+
+    Returns the parsed lease, ``None`` when the file disappeared while
+    waiting, or ``None`` after the wait times out while the file is still
+    there — the caller then reports a conflict rather than stealing a write
+    it cannot distinguish from a live claim.
+    """
+    deadline = time.monotonic() + _IN_FLIGHT_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        lease = read_lease(project_root)
+        if lease is not None:
+            return lease
+        if not path.exists():
+            return None
+        time.sleep(_CLAIM_POLL_INTERVAL_SECONDS)
+    return None
+
+
 @contextmanager
 def claim_run_lease(
     project_root: str | Path,
@@ -190,54 +300,94 @@ def claim_run_lease(
     another process, so the caller can answer 409 rather than silently
     starting a second writer.
 
-    The file is created with ``O_CREAT|O_EXCL`` (atomic) and written with
-    ``atomic_write_text``; on release it is removed only if it still names
-    *this* process, so a lease that was reclaimed and re-taken elsewhere is
-    never deleted out from under its new holder.
+    The file is created atomically *with its payload already written*
+    (:func:`_create_lease_file`), so a concurrent claimant either sees a
+    complete, live lease (conflict) or an absent file — never a half-written
+    one it could discard as garbage. On release the file is removed only if
+    it still names *this* holder, so a lease that was reclaimed and re-taken
+    elsewhere is never deleted out from under its new holder.
     """
     path = lease_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     holder = f"{role}:{os.getpid()}@{socket.gethostname()}"
+    acquired_at = time.time()
+    payload_text = (
+        json.dumps(
+            {
+                "holder": holder,
+                "role": role,
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "acquired_at": acquired_at,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
     existing = active_lease(project_root)
     if existing is not None and not existing.is_ours:
         raise RunLeaseConflictError(existing)
 
-    try:
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        # Lost a race with a concurrent claimer; re-read and decide.
-        existing = active_lease(project_root)
-        if existing is not None and not existing.is_ours:
-            raise RunLeaseConflictError(existing) from None
-        # Stale file we already failed to clear (or our own): take it over.
-        _discard(read_lease(project_root) or RunLease(path, "?", "?", 0, "", 0.0))
+    attempts = 0
+    while True:
+        attempts += 1
+        if attempts > _MAX_CLAIM_ATTEMPTS:
+            raise RunLeaseConflictError(read_lease(project_root) or _synthetic_lease(path))
         try:
-            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError as exc:
-            existing = active_lease(project_root)
-            if existing is not None and not existing.is_ours:
-                raise RunLeaseConflictError(existing) from exc
-            raise RunLeaseConflictError(
-                RunLease(path, "?", "unknown", 0, socket.gethostname(), time.time())
-            ) from exc
-    except OSError:
-        # An unwritable project dir must not block a run outright: without a
-        # lease we lose cross-process protection, but the run still works.
-        yield RunLease(path, holder, role, os.getpid(), socket.gethostname(), time.time())
-        return
+            _create_lease_file(path, payload_text)
+            break
+        except FileExistsError:
+            pass
+        except OSError:
+            # An unwritable project dir must not block a run outright: without
+            # a lease we lose cross-process protection, but the run works.
+            yield RunLease(path, holder, role, os.getpid(), socket.gethostname(), acquired_at)
+            return
 
-    os.close(fd)
-    acquired_at = time.time()
-    payload = {
-        "holder": holder,
-        "role": role,
-        "pid": os.getpid(),
-        "host": socket.gethostname(),
-        "acquired_at": acquired_at,
-    }
-    atomic_write_text(path, json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    acquired_at = time.time()
+        # Someone else's file: decide between takeover, conflict, and wait.
+        current = read_lease(project_root)
+        if current is None:
+            age = _file_age(path)
+            if age is None:
+                continue  # vanished between the create attempt and the stat
+            if age < _UNPARSEABLE_GRACE_SECONDS:
+                # Possibly an in-flight claim (payload not visible yet):
+                # wait for it instead of stealing it.
+                resolved = _wait_for_in_flight_payload(project_root, path)
+                if resolved is not None:
+                    continue
+                if not path.exists():
+                    continue  # the other claimant finished and released
+                still = read_lease(project_root)
+                if still is None:
+                    # Still unreadable after the full wait: report a conflict
+                    # rather than claiming a file another writer may own.
+                    raise RunLeaseConflictError(_synthetic_lease(path))
+                if still.is_ours:
+                    _discard(still)
+                    continue
+                active = active_lease(project_root)
+                if active is not None and not active.is_ours:
+                    raise RunLeaseConflictError(active) from None
+                continue
+            # Stale garbage: nobody is writing it any more — reclaim.
+            log.debug("Reclaiming unparseable run lease at %s", path)
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        if current.is_ours:
+            # Our own (possibly re-entrant) lease: take it over.
+            _discard(current)
+            continue
+        active = active_lease(project_root)
+        if active is not None and not active.is_ours:
+            raise RunLeaseConflictError(active) from None
+        # active_lease reclaimed a stale file (or it became ours meanwhile).
+        continue
+
     lease = RunLease(
         path=path,
         holder=holder,
@@ -250,7 +400,13 @@ def claim_run_lease(
         yield lease
     finally:
         current = read_lease(project_root)
-        if current is not None and current.pid == lease.pid and current.host == lease.host:
+        if current is None:
+            return
+        if current.holder == lease.holder:
+            _discard(current)
+        elif not current.has_holder and current.pid == lease.pid and current.host == lease.host:
+            # Legacy/half-written payload without a holder identity: fall
+            # back to pid+host so we still clean up our own file.
             _discard(current)
 
 

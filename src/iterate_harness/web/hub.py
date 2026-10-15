@@ -25,6 +25,7 @@ import asyncio
 import logging
 import os
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,10 +47,20 @@ def _normalize_root(project_root: str | None) -> str | None:
 
 @dataclass(frozen=True)
 class HubEvent:
-    """One broadcast unit pushed to every subscribed SSE connection."""
+    """One broadcast unit pushed to every subscribed SSE connection.
+
+    ``id`` is a hub-global monotonic identifier assigned at publish time
+    (shared by every subscriber), so a reconnecting SSE client can resume
+    from the last id it saw (see :meth:`ChatHub.resume_after`). ``scope`` is
+    the normalized project root the event was published for ("" = broadcast
+    to every subscriber), so resume replay honours the same scoping rule as
+    live fan-out.
+    """
 
     type: str
     data: dict[str, Any]
+    id: int = 0
+    scope: str = ""
 
 
 #: Per-subscriber queue cap. The run loop must never block on a slow client,
@@ -71,6 +82,11 @@ _PRIORITY_TYPES = frozenset({"run-state"})
 #: single-operator local console opens.
 _MAX_SUBSCRIBERS = 64
 
+#: How many recent published events the hub keeps for SSE reconnect resume
+#: (``Last-Event-ID``). Bounds memory: a client that was away longer than
+#: this window gets an explicit ``sse-gap`` notice instead of a replay.
+_REPLAY_BUFFER = 256
+
 
 @dataclass
 class _Subscription:
@@ -87,6 +103,63 @@ class ChatHub:
     def __init__(self) -> None:
         self._subscribers: dict[asyncio.Queue[HubEvent], _Subscription] = {}
         self._lock = asyncio.Lock()
+        #: Hub-global monotonic event-id counter (shared by all subscribers).
+        self._next_id: int = 0
+        #: Bounded ring of recently published events for SSE reconnect
+        #: resume (``Last-Event-ID``). Trimmed on append — see :data:`_REPLAY_BUFFER`.
+        self._recent: deque[HubEvent] = deque()
+
+    def next_event_id(self) -> int:
+        """Allocate and return the next hub-global event id.
+
+        Ids are monotonic across the whole hub (not per-connection), so every
+        subscriber of one publish sees the same id and an SSE client's
+        ``Last-Event-ID`` is meaningful across reconnects. Ids are also
+        handed to locally generated SSE frames (status snapshots), which
+        keeps every frame's id drawn from one increasing sequence.
+        """
+        self._next_id += 1
+        return self._next_id
+
+    def current_event_id(self) -> int:
+        """The most recent id allocated (0 before any publish)."""
+        return self._next_id
+
+    def resume_after(
+        self, event_id: int, project_root: str | None = None
+    ) -> tuple[list[HubEvent], bool]:
+        """Events published after ``event_id`` still held in the ring buffer.
+
+        ``project_root`` applies the same scoping rule as live fan-out: an
+        SSE stream for one project must never replay another project's
+        events. Returns ``(events, complete)``. ``complete`` is False when at
+        least one event published after ``event_id`` has already been evicted
+        from the bounded buffer, so the caller knows a pure replay would
+        silently skip events and must emit a gap notice instead.
+        """
+        current = self._next_id
+        if event_id >= current:
+            return [], True
+        scope = _normalize_root(project_root)
+        # Sort by id: publishes allocate ids outside the lock, so two
+        # interleaved appends can land in the ring slightly out of order.
+        missed = sorted(
+            (
+                event
+                for event in self._recent
+                if event.id > event_id
+                and (scope is None or not event.scope or event.scope == scope)
+            ),
+            key=lambda event: event.id,
+        )
+        oldest_buffered = (
+            min(event.id for event in self._recent) if self._recent else current + 1
+        )
+        # Ids are contiguous integers, so everything after ``event_id`` is
+        # still buffered exactly when the oldest buffered id is at most
+        # ``event_id + 1``.
+        complete = event_id >= oldest_buffered - 1
+        return missed, complete
 
     async def subscribe(self, project_root: str | None = None) -> asyncio.Queue[HubEvent]:
         """Register a new subscriber; returns its private bounded queue.
@@ -121,17 +194,18 @@ class ChatHub:
             )
         return queue
 
-    def reap(self) -> int:
+    async def reap(self) -> int:
         """Drop subscriptions whose owning event loop is closed; returns the count.
 
         A subscriber's queue is only useful while the loop that drains it is
         alive. When a loop is torn down without the generator's ``finally``
         running (an aborted task, a test that never unsubscribed), the entry
-        lingers and every later publish keeps fanning out into it. Callers on a
-        live loop can invoke this directly; :meth:`subscribe` runs the same
-        sweep automatically.
+        lingers and every later publish keeps fanning out into it. Takes the
+        hub lock like every other mutation of ``_subscribers``;
+        :meth:`subscribe` runs the same sweep automatically.
         """
-        return self._reap_locked()
+        async with self._lock:
+            return self._reap_locked()
 
     def _reap_locked(self) -> int:
         """Reap dead subscriptions. Caller must hold ``self._lock`` (or be the
@@ -159,9 +233,20 @@ class ChatHub:
         (process-level notices); events carrying one reach only the subscribers
         scoped to that project (or to the wildcard).
         """
-        event = HubEvent(type=type, data=data)
         scope = _normalize_root(project_root)
+        event = HubEvent(type=type, data=data, id=self.next_event_id(), scope=scope or "")
         async with self._lock:
+            # Keep the bounded replay ring in publish order so a reconnecting
+            # SSE client can resume after its Last-Event-ID (bounded memory:
+            # oldest events are dropped once the buffer is full).
+            self._recent.append(event)
+            # ``while`` (not ``if``): one pop per append only holds the cap
+            # once the ring is already at the cap. If the cap is lowered at
+            # runtime (tests), a single pop would leave the ring permanently
+            # above it — and a ring above the cap makes ``resume_after``
+            # report complete replays it cannot actually deliver.
+            while len(self._recent) > _REPLAY_BUFFER:
+                self._recent.popleft()
             subscribers = [
                 queue
                 for queue, sub in self._subscribers.items()

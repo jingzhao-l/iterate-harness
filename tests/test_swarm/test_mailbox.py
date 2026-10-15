@@ -225,3 +225,92 @@ def test_get_agent_mailbox_dir_rejects_path_traversal_in_agent_id(tmp_path, monk
         get_agent_mailbox_dir("my-team", "../evil")
     escaped = tmp_path / "evil"
     assert not escaped.exists()
+
+
+# ---------------------------------------------------------------------------
+# Path safety (message id becomes an on-disk filename)
+# ---------------------------------------------------------------------------
+
+
+async def test_write_rejects_path_traversal_message_id(mailbox, tmp_path):
+    """A message id containing a path separator must never write outside the
+    inbox directory (the id is interpolated into the filename)."""
+    msg = MailboxMessage(
+        id="../../escaped",
+        type="user_message",
+        sender="leader",
+        recipient="worker1",
+        payload={"content": "hi"},
+        timestamp=time.time(),
+    )
+    with pytest.raises(ValueError, match="path-safe"):
+        await mailbox.write(msg)
+    assert not (tmp_path / "escaped").exists()
+    assert not (tmp_path / "test-team" / "escaped").exists()
+
+
+async def test_write_rejects_nul_byte_message_id(mailbox):
+    msg = MailboxMessage(
+        id="a\x00b",
+        type="user_message",
+        sender="leader",
+        recipient="worker1",
+        payload={},
+        timestamp=time.time(),
+    )
+    with pytest.raises(ValueError, match="path-safe"):
+        await mailbox.write(msg)
+
+
+# ---------------------------------------------------------------------------
+# Bounded growth: read messages are pruned after retention
+# ---------------------------------------------------------------------------
+
+
+async def test_write_prunes_old_read_messages(mailbox, monkeypatch):
+    """Read messages older than the retention window must be deleted on the
+    next write, otherwise a long-lived teammate's inbox grows forever."""
+    import json as _json
+
+    from iterate_harness.swarm import mailbox as mailbox_mod
+
+    old_read = MailboxMessage(
+        id="old-read",
+        type="user_message",
+        sender="leader",
+        recipient="worker1",
+        payload={"content": "done"},
+        timestamp=time.time() - 7 * 3600,
+        read=True,
+    )
+    old_unread = MailboxMessage(
+        id="old-unread",
+        type="user_message",
+        sender="leader",
+        recipient="worker1",
+        payload={"content": "not consumed yet"},
+        timestamp=time.time() - 7 * 3600,
+        read=False,
+    )
+    for msg in (old_read, old_unread):
+        await mailbox.write(msg)
+
+    # Backdate both files beyond the retention window.
+    import os as _os
+
+    cutoff = mailbox_mod._READ_RETENTION_SECONDS + 60
+    inbox = mailbox.get_mailbox_dir()
+    for path in inbox.glob("*.json"):
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        if data.get("id") in {"old-read", "old-unread"}:
+            _os.utime(path, (time.time() - cutoff, time.time() - cutoff))
+
+    # The next write triggers pruning.
+    await mailbox.write(_make_msg())
+
+    remaining = {m.id for m in await mailbox.read_all(unread_only=False)}
+    # Old read message pruned; old UNREAD message retained (leader may still
+    # need it), and the fresh message kept.
+    assert "old-read" not in remaining
+    assert "old-unread" in remaining
+    assert "msg-001" in remaining

@@ -46,12 +46,14 @@ async def run_repl(
     max_turns: int | None = None,
     base_url: str | None = None,
     system_prompt: str | None = None,
+    append_system_prompt: str | None = None,
     api_key: str | None = None,
     api_format: str | None = None,
     api_client: SupportsStreamingMessages | None = None,
     backend_only: bool = False,
     restore_messages: list[dict[str, object]] | None = None,
     restore_tool_metadata: dict[str, object] | None = None,
+    restore_session_id: str | None = None,
     permission_mode: str | None = None,
     config_path: str | None = None,
     effort: str | None = None,
@@ -67,6 +69,7 @@ async def run_repl(
             max_turns=max_turns,
             base_url=base_url,
             system_prompt=system_prompt,
+            append_system_prompt=append_system_prompt,
             api_key=api_key,
             api_format=api_format,
             api_client=api_client,
@@ -82,6 +85,14 @@ async def run_repl(
         )
         return
 
+    if (restore_messages or restore_tool_metadata) and not restore_session_id:
+        # The React TUI runs the runtime in a spawned backend host process;
+        # restoring requires reloading the snapshot there by id. Without an id
+        # the restored history would be silently dropped — fail loudly instead.
+        raise RuntimeError(
+            "session restore through the React TUI requires restore_session_id"
+        )
+
     exit_code = await launch_react_tui(
         prompt=prompt,
         cwd=cwd,
@@ -89,6 +100,7 @@ async def run_repl(
         max_turns=max_turns,
         base_url=base_url,
         system_prompt=system_prompt,
+        append_system_prompt=append_system_prompt,
         api_key=api_key,
         api_format=api_format,
         permission_mode=permission_mode,
@@ -97,6 +109,7 @@ async def run_repl(
         verbose=verbose,
         allowed_tools=list(allowed_tools) if allowed_tools else None,
         disallowed_tools=list(disallowed_tools) if disallowed_tools else None,
+        restore_session_id=restore_session_id,
     )
     if exit_code != 0:
         raise SystemExit(exit_code)
@@ -109,6 +122,7 @@ async def run_task_worker(
     max_turns: int | None = None,
     base_url: str | None = None,
     system_prompt: str | None = None,
+    append_system_prompt: str | None = None,
     api_key: str | None = None,
     api_format: str | None = None,
     api_client: SupportsStreamingMessages | None = None,
@@ -161,6 +175,7 @@ async def run_task_worker(
         max_turns=max_turns,
         base_url=base_url,
         system_prompt=system_prompt,
+        append_system_prompt=append_system_prompt,
         api_key=api_key,
         api_format=api_format,
         api_client=api_client,
@@ -238,10 +253,21 @@ async def run_print_mode(
         ToolExecutionStarted,
     )
 
-    async def _noop_permission(tool_name: str, reason: str) -> bool:
-        return True
+    async def _deny_unattended_permission(tool_name: str, reason: str) -> bool:
+        # Fail closed: print mode has no TTY to prompt on, so a tool that
+        # requires confirmation must be denied with a clear explanation —
+        # never silently auto-approved. `full_auto` (or explicitly allowed
+        # tools) never reach this prompt.
+        print(
+            f"Permission denied (non-interactive mode): {tool_name} — {reason}. "
+            "Re-run with --permission-mode full_auto (or --dangerously-skip-permissions) "
+            "to allow tools without a prompt.",
+            file=sys.stderr,
+        )
+        return False
 
     async def _noop_ask(question: str) -> str:
+        del question
         return ""
 
     bundle = await build_runtime(
@@ -251,11 +277,12 @@ async def run_print_mode(
         max_turns=max_turns,
         base_url=base_url,
         system_prompt=system_prompt,
+        append_system_prompt=append_system_prompt,
         api_key=api_key,
         api_format=api_format,
         enforce_max_turns=True,
         api_client=api_client,
-        permission_prompt=_noop_permission,
+        permission_prompt=_deny_unattended_permission,
         ask_user_prompt=_noop_ask,
         config_path=config_path,
         effort=effort,
@@ -381,6 +408,10 @@ async def run_print_mode(
             clear_output=_clear_output,
             remote_context=True,
             remote_admin_opt_in_requested=admin_opt_in,
+            # Non-interactive contract: a failed model turn must surface AND
+            # fail the process (exit non-zero) instead of being contained like
+            # in an interactive console.
+            propagate_errors=True,
         )
         if is_coordinator_mode():
             await drain_coordinator_async_agents(

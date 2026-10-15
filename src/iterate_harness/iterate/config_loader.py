@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -61,15 +61,33 @@ class EffectiveConfig:
 def load_config(project_root: str | Path) -> dict[str, object] | None:
     """Load and parse ``iterate.config.yaml`` from the project root.
 
-    Returns ``None`` if the file is missing or does not parse to a mapping.
+    Returns ``None`` if the file is missing or unusable (unreadable, invalid
+    YAML, or a non-mapping document). Every failure *other than* the file
+    simply not existing is logged with the path and the reason — silently
+    returning ``None`` made "my config is ignored" reports undebuggable.
     """
     path = Path(project_root) / CONFIG_FILENAME
     try:
         content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None  # no config file is the normal out-of-the-box case
+    except OSError as exc:
+        log.warning("Cannot read %s (%s) — using the built-in defaults", path, exc)
+        return None
+    try:
         parsed = yaml.safe_load(content)
-    except (OSError, yaml.YAMLError):
+    except yaml.YAMLError as exc:
+        log.warning("Invalid YAML in %s (%s) — using the built-in defaults", path, exc)
+        return None
+    if parsed is None:
+        # An empty document is indistinguishable from "no overrides".
         return None
     if not isinstance(parsed, dict):
+        log.warning(
+            "%s must hold a mapping at the top level (got %s) — using the built-in defaults",
+            path,
+            type(parsed).__name__,
+        )
         return None
     return parsed
 
@@ -381,6 +399,81 @@ def merge_config(
     return out
 
 
+#: Keys of the ``git`` section the kernel understands. Kept in sync with
+#: :func:`_default_config_dict`; anything else is reported as an error.
+_GIT_KEYS = ("target_branch", "use_worktree", "push_per_round", "auto_merge")
+
+
+def _parse_git_section(raw: object, fallback: GitConfig) -> tuple[GitConfig, list[str]]:
+    """Parse the ``git`` mapping defensively.
+
+    ``git_raw.get("use_worktree", default)`` used to store whatever the yaml
+    held, so ``use_worktree: "no"`` became a *truthy* string that silently
+    switched every round onto a worktree; unknown keys (``auto_commit``) were
+    dropped without a word and the setting never took effect.
+    """
+    if not isinstance(raw, dict):
+        return fallback, []
+    errors: list[str] = []
+
+    target_branch = raw.get("target_branch", fallback.target_branch)
+    if not isinstance(target_branch, str) or not target_branch.strip():
+        errors.append(f"git.target_branch must be a non-empty string (got {target_branch!r})")
+        target_branch = fallback.target_branch
+
+    def _bool_field(name: str, value: object, current: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        errors.append(f"git.{name} must be a boolean (got {value!r})")
+        return current
+
+    use_worktree = _bool_field(
+        "use_worktree", raw.get("use_worktree", fallback.use_worktree), fallback.use_worktree
+    )
+    push_per_round = _bool_field(
+        "push_per_round", raw.get("push_per_round", fallback.push_per_round),
+        fallback.push_per_round,
+    )
+    auto_merge = _bool_field(
+        "auto_merge", raw.get("auto_merge", fallback.auto_merge), fallback.auto_merge
+    )
+
+    for key in raw:
+        if key not in _GIT_KEYS:
+            errors.append(
+                f"git.{key} is not a known key (expected one of: {', '.join(_GIT_KEYS)})"
+            )
+
+    return (
+        GitConfig(
+            target_branch=target_branch,
+            use_worktree=use_worktree,
+            push_per_round=push_per_round,
+            auto_merge=auto_merge,
+        ),
+        errors,
+    )
+
+
+def _harness_budget_defaults() -> tuple[float | None, int | None]:
+    """Harness-level budget fallbacks from ``~/.iterate-harness/settings.json``.
+
+    Returns ``(budget_usd, max_turns_per_minute)``. The project config wins
+    whenever it sets either key; these only fill the gap for projects that
+    never mention them, so one settings entry can cap every run. Loaded
+    lazily and defensively: the iterate layer must keep working when kernel
+    settings cannot be read.
+    """
+    try:
+        from iterate_harness.config.settings import load_settings  # noqa: PLC0415
+
+        iterate = load_settings().iterate
+    except Exception as exc:  # noqa: BLE001 - config loading must never fail
+        log.debug("Could not load harness budget defaults: %s", exc)
+        return None, None
+    return iterate.budget_usd, iterate.max_turns_per_minute
+
+
 def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     """Build a typed :class:`IterateConfig` from a (merged) raw dict.
 
@@ -424,16 +517,7 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     else:
         atomic = defaults.atomic
 
-    git_raw = data.get("git")
-    if isinstance(git_raw, dict):
-        git = GitConfig(
-            target_branch=git_raw.get("target_branch", defaults.git.target_branch),
-            use_worktree=git_raw.get("use_worktree", defaults.git.use_worktree),
-            push_per_round=git_raw.get("push_per_round", defaults.git.push_per_round),
-            auto_merge=git_raw.get("auto_merge", defaults.git.auto_merge),
-        )
-    else:
-        git = defaults.git
+    git, _git_errors = _parse_git_section(data.get("git"), defaults.git)
 
     validation_raw = data.get("validation")
     if isinstance(validation_raw, dict):
@@ -493,13 +577,23 @@ def config_from_dict(data: dict[str, object] | None) -> IterateConfig:
     dimension_resources, _resource_errors = parse_dimension_resources(
         data.get("dimension_resources")
     )
+    raw_budget_usd = data.get("budget_usd")
+    raw_rate_limit = data.get("max_turns_per_minute")
+    if raw_budget_usd is None or raw_rate_limit is None:
+        # Harness-level settings fill only the keys the project left unset.
+        harness_budget_usd, harness_rate_limit = _harness_budget_defaults()
+        if raw_budget_usd is None:
+            raw_budget_usd = harness_budget_usd
+        if raw_rate_limit is None:
+            raw_rate_limit = harness_rate_limit
     token_budget, _budget_errors = parse_token_budget(data.get("token_budget"))
-    budget_usd, _budget_usd_errors = parse_budget_usd(data.get("budget_usd"))
-    max_turns_per_minute, _rate_errors = parse_rate_limit(data.get("max_turns_per_minute"))
+    budget_usd, _budget_usd_errors = parse_budget_usd(raw_budget_usd)
+    max_turns_per_minute, _rate_errors = parse_rate_limit(raw_rate_limit)
     reasoning_effort = parse_reasoning_effort(data.get("reasoning_effort"))
     worktree_isolation, _worktree_errors = parse_worktree_isolation(data.get("worktree_isolation"))
     thresholds, _threshold_errors = parse_thresholds(data.get("thresholds"))
     for label, errors in (
+        ("git", _git_errors),
         ("dimension_resources", _resource_errors),
         ("token_budget", _budget_errors),
         ("budget_usd", _budget_usd_errors),
@@ -557,7 +651,13 @@ def load_effective_config(project_root: str | Path) -> EffectiveConfig:
     """
     override = load_config(project_root)
     if override is None:
-        return EffectiveConfig(config=default_config(), source="defaults", override=None)
+        config = default_config()
+        harness_budget_usd, harness_rate_limit = _harness_budget_defaults()
+        if harness_budget_usd is not None:
+            config = replace(config, budget_usd=harness_budget_usd)
+        if harness_rate_limit is not None:
+            config = replace(config, max_turns_per_minute=harness_rate_limit)
+        return EffectiveConfig(config=config, source="defaults", override=None)
     merged = merge_config(_default_config_dict(), override)
     return EffectiveConfig(
         config=config_from_dict(merged),

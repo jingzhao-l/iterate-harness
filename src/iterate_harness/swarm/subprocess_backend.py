@@ -34,11 +34,26 @@ class SubprocessBackend:
     _agent_tasks: dict[str, str]
 
     def __init__(self) -> None:
-        self._agent_tasks = {}
+        self._agent_tasks: dict[str, str] = {}
 
     def is_available(self) -> bool:
         """Subprocess backend is always available."""
         return True
+
+    def _prune_finished_agents(self) -> None:
+        """Drop bookkeeping for agents whose task is already terminal.
+
+        ``_agent_tasks`` only shrinks in :meth:`shutdown`, but a teammate
+        whose subprocess exits on its own is never shut down explicitly —
+        over a long swarm session the dict would grow once per spawned
+        teammate. Pruning finished (or already-evicted) tasks here bounds
+        it to *live* teammates at spawn time.
+        """
+        manager = get_task_manager()
+        for agent_id, task_id in list(self._agent_tasks.items()):
+            record = manager.get_task(task_id)
+            if record is None or record.status in {"completed", "failed", "killed"}:
+                self._agent_tasks.pop(agent_id, None)
 
     async def spawn(self, config: TeammateSpawnConfig) -> SpawnResult:
         """Spawn a new teammate as a subprocess via the task manager.
@@ -47,6 +62,7 @@ class SubprocessBackend:
         that accepts the initial prompt via stdin.
         """
         agent_id = f"{config.name}@{config.team}"
+        self._prune_finished_agents()
 
         # A definition's tool posture is only real if the spawned process
         # actually honours it. Forward both lists as CLI flags so the

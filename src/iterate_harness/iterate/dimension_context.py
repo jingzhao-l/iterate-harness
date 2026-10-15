@@ -128,14 +128,51 @@ class DimensionEvidence:
         return out
 
     @classmethod
+    def _parse_decisions(cls, raw: object) -> int:
+        """Coerce a recorded decision count; a wrong type is a producer bug.
+
+        ``int(raw.get("decisions", 0))`` used to turn ``decisions: true`` into
+        ``1`` (bool subclasses int) and crash with a bare ``ValueError``/
+        ``TypeError`` on anything else — neither of which the caller maps to a
+        kernel error frame.
+        """
+        if isinstance(raw, bool):
+            raise DimensionContextError(
+                DIMENSION_E_EMPTY,
+                f"a recorded decision count must be an integer (got {raw!r})",
+                "booleans are not counts; the ledger entry that produced this is malformed",
+            )
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return int(raw.strip())
+            except ValueError:
+                pass
+        raise DimensionContextError(
+            DIMENSION_E_EMPTY,
+            f"a recorded decision count must be an integer (got {raw!r})",
+            "this is a count of ledger entries; the producer is writing the wrong type",
+        )
+
+    @classmethod
     def from_json(cls, raw: Mapping[str, Any]) -> "DimensionEvidence":
         ids = raw.get("operationIds")
-        decisions = int(raw.get("decisions", 0))
+        decisions = cls._parse_decisions(raw.get("decisions", 0))
         if decisions < 0:
             raise DimensionContextError(
                 DIMENSION_E_EMPTY,
                 f"a recorded decision count cannot be negative (got {decisions})",
                 "this is a count of ledger entries; a negative value means the producer is wrong",
+            )
+        if ids is not None and (
+            not isinstance(ids, (list, tuple))
+            or any(not isinstance(item, str) for item in ids)
+        ):
+            raise DimensionContextError(
+                DIMENSION_E_EMPTY,
+                "operationIds must be a list of strings",
+                "ids come from the ledger; keep them as strings so they survive JSON round-trips",
             )
         if ids is not None and len(ids) > DIMENSION_MAX_OPERATION_IDS:
             raise DimensionContextError(

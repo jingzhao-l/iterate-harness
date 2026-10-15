@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 from pathlib import Path
-from typing import Any, Annotated, Literal, cast
+from typing import Any, Annotated, ClassVar, Literal, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -26,6 +26,11 @@ class ImageBlock(BaseModel):
     data: str
     source_path: str = ""
 
+    #: Safety cap on image attachment size: a multi-gigabyte "image" (or a
+    #: mislabeled file) must not be read fully into a base64 buffer — the
+    #: provider would reject it anyway.
+    MAX_ATTACHMENT_BYTES: ClassVar[int] = 20 * 1024 * 1024
+
     @classmethod
     def from_path(cls, path: str | Path) -> "ImageBlock":
         """Load a local image file into a base64-backed content block."""
@@ -33,6 +38,15 @@ class ImageBlock(BaseModel):
         media_type, _ = mimetypes.guess_type(str(resolved))
         if not media_type or not media_type.startswith("image/"):
             raise ValueError(f"Unsupported image attachment: {resolved}")
+        try:
+            size = resolved.stat().st_size
+        except OSError as exc:
+            raise ValueError(f"Cannot read image attachment: {resolved} ({exc})") from exc
+        if size > cls.MAX_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"Image attachment too large: {resolved} is {size} bytes "
+                f"(limit {cls.MAX_ATTACHMENT_BYTES})"
+            )
         payload = base64.b64encode(resolved.read_bytes()).decode("ascii")
         return cls(media_type=media_type, data=payload, source_path=str(resolved))
 

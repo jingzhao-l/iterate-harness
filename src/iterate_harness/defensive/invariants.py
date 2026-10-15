@@ -116,11 +116,30 @@ def check_invariants(
         for command in module_commands:
             if not command_is_safe(command):
                 report.checks_run += 1
+                # A config shape problem is not a project invariant failure:
+                # the operator's own invariants.commands entry contains a
+                # shell metacharacter (glob, quote, pipe …). Keep the
+                # fail-closed behavior (this blocks edits) but make the reason
+                # name the exact offending characters so the config can be
+                # fixed instead of "the agent can no longer edit anything"
+                # with no idea which entry is broken.
+                offenders = sorted({ch for ch in command if ch in COMMAND_METACHARS})
+                if not command.strip():
+                    detail = "refused: empty command entry (delete the blank line in invariants.commands)"
+                else:
+                    detail = (
+                        "refused: unsafe command — remove the shell metacharacters "
+                        f"{offenders} from this invariants.commands entry "
+                        "(globs/quotes/chaining are not supported)"
+                    )
+                log.error(
+                    "invariants.commands entry for module %r is unusable: %r", module, command
+                )
                 report.violations.append(
                     InvariantViolation(
                         kind="refused",
                         label=f"{module}:{command}",
-                        detail="refused: unsafe command (shell metacharacter or empty)",
+                        detail=detail,
                     )
                 )
                 report.passed = False

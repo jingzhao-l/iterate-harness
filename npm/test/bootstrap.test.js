@@ -4,6 +4,9 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const http = require("http");
+const os = require("os");
 const path = require("path");
 
 const {
@@ -11,14 +14,18 @@ const {
   BootstrapError,
   HOME_ENV_VAR,
   INSTALL_URL_ENV_VAR,
+  LOCK_FILE_NAME,
   MAX_DOWNLOAD_REDIRECTS,
   PYTHON_ENV_VAR,
+  acquireBootstrapLock,
   artifactExtensionFor,
   checksumAssetUrl,
   curlDownload,
+  detectPython,
   downloadCachePath,
   downloadFile,
   downloadTarballTo,
+  fetchChecksumText,
   installCandidates,
   installHarness,
   installRemoteArtifact,
@@ -31,12 +38,36 @@ const {
   pypiInstallSpec,
   pythonCandidates,
   releaseTarballUrl,
+  resolveRedirectUrl,
+  runStep,
   sha256File,
   venvExecutablePaths,
   verifyDownloadedArtifact,
   wheelAssetName,
   wheelAssetUrl,
 } = require("../lib/bootstrap");
+
+// POSIX-only cases (shell-script interpreters, `sh -c`) are skipped on Windows
+// rather than silently asserting nothing.
+const posixOnly = process.platform === "win32" ? "requires a POSIX shell" : false;
+
+// Local HTTP server helper for the redirect/partial-download tests — the
+// wrapper's own download stack is exercised against real sockets, no network.
+function startServer(handler) {
+  return new Promise((resolve) => {
+    const server = http.createServer(handler);
+    server.listen(0, "127.0.0.1", () => {
+      resolve({
+        server,
+        url: `http://127.0.0.1:${server.address().port}`,
+        close: () => {
+          server.closeAllConnections();
+          server.close();
+        },
+      });
+    });
+  });
+}
 
 // Download-path tests use this pair: the downloader writes real bytes and
 // records the artifact digest, and the checksum fetcher answers with those
@@ -515,10 +546,26 @@ test("curlDownload invokes curl with fail-fast, redirects, timeout and output pi
     "-fsSL",
     "--max-time",
     "240",
+    // curl -L must not follow a redirect into plain http behind our back.
+    "--proto-redir",
+    "=https",
     "-o",
     "/tmp/y.tar.gz",
     "https://github.com/x/y.tar.gz",
   ]);
+});
+
+test("curlDownload widens --proto-redir only when plain HTTP is opted in", () => {
+  const calls = [];
+  const spawnFn = (command, args) => {
+    calls.push([command, args]);
+    return { status: 0, stdout: "", stderr: "" };
+  };
+  curlDownload("http://mirror/x.tar.gz", "/tmp/x.tar.gz", spawnFn, true);
+  const args = calls[0][1];
+  const protoIndex = args.indexOf("--proto-redir");
+  assert.ok(protoIndex !== -1, "expected --proto-redir in the curl invocation");
+  assert.equal(args[protoIndex + 1], "=https,http");
 });
 
 test("curlDownload reports non-zero exits and spawn errors as BootstrapError", () => {
@@ -692,5 +739,262 @@ test("installRemoteArtifact verifies downloaded bytes before pip installs them",
   assert.ok(
     calls.some((c) => c[0] === "downloaded"),
     "expected the artifact to be downloaded before the local pip install"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Redirect safety: malformed Location, protocol whitelist, http-downgrade gate
+// ---------------------------------------------------------------------------
+
+test("resolveRedirectUrl resolves relative redirects against the source URL", () => {
+  assert.equal(
+    resolveRedirectUrl("/v2/y.whl", "https://x/v1/y.whl", false),
+    "https://x/v2/y.whl"
+  );
+  assert.equal(
+    resolveRedirectUrl("https://cdn/x.whl", "https://x/y.whl", false),
+    "https://cdn/x.whl"
+  );
+});
+
+test("resolveRedirectUrl refuses an https→http downgrade unless --allow-http", () => {
+  assert.throws(
+    () => resolveRedirectUrl("http://mirror/y.whl", "https://x/y.whl", false),
+    (error) => error instanceof BootstrapError && /plain-HTTP/.test(error.message)
+  );
+  assert.equal(
+    resolveRedirectUrl("http://mirror/y.whl", "https://x/y.whl", true),
+    "http://mirror/y.whl"
+  );
+});
+
+test("resolveRedirectUrl reports a malformed Location instead of crashing", () => {
+  assert.throws(
+    () => resolveRedirectUrl("http://[::bad", "https://x/y.whl", false),
+    (error) => error instanceof BootstrapError && /invalid redirect/.test(error.message)
+  );
+});
+
+test("downloadFile rejects non-http(s) protocols before touching the network", async () => {
+  await assert.rejects(
+    downloadFile("ftp://example.com/y.tar.gz", path.join(os.tmpdir(), "never-ftp.bin")),
+    (error) => error instanceof BootstrapError && /unsupported download protocol/.test(error.message)
+  );
+});
+
+test("fetchChecksumText rejects non-http(s) protocols before touching the network", async () => {
+  await assert.rejects(
+    fetchChecksumText("ftp://example.com/y.tar.gz.sha256"),
+    (error) => error instanceof BootstrapError && /unsupported checksum protocol/.test(error.message)
+  );
+});
+
+test("downloadFile refuses to follow a redirect downgrade to plain HTTP", async (t) => {
+  const { url, close } = await startServer((req, res) => {
+    if (req.url === "/from") {
+      res.writeHead(302, { location: `${url}/to` });
+      res.end();
+    } else {
+      res.end("secret bytes");
+    }
+  });
+  t.after(close);
+  const dest = path.join(os.tmpdir(), `ih-dl-downgrade-${process.pid}.bin`);
+  t.after(() => fs.rmSync(dest, { force: true }));
+
+  await assert.rejects(
+    downloadFile(`${url}/from`, dest, undefined, 10000),
+    (error) => error instanceof BootstrapError && /plain-HTTP/.test(error.message)
+  );
+  // The gate must also fire for the checksum sidecar fetch.
+  await assert.rejects(
+    fetchChecksumText(`${url}/from`, undefined, 10000),
+    (error) => error instanceof BootstrapError && /plain-HTTP/.test(error.message)
+  );
+  assert.equal(fs.existsSync(dest), false);
+});
+
+test("downloadFile follows a redirect to plain HTTP when explicitly allowed", async (t) => {
+  const { url, close } = await startServer((req, res) => {
+    if (req.url === "/from") {
+      res.writeHead(302, { location: `${url}/to` });
+      res.end();
+    } else {
+      res.end("release bytes");
+    }
+  });
+  t.after(close);
+  const dest = path.join(os.tmpdir(), `ih-dl-allowhttp-${process.pid}.bin`);
+  t.after(() => fs.rmSync(dest, { force: true }));
+
+  await downloadFile(`${url}/from`, dest, undefined, 10000, undefined, true);
+  assert.equal(fs.readFileSync(dest, "utf8"), "release bytes");
+});
+
+test("downloadFile survives a malformed Location header without crashing", async (t) => {
+  const { url, close } = await startServer((req, res) => {
+    res.writeHead(302, { location: "http://[::bad" });
+    res.end();
+  });
+  t.after(close);
+  const dest = path.join(os.tmpdir(), `ih-dl-badloc-${process.pid}.bin`);
+  t.after(() => fs.rmSync(dest, { force: true }));
+
+  // The old code threw an uncaught TypeError inside the response callback,
+  // killing the process with a raw stack trace instead of rejecting.
+  await assert.rejects(
+    downloadFile(`${url}/from`, dest, undefined, 10000),
+    (error) => error instanceof BootstrapError && /invalid redirect/.test(error.message)
+  );
+  assert.equal(fs.existsSync(dest), false);
+});
+
+test("downloadFile removes the partial file when the connection dies mid-body", async (t) => {
+  const { url, close } = await startServer((req, res) => {
+    // Promise 1000 bytes, send a handful, then kill the socket.
+    res.writeHead(200, { "content-length": "1000" });
+    res.write("just a few bytes ...");
+    res.destroy();
+  });
+  t.after(close);
+  const dest = path.join(os.tmpdir(), `ih-dl-partial-${process.pid}.bin`);
+  t.after(() => fs.rmSync(dest, { force: true }));
+
+  await assert.rejects(downloadFile(`${url}/partial`, dest, undefined, 10000));
+  // A truncated artifact must never linger in the cache.
+  assert.equal(fs.existsSync(dest), false);
+});
+
+test("downloadFile writes a complete 200 response to disk", async (t) => {
+  const { url, close } = await startServer((req, res) => {
+    res.end("full artifact bytes");
+  });
+  t.after(close);
+  const dest = path.join(os.tmpdir(), `ih-dl-ok-${process.pid}.bin`);
+  t.after(() => fs.rmSync(dest, { force: true }));
+
+  const result = await downloadFile(`${url}/artifact`, dest, undefined, 10000);
+  assert.equal(result, dest);
+  assert.equal(fs.readFileSync(dest, "utf8"), "full artifact bytes");
+});
+
+// ---------------------------------------------------------------------------
+// Hanging children: probe and step timeouts
+// ---------------------------------------------------------------------------
+
+test("detectPython times out a hanging interpreter probe", { skip: posixOnly }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ih-hang-"));
+  const hanging = path.join(dir, "hanging-python");
+  fs.writeFileSync(hanging, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+  // Starve the fallback candidates too: with a prepended PATH, `python3` and
+  // `python` resolve to the same hanging script, so every candidate hits the
+  // probe timeout instead of a real interpreter rescuing the test.
+  const binDir = path.join(dir, "bin");
+  fs.mkdirSync(binDir);
+  for (const name of ["python3", "python"]) {
+    fs.copyFileSync(hanging, path.join(binDir, name));
+    fs.chmodSync(path.join(binDir, name), 0o755);
+  }
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${binDir}:${oldPath}`;
+  try {
+    assert.throws(
+      () => detectPython({ [PYTHON_ENV_VAR]: hanging }, { probeTimeoutMs: 200 }),
+      (error) => error instanceof BootstrapError && /timed out/.test(error.message)
+    );
+  } finally {
+    process.env.PATH = oldPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("runStep times out a hanging step instead of blocking forever", { skip: posixOnly }, () => {
+  assert.throws(
+    () => runStep("sh", ["-c", "exec sleep 30"], { timeout: 200 }),
+    (error) => error instanceof BootstrapError && /timed out/.test(error.message)
+  );
+});
+
+test("runStep reports signal-killed children instead of a null exit code", { skip: posixOnly }, () => {
+  assert.throws(
+    () => runStep("sh", ["-c", "kill -9 $$"], { timeout: 5000 }),
+    (error) => error instanceof BootstrapError && /terminated by signal/.test(error.message)
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Bootstrap lock: serialization, stale reaping, token-safe release
+// ---------------------------------------------------------------------------
+
+test("acquireBootstrapLock serializes concurrent bootstraps", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ih-lock-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const release = await acquireBootstrapLock(dir, { pollIntervalMs: 20 });
+  await assert.rejects(
+    acquireBootstrapLock(dir, { pollIntervalMs: 20, acquireTimeoutMs: 150 }),
+    (error) =>
+      error instanceof BootstrapError &&
+      error.message.includes("timed out waiting for the bootstrap lock")
+  );
+  release();
+  // Released → a new bootstrap can take the lock again.
+  const release2 = await acquireBootstrapLock(dir, { pollIntervalMs: 20 });
+  release2();
+  assert.equal(fs.existsSync(path.join(dir, LOCK_FILE_NAME)), false);
+});
+
+test("acquireBootstrapLock reaps a stale lock from a crashed installer", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ih-lock-stale-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const lockPath = path.join(dir, LOCK_FILE_NAME);
+  fs.writeFileSync(lockPath, "dead-owner");
+  const longAgo = new Date(Date.now() - 60 * 60 * 1000);
+  fs.utimesSync(lockPath, longAgo, longAgo);
+
+  const release = await acquireBootstrapLock(dir, { pollIntervalMs: 20, staleMs: 1000 });
+  release();
+  assert.equal(fs.existsSync(lockPath), false);
+});
+
+test("acquireBootstrapLock release never deletes a lock it does not own", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ih-lock-foreign-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const lockPath = path.join(dir, LOCK_FILE_NAME);
+  const release = await acquireBootstrapLock(dir, { pollIntervalMs: 20 });
+  // Simulate our lock being stale-reaped and re-taken by another waiter
+  // before our release callback runs.
+  fs.writeFileSync(lockPath, "foreign-token");
+  release();
+  assert.equal(fs.readFileSync(lockPath, "utf8"), "foreign-token");
+});
+
+// ---------------------------------------------------------------------------
+// Error chaining: the primary pip failure must survive the fallback's failure
+// ---------------------------------------------------------------------------
+
+test("installRemoteArtifact keeps the primary pip error when the fallback fails", async () => {
+  await assert.rejects(
+    installRemoteArtifact(
+      "python",
+      "https://x/y.whl",
+      path.join("home", "npm"),
+      "1.0.0",
+      async () => {
+        throw new BootstrapError("pip exited with code 1: CERTIFICATE_VERIFY_FAILED");
+      },
+      async () => {
+        throw new Error("socket hang up");
+      },
+      noChecksumStub,
+      false,
+      false
+    ),
+    (error) =>
+      error instanceof BootstrapError &&
+      error.message.includes("CERTIFICATE_VERIFY_FAILED") &&
+      error.message.includes("socket hang up")
   );
 });

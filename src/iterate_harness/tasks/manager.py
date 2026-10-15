@@ -297,7 +297,13 @@ class BackgroundTaskManager:
                 try:
                     await abort()
                 except Exception:
+                    # The backend could not confirm termination: claiming
+                    # "killed" here would be a success result for a stop that
+                    # never happened. Surface the real failure and leave the
+                    # record (and the abort mapping) intact so a retry — or
+                    # the task's own done-callback — can still settle it.
                     log.exception("In-process abort for task %s failed", task_id)
+                    raise
                 if task.status not in {"completed", "failed", "killed"}:
                     task.status = "killed"
                     task.ended_at = time.time()
@@ -554,6 +560,10 @@ class BackgroundTaskManager:
             self._tasks.pop(task.id, None)
             self._output_locks.pop(task.id, None)
             self._input_locks.pop(task.id, None)
+            # Drop the generation counter too: it is only ever *added* during
+            # a spawn, so without this the dict grows once per task for the
+            # whole session even after the record itself has been evicted.
+            self._generations.pop(task.id, None)
 
     async def _copy_output(self, task_id: str, process: asyncio.subprocess.Process) -> None:
         if process.stdout is None:

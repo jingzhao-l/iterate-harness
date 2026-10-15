@@ -69,7 +69,11 @@ class LspTool(BaseTool[LspToolInput]):
             results = workspace_symbol_search(root, arguments.query or "")
             return ToolResult(output=_format_symbol_locations(results, root))
 
-        assert arguments.file_path is not None  # validated above
+        if arguments.file_path is None:
+            # Unreachable through normal pydantic validation, but a caller
+            # constructing/bypassing the model must get a real error, not an
+            # ``assert`` that vanishes under ``python -O``.
+            raise ValueError(f"{arguments.operation} requires file_path")
         file_path = _resolve_path(root, arguments.file_path)
         if not file_path.exists():
             return ToolResult(output=f"File not found: {file_path}", is_error=True)

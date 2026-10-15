@@ -2,13 +2,309 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **`scripts/install.py::_installed_version()` 在 Python 3.10 上不再报假版本。** 包里
+  `requires-python >= 3.10`，而 `tomllib` 是 3.11+ 才有——缺模块的 `ImportError` 被
+  `except Exception` 与"清单坏了"同一路径吞掉，于是在一个受支持的解释器上
+  `iterate-installer --version` 打印 `0.0.0+unknown`，而 `pyproject.toml` 写的是 3.5.0。
+  修法是把两件事分开：`ImportError` 走无解析器的行读取（只认 `[project]` 表里的
+  `version = "…"`，遇到下一个表头即停），真·TOML 语法坏仍回落到占位符。
+  同时改掉那条让缺陷看不见的测试：`tests/test_install_script.py` 原先无条件
+  `import tomllib` 来算期望值，等于"测试只在产品能跑的解释器上跑"——3.10 的 CI 因此
+  连着红了 5 个 run（`c8f2e14`/`13187a6`/`ff249de`/`37b480d`/`59307ad`），把这期间每一批的
+  验收信号一起盖掉。现在期望值由测试自己按行扫读取，另加三条：模拟 `tomllib` 缺失
+  （任何解释器都能测到 3.10 那条路）、别的表里的 `version =` 不得被当成版本、
+  读不出来时返回 `None` 而不是猜。
+  实测：3.11 上该组 6 passed；真 python3.10 下 `_installed_version()` 从
+  `0.0.0+unknown` 变 `3.5.0`；反向对照（把新回退撤掉）当场回到 `0.0.0+unknown`，
+  证明这条分支承重而非装饰；改完按 sha256 核回，ruff 干净。
+
+### Added
+
+- **`iterate-kernel@0.1.6`：决策日志条目学会说"哪一种决定、第几轮、哪个维度、凭什么"，
+  并新增 `decision-log-transcribe` 把两侧**已经在写**的日志映射成这个形状（场景③的
+  契约半边）。** 条目此前只有 `{entryId, sequence, prevEntryHash, summary, outcome,
+  createdAt}`——够 GlassPane 记工具执行，但记不下 iterate 循环写的
+  `{timestamp, round, type, data}`：实测两侧词汇表已经在分叉（plugin 的 TS 认 10 种
+  `type`，Python 的 `VALID_ENTRY_TYPES` 只有 8 种，`round_failed`/`resume` 一进 Python
+  侧就被当成非法）。四个字段全部可选：省略即不进规范字节，因此**既有链节的摘要不变**，
+  这不只是"能过解析"——对照用例把"不带新字段的落盘行里不得出现 `null`"钉成具名断言，
+  并反向变异证明它咬得住（把"缺席"写成 `null` 时 15 条链测试同时变红）。`kind` 故意
+  **不做枚举**：两套词汇各归各家，内核只保证可比（形状/边界），否则每加一种决定都要发
+  一次内核版本——和 `dimension-context` 不持有维度清单同一个理由。`dimension` 复用
+  `DIMENSION_ID_PATTERN`（导入而非重述），这是"recorded 半边"能从任一生态的账本里被
+  覆盖率算术看见的前提。`payload` 有 8192 字符的规范 JSON 上限，且这条上限**JSON Schema
+  表达不出来**——按既有纪律写成具名分歧用例（ajv 放行、zod 拒绝），而不是默默当约束存在。
+  `decision-log-transcribe` 的十条规则连同 13 个用例落在
+  `kernel/fixtures/decision-record-transcription.ok-01.json`，Python 半边照这份档案实现，
+  不读 TypeScript。其中一条是测量逼出来的：`Date.parse("11/10/2026 02:28")` 在 V8 里会按
+  美式月/日猜出一个时刻，而 Python 直接拒绝——所以时间戳改由显式时区的 ISO-8601 模式先把关，
+  否则"同一条记录被谁转换就归谁解释"，账本不再是证据。225 条内核测试全绿（本批 +26），
+  `npm pack --dry-run` 实测 92 文件、新模块与新档案在包内。
+  **未随本批落地（下一批）**：Swift `DecisionLogEntry` 绑定还没加这四个可选字段——它解码时
+  会静默丢弃它们，重编码就丢审计信息；GlassPane 侧的 fork 重钉 0.1.6 与 kernel-conformance
+  的新 oracle 同属那一批。
+- **`iterate/kernel_decision_record.py`：转录层的 Python 半边，与 0.1.6 的 TS 实现当面比对
+  （场景③的对称半边）。** 第二份实现照
+  `tests/kernel_fixtures/decision-record-transcription.ok-01.json` 的 `comment` 写，不照
+  TypeScript 写——这才是"两套实现一致＝契约拿到证据"，而不是"抄了一份镜像"。三件照抄照不出
+  来的事：① 时间戳自己按"ISO-8601 带显式时区"的模式把关、日历运算手写截断，不用
+  `fromisoformat`——3.10 只接受 3 位或 6 位小数秒而 3.11+ 接受任意位，且
+  `Date.parse("11/10/2026 02:28")` 在 V8 里会猜成美式月/日、Python 却直接拒绝，两边必须按
+  同一条规则拒绝而不是各按各的解析器；② 可选字段缺席就是不写键，绝不写 `None`（链的摘要盖在
+  规范字节上，把"缺席"写成 null 会让每条既有链节换摘要）；③ `outcome` 只读不猜，读不到就是
+  `inconclusive`。
+  语料位点：manifest 升到 0.1.6，新增两条 sha256 钉（转录档案 + 扩展条目档案），
+  `test_kernel_fixtures.py` 的四条守卫（vendored==pin、消费测试存在、实时 kernel 检出与 pin
+  一致、篡改被拒）实测仍绿。18 条新单测；跨语言对照 `diff_kernel_implementations.py` 加进第
+  四个模块后实测 53 个用例判定一致（原 40 + 转录 13），并反向变异证明它咬得住——把 Python 侧
+  "没记到"改成"pass"时点名红在 `transcribe/silent-record-stays-inconclusive`。
+  本批纯增量：`decision_log.py` 的写侧还没翻成内核形状（那一步必须同批改读侧
+  `last_state.py`、WebUI 与 plugin 的 TS 副本，另批做）。
+
+- **`iterate/glasspane_reverification.py` + `scripts/check_glasspane_reverification.py`：
+  场景①的发送线，实机跑通。** 内核造出 `iterate.reverification/0.1` 之后，本模块负责把它
+  **发出去**并原样转述引擎答案：operationIds → `gp_last_evidence` + `gp_diagnose`，其余
+  一律不排。三条边界各是这条链的要点：① 绝不发变更型调用（`gp_act`/`gp_snapshot`/
+  `gp_restore`/`gp_attach`/`gp_export_evidence` 在名单里点名排除），重跑配方步骤是对用户
+  机器的决定，属于宿主权限面，不属于错误路径；② 没有通道就说 `NOT attempted`，不返回空集
+  让人读成"没意见"；③ 引擎的拒绝原样转述（连 remedy），不重新编码、不改写。
+  实机证明（`glasspane-mcp` 1.6.2 + 钉住的 `mcp` 2.0.0，16 工具在列）：真实
+  `check_invariants` 跑出 outcome=fail → 真请求
+  `iv_15d87c73d4ef809ec…` → 引擎回 `outcome=inconclusive`（attribution soft）与一条
+  `GP_E_NOT_ATTACHED: no app attached | remedy: call attach first`，2/2 转述成功。
+  缺字段的包（只有 `schemaVersion`）以前会被转成 `inconclusive` 结论——那是"没测到"不是
+  引擎判断，现在点名 `GP_E_PACK_INCOMPLETE` 拒绝转述。同步 runner 撞上 async 宿主时，
+  协程不再被当成答案，而是点名 `GP_E_ASYNC_HOST`（这条是它自己暴露的真 bug）。
+  17 条单测（真档案来自已发布语料、拒绝行来自实机捕获）；反向变异五刀各打中一条具名
+  用例：撤 async 守卫、把配方步骤排成 `gp_act`、撤包完整性闸、不解析 shell 的拒绝行、
+  无通道当跑过。
+- **`check_glasspane_channel.py`：把"没连上"与"不广告工具"分开说。** 之前它只读
+  `list_tools()`，一个连接失败的 server 会被报成"GlassPane 不提供 gp_*"——那是对产品的
+  一句假话。现在先读 `list_statuses()`，失败就写 `NOT measured` 并附 detail；detail 长得
+  像字段改名时，再报出 SDK pin 事实（本机 `mcp` 1.29.0，pyproject 钉 2.0.0；
+  `tool.input_schema` 只在 2.0.0 存在）。这台机器上 harness 的 MCP 层当前连不上任何
+  server，与本批无关（同一状态在我这批改动的"对照前"复跑里同样复现）。
+
+- **`scripts/check_run_plan_channel.py`：把场景②的共享通道真跑一遍，而不是各自自证。**
+  本仓真生产者（`build_run_plan` + `write_run_plan`）用 GlassPane 自己的
+  `iterate.config.yaml`（`gui` scope）造一份计划，交给 fork 的
+  `readRunPlan()`（bun 直接 import 产品里那份 `kernel.ts`，不是抄本）读回来，比
+  id 序列与 `rp_` 摘要。实测一致：两侧都是 `rp_25c3aeece0fa54293448fe0a1525f45a24f01ae797a766a23c54911bf5a5c2fe`，9 个 id 顺序一致。
+  两道红是**跑出来的**，不是推理的：`GP_CHANNEL_SELFTEST=corrupt`（把维度数组重排——
+  字节仍然合法，schema 看不见）→ exit 1；`GP_CHANNEL_SELFTEST=mismatch`（另一侧回同一
+  份字节但少报一个 id）→ exit 1。第二条是关键：只比摘要的话这个分歧会被盖住，所以摘要
+  之外还比 id。没有 bun／没有 harness／配置读不出来 → exit 2 明说"没测到"，不允许
+  静默通过。
+  写的过程中修掉两处自己的错：`load_config` 收的是项目**根目录**而不是文件路径，
+  传错会按 API 返回 None、进而伪装成生产者的 AttributeError；`mismatch` 那条对照的守卫
+  写成 `and not their_ids`，那侧非空所以分支从没执行——"对照自己没跑"这件事是先被
+  rc=0 暴露的，不是被读代码读出来的。
+
+- **`iterate/convergence_policy.py`：收敛规则的 Python 半边。** kernel 在 0.1.5 里把
+  「一轮跑完下一步是什么」定成了契约（熔断 > 轮次预算 > error > findings > 证据不全 >
+  未测量 > converged），本模块是对着已发布语料 `convergence.ok-01.json` 的 `comment`
+  写的第二份实现——不是把 TypeScript 读一遍再翻，而是照规则文本反推，期望值一律从语料文件
+  取。关键不对称保住：`unmeasured` 与证据不全永远是 `verify`，不得读成 `converged`
+  （"看不了"与"看着没事"是两回事）。15 条语料用例逐条比对，另加"每一条 precedence 都
+  必须打得过它下边每一条"的表驱动测试；`scripts/diff_kernel_implementations.py` 实测
+  15/15 与 TS dist 判定一致。
+- **`iterate/invariant_report.py` + `iterate/canonical_json.py`：场景①的生产者半边。**
+  `defensive/invariants.py` 的真实 `check_invariants` 只记违规和一个计数，不记通过项的
+  名字——直接照抄会得到一份"全是失败"的报告，消费者分不清"4 项里 3 项通过"和"4 项全挂"。
+  本模块的检查清单来自**配置**（`invariants.ensure` + `invariants.commands`，按书写顺序），
+  ok 由runner 是否点名该 label 决定，`refused` 这类保留原 kind；`outcome` 无法被合成成
+  `pass`（pass 只在无失败项的分支可达，而 runner 点名的违规一定会留在清单里）。dry-run
+  里被预览但没执行的命令报 `ok=false` + `not measured:` 且整体 `error`——error 不产生复核
+  请求，未测不得洗成活动。`canonical_json.py` 是与 kernel/Swift 同规则的第二份规范化实现。
+  实测：对本仓 kernel 目录跑一次真实 invariant（含 `refused: unsafe command` 那条真文案），
+  Python 与 TS 对同一份报告算出同一个 `iv_` 摘要。
+- **`scripts/diff_kernel_implementations.py`：两侧实现在同一份语料上当面比对。** 语料 pin
+  和各自单测只保证"没偏离写下来的用例"，而真正会出事的往往是没人写进用例的那条分支。本脚本
+  把 convergence / invariant-report / provider-registration 三份语料同时喂给本仓 Python 与
+  node 加载的 TS dist，比 verdict、摘要与注册表语义；node 或已构建 dist 不在场时 exit 2 明说
+  "没测到"，不允许静默跳过。实测三份全量一致。
+- **`iterate/provider_registry.py`：provider 注册的 Python 半边。** 重复 id 拒绝覆盖（不是
+  后写赢）、解析不猜（没有默认、没有模糊匹配、没有"只注册了一个就算它"）、要方法时点名它
+  到底提供了什么；注册表每次整体替换而非原地改，避免"加进一张表、下一张表没有"的半份注册。
+  两侧拒绝码按语言各自命名（`KERNEL_E_PROVIDER_DUPLICATE` / `PROVIDER_E_DUPLICATE`），必须
+  一致的是"拒了没拒"和注册表有没有被改动——`diff_kernel_implementations.py` 就按这个比。
+- **语料 pin 升到 `iterate-kernel@0.1.5`**，新增上述三份 fixture 并 pin sha256/字节数；
+  `run-plan.ok-01.json` 的 sha 变了但契约语义没变——kernel 那边只是把 label 的出处改口
+  （配置里根本没有 label 词汇）。`tests/kernel_fixtures/manifest.json` 的 consumedBy
+  规则把"语料进来了但没人读"判成死契约数据，这次三条新条目各自的消费者都在上面两条里。
+- **`iterate/kernel_decision_log.py`：哈希链的 Python 半边（场景③写侧翻转的能力前提）。**
+  锚点是新 vendored 的 `tests/kernel_fixtures/decision-log-chain.ok-01.json`：TS 侧用
+  openssl/shasum 重算、Python 侧用 hashlib 重算，两边都从**同一份落盘字节**出发——一条只有一种
+  语言能重算的链是主张而非证据，这正是该档案 comment 里写下的纪律。随链一起移植的还有
+  `verify / read / head / build / append / new_decision_entry_id` 与全套拒绝分支：路径必须绝对、
+  目录不得可被 group/other 写、文件 0600、写后回读再验链、`sequence`/`prevEntryHash` 由账本拥有
+  所以调用方发进来一律拒绝（伪造连续性是账本最不能允许的事故）。可选字段缺席一律不写 `null`，
+  否则每条既有链节的摘要都会换。
+  12 条用例，两处反向变异各打中一条具名断言（撤规范字节比较→红在
+  `test_a_non_canonical_storage_form_is_caught_not_rehashed`；撤目录权限守卫→红在
+  `test_a_group_writable_directory_is_refused`）。其中一条负例起初是**假绿**：
+  `mkdir(mode=0o777)` 被 umask 掩掉，守卫根本看不见松目录；改成显式 `chmod` 之后它才真的能红。
+  **本批纯增量，没动旧日志的生产者**：`decision_log.py` 仍照旧写 `{timestamp, round, type, data}`。
+  写侧翻转要同批改 `last_state`/`ci_report`/`html_report`/`replay` 与四个 web 路由（实测 8 个
+  读者），并用 `is_legacy_decision_record` 继续读历史行——那是单独一批协调改动；先把"能不能验"
+  落地，翻转时才只改"写什么"。
+  全量读数：2399 passed / 5 failed / 6 skipped，另有 `tests/test_mcp` 一处收集错误（本机 `mcp`
+  不是钉住的 2.0.0，缺 `mcp.server.mcpserver`）。这 5 条与收集错误**把本批两个新文件从树上摘掉后
+  逐条复跑仍然全红**（按 sha 核回），所以是既有环境性失败而非本批引入；点名留档，不当成已修。
+
+### Fixed
+
+- **`iterate-kernel@0.1.7`：发布出去的 `selector` 契约不再承诺"空 role 可以"。** 这不是预防性
+  收紧，是被别人的闸抓出来的真缺陷：GlassPane 的 `mcp-shell/test/consumer-consistency.test.mjs`
+  有一条"daemon 判据 / 已发布 JSON Schema / 内核 zod 三处必须同规则"的闸，把根仓镜像语料按已
+  发布包刷新后它当场变红——`$defs.selector.role` 与 `.title` 在 canonical 侧只有 `maxLength`、
+  没有 `minLength`，zod 也只有 `.max(512)`；而引擎的 AX 匹配把空串读成"没有声明约束"，空 role
+  不是更窄的选择器，是**停止命名它指向的东西**，daemon 直接拒。契约在这里对 agent 许的诺和执行
+  它的规则是两个答案。修法落在同一个提交的两侧：zod `.min(1)`、schema `minLength: 1`；
+  `identifier` 保持无人裁定（daemon 对它没有守卫，内核也不替它发明判据，测试单独钉住这一点，
+  将来若加守卫必须同批改那条用例，而不是默默继续放行）。
+  内核加 4 条：role 空串两侧拒、title 空串两侧拒、identifier 空串两侧收、"schema 写明的下限必须
+  等于 zod 执行的下限"；两处反向变异各自变红（撤 zod `.min(1)` 只红 zod 侧那条；撤 schema
+  `minLength` 同时红掉跨绑定那条），两侧都咬得住。229 条内核测试全绿（本批 +4）。
+  harness 语料 manifest 版本随升到 0.1.7（档案字节未变，evidence-pack 的 5 份 ok-* 一字未动）。
+  Python 侧无需跟改：实测 iterate-harness 没有 selector 校验，命中的 `role` 全是聊天消息字段。
+
+- **`iterate/run_plan.py`：把 `iterate.config.yaml` 变成共享内核的 RunPlan 契约。** 维度
+  覆盖那套算法一直拒绝自己发明计划（是对的），而计划此前只活在这份配置里——GlassPane 侧
+  读不到，于是它的会话压缩永远渲染成"0/N verified"。本模块产出计划（scope 并集按人工书写
+  顺序、focus 取第一个声明它的 scope，两个 scope 各说一套时不拼成第三条没人写过的指令）、
+  算摘要（`rp_` + sha256，与 kernel/TS 同一规则的第二份实现，逐字对着已发布 fixture 的
+  `expectedDigest` 断言）、写文件（0600、拒相对路径、拒写引擎状态根、目录建不出来就报错，
+  且先验摘要再落盘——算不出的计划不会留下半份文件）。语料 pin 升到
+  `iterate-kernel@0.1.4`，新增 `run-plan.ok-01.json`。14 条测试、ruff 0.16.8、
+  mypy --strict 全过。
+- **`iterate/evidence_transcription.py`**：kernel 转录契约（evidence 包 → 决策日志的
+  `outcome` 与 `summary`）在本仓的第二份实现。规则不是从 TypeScript 读的，而是从发布的
+  语料 `tests/kernel_fixtures/evidence-decision.ok-01.json` 读的——那条 fixture 自带规则
+  说明与 8 个用例（4 个真档案 + 4 个单字段派生），配套
+  `tests/test_iterate/test_evidence_transcription.py` 逐条比对；两侧任一实现改了映射而
+  另一侧没跟，就有一边 CI 变红。语料 pin 因此升到 `iterate-kernel@0.1.3`（0.1.2 里没有
+  这条 fixture），`scripts/check_kernel_fixtures.py` 的 registry 模式实测对着线上包过。
+- **`scripts/check_glasspane_channel.py`**：实测本机的 `glasspane-mcp` 能否被本 harness
+  的 `McpClientManager` 连上、8 个必用 `gp_*` 工具是否在列表里、`gp_last_evidence` 回的
+  证据包是否带着消费者要转录的四个字段。操作者命令，不是 pytest——产品不在就 exit 2
+  明说"没测到"，不允许静默跳过。实测通过：16 工具可见，两个只读调用回真数据。
+
+### Fixed
+
+- **跨语言对照测试不再恒 skip**（`tests/test_iterate/test_dimension_context.py`）：
+  `test_matches_the_kernel_fixture` 此前只在"碰巧有 kernel checkout 的机器"上找
+  fixture，找不到即 skip——实测 `19 passed, 1 skipped`，本仓唯一能证明 Python 半区
+  与 kernel TS 半区算的是同一件事的测试从来没跑过。现改为语料进仓
+  （`tests/kernel_fixtures/`，按 sha256 定版）、找不到即红。
+- **新增 `tests/test_iterate/test_kernel_fixtures.py`**：pin 与字节一致、每个条目必须
+  点名真实存在的消费者（不许有没人断言的契约数据）、`KERNEL_FIXTURES_DIR` 指向活
+  kernel 时两边字节必须一致；含负例（篡改一个字节、删一个文件、塞一个未定版文件都验过会红）。
+- **新增 `scripts/check_kernel_fixtures.py`**：`--source kernel/fixtures` 对着源码树查
+  （monorepo CI 用，零网络），默认模式对着 registry 发布的 `iterate-kernel@<pin>` 拉
+  tarball 查（split 仓的 CI 用）。
+- **更正 2.5.0 那条 `dimension_context` 的描述**：写的是"注入给评审与协调链路"，实测
+  该模块除自身与其测试外无任何 import，生产链路里没有它。接线是后续条目，不是既成事实。
+
+## [2.6.0] - 2026-10-15
+
+### Added
+
+- **CLI `--append-system-prompt` 真正接线**（`cli.py`、`ui/app.py`、`ui/backend_host.py`、
+  `ui/react_launcher.py`、`ui/coordinator_drain.py`）：该旗标此前只解析不生效，现贯通
+  print / 交互 REPL / task worker / React launcher 四条路径，coordinator 后续回合也经
+  `session_system_prompt()` 继承追加内容。
+- **`--restore-session <id>` 真实恢复会话**（`cli.py`、`ui/backend_host.py`、
+  `ui/react_launcher.py`）：React 前端 `/resume` 此前声称恢复成功，但后端宿主从未加载
+  快照——"恢复"出一个空会话（假恢复）。现 CLI 先校验会话存在于磁盘（缺失即报错
+  exit 1），宿主经 `_replay_restored_transcript` 重放转写记录；缺 session id 或消息
+  历史的残缺快照直接拒绝，不再装作成功。
+- **MCP 工具名冲突确定性消歧**（`tools/__init__.py`、`tools/base.py`）：两台服务器
+  清洗出同名工具时按 `__2/__3` 后缀登记并 WARNING（此前静默互相覆盖、路由串台）；
+  `ToolRegistry.register` 拒绝重复注册（失败时原工具保持在位），64 字符 API 上限内
+  确定性收敛。
+- **回归测试**：新增 `tests/test_{permissions,hooks,engine,defensive}/test_hardening.py`、
+  `tests/test_web/` 五个修复套件（start/stop 状态机、干预、SSE 续传、quick wins、
+  chat 冲突）、`tests/test_tools/` 三个新工具套件、`tests/test_commands/test_cli.py`
+  +31 例（restore/append/退出码/菜单索引/OptionInfo）、`tests/test_swarm/` 20 例、
+  npm `bootstrap.test.js` +19 例（重定向降级 / 并发锁 / 超时 / venv 自愈）。
+
+### Fixed
+
+- **权限边界三处**（`permissions/checker.py`）：`denied_commands` 提前到
+  `allowed_tools` 之前——白名单 `bash` 不再放行 `rm -rf *`；敏感路径匹配大小写折叠
+  （`.SSH/id_rsa` 不再漏过内置 `*/.ssh/*`，拒绝方向只多不少）；`mode_override` 只认
+  `plan`，`default`/`full_auto`/未知值回落配置模式（此前 exit_plan_mode 后会话被钉回
+  DEFAULT，工具往 session metadata 写 `full_auto` 还能静默提权）。
+- **引擎五处**（`engine/query.py`、`engine/query_engine.py`、`engine/messages.py`）：
+  coordinator 上下文门控改匹配真实提示词（原 `startswith("You are a **coordinator**.")`
+  对生产提示词永不命中，push/pop 协商从未生效，历史里留下错位副本）；权限提示串行化
+  （`permission_prompt_lock`，并发工具不再叠对话框）+ 通道超时 fail-closed；工具输出
+  offload 失败回落内联（不再炸掉回合）；`USER_PROMPT_SUBMIT` 的 `blocked` 真正拒绝——
+  消息不再先入历史再被忽略，拒绝理由以 assistant 回合返回；`tool_metadata` 空 dict
+  不再被 falsy 误替换，图片附件 20MB 上限。
+- **hooks 执行器与热重载**（`hooks/executor.py`、`loader.py`、`hot_reload.py`）：
+  单钩子异常与 spawn `OSError` 收敛为 failed HookResult（不再撕掉调用方正在进行的
+  工具执行）；命令/HTTP 输出 8KiB 上限带截断标记；notification matcher 补
+  `notification_type` 候选（`permission_prompt` 类 matcher 此前恒不命中）；未知 event
+  名 WARNING 点名拼写并列出合法值（此前静默丢整段配置）；热重载失败保留旧注册表且
+  不记 mtime（坏 settings 不会把钩子清空到下次改动为止）。
+- **防御层两处**（`defensive/transaction.py`、`invariants.py`）：快照引用计数——同一
+  文件并行变更时首个 commit 不再提前丢共享快照，兄弟变更的 rollback 仍能回到原始
+  字节，锁覆盖整个读改写；refused 违规点名具体元字符与配置条目，操作者能修配置而不
+  是被无从下手地锁死。
+- **配置/认证/更新/定时任务 17 处**：run_lock 租约抢占竞态、settings env-key provider
+  不一致与持久化、auth 存储错形状 JSON、update 四段预发布版本解析与空操作误报成功、
+  cron daemon 启动竞态/损坏注册表日志/停止验证、config_loader YAML 解析警告与
+  git 段校验、replay 时区归一、bool-as-int（`effort: true`、`line: true`）、onboard
+  assert→raise、report_server 查询串别名、state store 监听器隔离、docker stop 超时、
+  死字段 `budget_usd`/`max_turns` 回退与 `personalization_base_dir()` 接线。
+- **Web 运行态 13 处**（`web/**`）：start 状态机守卫（pausing/stopping 叠加启动经
+  `RunConflictError` 拒绝）、stop-during-start TOCTOU、`_restore_redacted` null 填充、
+  结构化 409、阻塞调用移入线程、operator 暂停超时不再自动恢复、`_stop` 只终结 done
+  注册、重置后历史读取与 journal 上限、权限审计缺口、hub 级 SSE id + `Last-Event-ID`
+  续传与缺口告警、端口占用提示与 docs 门控。
+- **CLI/UX 11 处**（`cli.py`、`ui/**`）：print 模式权限 fail-closed（无 TTY 的权限
+  提示此前放行一切工具）、print 模式错误 exit 1 + stderr 摘要（此前吞错 exit 0、
+  裸 traceback）、`--output-format` 白名单校验、菜单 0/负索引拒绝（此前回绕选中最后
+  一项）、`OptionInfo`/`ArgumentInfo` 统一解包、`--cwd` 默认值改调用时解析（原 import
+  期固化成启动目录）。
+- **swarm/tasks 12 处**（`swarm/**`、`tasks/**`）：不可运行队友记 `failed` 而非桩
+  成功；`_destroy_worktree`/`cleanup_team_directories` 包含化——git 失败、二进制
+  `.git` 标记、不可读 team.json 不再外泄，团队目录在 finally 里清理；permission
+  `request_id` 与 mailbox 消息 id 白名单校验（拒 `../`/NUL 穿越）；done-callback
+  竞态不再误删重生队友的注册；spawn 自清终态书箱、`_generations` 随淘汰回收、
+  `stop_task` 中止失败保留记录、git 调用加超时。
+- **tools 10 处**（`tools/**`）：bash 超时杀整个进程组（`start_new_session` +
+  `killpg`，孙进程不再握着管道挂死）；worktree 进出 60s 有界通信；`remote_trigger`
+  名称/输出三重上限；notebook 单元 100K 字符上限；运行时 `assert` 校验改显式
+  raise（`-O` 下不被剥离）；`exit_worktree` mypy 收口；顺带把
+  `test_bash_tool_timeout_does_not_hang_when_stdout_stays_open` 的外层 2s 守卫提到
+  20s（全量跑不再 flaky）。
+- **npm 包装器 14 处**（`npm/lib/bootstrap.js`）：重定向 https→http 降级被
+  `--allow-http` 门控（此前 302 可绕过安装源策略）；非 http(s) 协议前置拒绝；curl
+  `--proto-redir =https`；下载失败/超时/中断清理流与半截缓存文件；响应中途 socket
+  复位立即失败（此前干等 60s 总超时）；`detectPython` 30s / `runStep` 10min 超时且
+  信号击杀如实报告（此前无超时可永久挂死、退出码报 null）；并发 bootstrap 互斥锁
+  （原子创建 + 陈旧锁回收，venv 不再被并发写坏）；stamp 命中但 venv 缺失时自愈重装；
+  主 pip 失败不再被 fallback 吞掉；损坏 `Location` 头不再 TypeError 崩溃。
+- **验证**：全量 `pytest tests/ -q` **2627 passed, 6 skipped**（基线 2259 passed +
+  1 flaky fail → 全绿）；ruff clean；mypy strict clean（254 源文件）；npm
+  `node --test 'test/*.test.js'` **77 passed**。版本号在 `__init__.py` /
+  `npm/package.json` / `frontend/web/package.json` / `CHANGELOG.md` 同步至 2.6.0。
+
 ## [2.5.0] - 2026-09-30
 
 ### Added
 
 - **`dimension_context` 工具**（`iterate/dimension_context.py`）：kernel 契约
-  `dimension_context` 的 Python 实现——把维度定义/证据要求注入给评审与协调链路，
-  配套 `tests/test_iterate/test_dimension_context.py`。
+  `dimension_context` 的 Python 实现——~~把维度定义/证据要求注入给评审与协调链路，~~
+  配套 `tests/test_iterate/test_dimension_context.py`。〔更正见 Unreleased：注入链路
+  从未发生，该模块除自身与其测试外无人 import；接线是后续工作。〕
 - **in-process 队友真正接进任务工具**（`swarm/in_process.py`、`tools/agent_tool.py`、
   `tools/send_message_tool.py`、`tasks/manager.py`）：`AgentTool` 按 `mode` 选后端
   （`in_process_teammate` → 进程内，缺失时回落子进程；`local_agent` /

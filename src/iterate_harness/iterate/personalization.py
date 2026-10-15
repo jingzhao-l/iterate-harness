@@ -141,9 +141,24 @@ def _int_line(value: object) -> int | None:
     return None
 
 
+def _default_base_dir() -> Path:
+    """Harness-level ``iterate.data_dir`` setting, else the historical default."""
+    from .settings import personalization_base_dir  # noqa: PLC0415 - avoids an import cycle
+
+    configured = personalization_base_dir()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".iterate-harness" / "iterate"
+
+
 def storage_dir(base_dir: str | Path | None, project_root: str | Path) -> Path:
-    """Resolve the per-project storage directory (created on demand)."""
-    root = Path(base_dir).expanduser() if base_dir else Path.home() / ".iterate-harness" / "iterate"
+    """Resolve the per-project storage directory (created on demand).
+
+    An explicit ``base_dir`` wins; when it is unset the harness-level
+    ``iterate.data_dir`` setting relocates every project's personalization
+    data before the ``~/.iterate-harness/iterate`` default applies.
+    """
+    root = Path(base_dir).expanduser() if base_dir else _default_base_dir()
     digest = hashlib.sha1(str(Path(project_root).resolve()).encode("utf-8")).hexdigest()[:12]
     directory = root / f"{Path(project_root).resolve().name}-{digest}"
     directory.mkdir(parents=True, exist_ok=True)
@@ -225,13 +240,13 @@ def _parse_config_known(raw: object) -> list[KnownIntentional]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        line = item.get("line")
+        line = _int_line(item.get("line"))
         entries.append(
             KnownIntentional(
                 file=str(item.get("file", "")),
                 dimension=str(item.get("dimension", "")),
                 reason=str(item.get("reason", "")),
-                line=line if isinstance(line, int) else None,
+                line=line,
             )
         )
     return entries

@@ -366,7 +366,8 @@ async def _collect_rg_matches(
     *,
     limit: int,
 ) -> None:
-    assert process.stdout is not None
+    if process.stdout is None:
+        raise RuntimeError("rg subprocess has no stdout pipe to read")
     while len(matches) < limit:
         try:
             raw = await process.stdout.readline()
@@ -388,7 +389,8 @@ async def _collect_rg_file_matches(
     path: Path,
     display_base: Path,
 ) -> None:
-    assert process.stdout is not None
+    if process.stdout is None:
+        raise RuntimeError("rg subprocess has no stdout pipe to read")
     while len(matches) < limit:
         try:
             raw = await process.stdout.readline()

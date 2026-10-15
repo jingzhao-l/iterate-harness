@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import signal
+import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +27,7 @@ from iterate_harness.services.cron import (
     validate_cron_expression,
 )
 from iterate_harness.sandbox import SandboxUnavailableError
-from iterate_harness.utils.file_lock import exclusive_file_lock
+from iterate_harness.utils.file_lock import SwarmLockUnavailableError, exclusive_file_lock
 from iterate_harness.utils.fs import atomic_write_text
 from iterate_harness.utils.shell import create_shell_subprocess
 
@@ -45,6 +47,18 @@ MAX_HISTORY_ENTRIES = 5000
 
 MAX_HISTORY_BYTES = 5 * 1024 * 1024
 """Approximate size threshold at which ``cron_history.jsonl`` is pruned."""
+
+_START_POLL_INTERVAL_SECONDS = 0.05
+"""How often ``start_daemon`` checks that the child claimed the pid file."""
+
+_START_POLL_TIMEOUT_SECONDS = 2.0
+"""How long ``start_daemon`` waits before declaring the child failed to start."""
+
+_STOP_KILL_POLL_ATTEMPTS = 10
+"""Confirmation polls after SIGKILL before the pid file is removed."""
+
+_STOP_KILL_POLL_INTERVAL_SECONDS = 0.1
+"""Delay between the post-SIGKILL confirmation polls."""
 
 
 def _job_timeout(job: dict[str, Any]) -> int:
@@ -156,6 +170,38 @@ def write_pid() -> None:
     path.write_text(str(os.getpid()) + "\n", encoding="utf-8")
 
 
+def _claim_pid_file() -> bool:
+    """Claim the pid file for this process; False when a live scheduler holds it."""
+    existing = read_pid()
+    if existing is not None and existing != os.getpid():
+        return False
+    write_pid()
+    return True
+
+
+def _register_pid() -> bool:
+    """Atomically claim the scheduler PID file for this process.
+
+    Two ``ih cron start`` invocations racing each other both spawn a child;
+    without this check the loser overwrites the winner's pid file and the
+    scheduler becomes unstoppable (``stop_scheduler`` kills a pid that is not
+    the daemon, and the real daemon keeps running with no pid file). Returns
+    ``False`` when a live scheduler already owns the file — the caller must
+    then exit instead of running a second loop.
+    """
+    pid_path = get_pid_path()
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = pid_path.with_suffix(pid_path.suffix + ".lock")
+    try:
+        with exclusive_file_lock(lock_path):
+            return _claim_pid_file()
+    except SwarmLockUnavailableError as exc:
+        # Degrade to an unlocked claim rather than refusing to run: this is
+        # strictly better than the pre-lock behaviour every platform had.
+        logger.error("File locking unavailable (%s); claiming the pid file unlocked", exc)
+        return _claim_pid_file()
+
+
 def remove_pid() -> None:
     """Remove the PID file."""
     get_pid_path().unlink(missing_ok=True)
@@ -191,8 +237,21 @@ def stop_scheduler() -> bool:
         os.kill(pid, signal.SIGKILL)
     except OSError as exc:
         logger.debug("SIGKILL failed for scheduler pid=%d: %s", pid, exc)
-    remove_pid()
-    return True
+    # SIGKILL delivery is asynchronous: confirm the process is really gone
+    # before dropping the pid file. Removing it early would make the still-
+    # dying daemon unstoppable (a subsequent start would spawn a second loop
+    # alongside the one that has not finished tearing down yet).
+    for _ in range(_STOP_KILL_POLL_ATTEMPTS):
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            remove_pid()
+            return True
+        time.sleep(_STOP_KILL_POLL_INTERVAL_SECONDS)
+    logger.warning(
+        "Scheduler pid=%d survived SIGKILL; leaving the pid file in place", pid
+    )
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +390,12 @@ async def run_scheduler_loop(*, once: bool = False) -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _on_signal)
 
-    write_pid()
+    if not _register_pid():
+        logger.error(
+            "Another cron scheduler already holds the pid file (pid=%s); exiting",
+            read_pid(),
+        )
+        return
     logger.info("Cron scheduler started (pid=%d, tick=%ds)", os.getpid(), TICK_INTERVAL_SECONDS)
 
     try:
@@ -416,32 +480,60 @@ def _run_daemon() -> None:
     asyncio.run(run_scheduler_loop())
 
 
+def _terminate_child(proc: subprocess.Popen[Any]) -> None:
+    """Best-effort termination of a child that failed to become the daemon."""
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    except OSError as exc:  # already gone / not our child any more
+        logger.debug("Could not terminate scheduler child pid=%s: %s", getattr(proc, "pid", "?"), exc)
+
+
 def start_daemon() -> int:
     """Start the scheduler daemon (cross-platform, subprocess-based).
 
     Replaces the old ``os.fork()``+``os.setsid()`` pattern which is
-    Unix-only.  Spawns ``_run_daemon`` in a fully detached subprocess
-    instead.
+    Unix-only.  Spawns ``_run_daemon`` in a fully detached subprocess,
+    redirects its output to the scheduler log, and waits until the child has
+    actually claimed the pid file — the old fixed ``sleep(0.3)`` both raced
+    (returning before the pid file existed, so ``ih cron status`` reported
+    "not running" right after a successful start) and hid spawn failures.
     """
-    import subprocess
-    import sys as _sys
-
     existing = read_pid()
     if existing is not None:
         raise RuntimeError(f"Scheduler already running (pid={existing})")
 
-    code = (
-        "from iterate_harness.services.cron_scheduler import _run_daemon; _run_daemon()"
-    )
-    proc = subprocess.Popen(
-        [_sys.executable, "-c", code],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-    )
-    # Wait a moment for the child to write its PID file
-    time.sleep(0.3)
-    return proc.pid
+    log_path = get_logs_dir() / "cron_scheduler.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    code = "from iterate_harness.services.cron_scheduler import _run_daemon; _run_daemon()"
+
+    with log_path.open("ab") as log_fh:
+        proc = subprocess.Popen(
+            [sys.executable, "-c", code],
+            stdin=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+        )
+
+    deadline = time.monotonic() + _START_POLL_TIMEOUT_SECONDS
+    while True:
+        pid = read_pid()
+        if pid == proc.pid:
+            return proc.pid
+        if pid is not None:
+            _terminate_child(proc)
+            raise RuntimeError(f"Scheduler already running (pid={pid})")
+        if time.monotonic() >= deadline:
+            _terminate_child(proc)
+            raise RuntimeError(
+                f"Scheduler daemon did not start: no pid file after "
+                f"{_START_POLL_TIMEOUT_SECONDS:g}s (see {log_path})"
+            )
+        time.sleep(_START_POLL_INTERVAL_SECONDS)
 
 
 def scheduler_status() -> dict[str, Any]:

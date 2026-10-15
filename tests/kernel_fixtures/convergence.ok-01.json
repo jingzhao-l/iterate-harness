@@ -1,0 +1,252 @@
+{
+  "comment": "Cross-implementation anchor for the convergence rules (kernel/src/convergence.ts): given what a round states about itself, what the loop does next (5.7 R40 scenario 4). This is policy arithmetic over verdicts somebody else produced — nothing here verifies anything. Rules a second implementation must reproduce, stated here so it need not read the TypeScript: (1) the input object is `iterate.convergence/0.1` (the version key is optional) with required `round` (integer >=1), `maxRounds` (integer >=1), `invariantState` in `pass|fail|error|unmeasured`, `openFindings` (integer >=0), `evidenceComplete` (boolean), `breakerLevel` (integer 0..3, where 3 is tripped); no other keys. (2) PRECEDENCE, first match wins: breakerLevel >= 3 -> halt, reason `circuit-breaker-tripped`; round >= maxRounds -> halt, reason `round-budget-exhausted`; invariantState `error` -> halt, reason `invariant-check-errored`; openFindings > 0 -> fix, reason `open-findings`; invariantState `fail` -> fix, reason `invariants-failed`; evidenceComplete false -> verify, reason `evidence-incomplete`; invariantState `unmeasured` -> verify, reason `invariants-unmeasured`; otherwise -> converged, reason `all-gates-green`. (3) WHY that order: a limit the harness set on itself is not the app's failure, so the breaker halts before anything is counted; the budget is checked before the work so a run cannot buy another round by re-reporting findings it already had; a check that errored yields no verdict, and retrying it is the runner's job, not the loop's; `verify` rather than `converged` for unlooked-or-unmeasured states is the whole point — 'we could not look' and 'we looked and it holds' must not collapse into the same line. (4) The decision echoes `round` and `maxRounds` unchanged, so a ledger line says which round was judged. (5) `breakerLevel` is the engine's own circuit-breaker level for the run; 3 is the policy limit, which is why the range stops there. PROVENANCE: max_rounds 7 is the repo's own `config/iterate.config.yaml`; the breaker ceiling of 3 is `CircuitBreakerLevelSchema` in the evidence-pack contract; each case below states its inputs and the reason the precedence gives, and the expected values were derived from the rule text in this file — not by running the TypeScript.",
+  "input": {
+    "schemaVersion": "iterate.convergence/0.1",
+    "round": 3,
+    "maxRounds": 7,
+    "invariantState": "pass",
+    "openFindings": 0,
+    "evidenceComplete": true,
+    "breakerLevel": 0
+  },
+  "expectedDecision": {
+    "action": "converged",
+    "reason": "all-gates-green",
+    "round": 3,
+    "maxRounds": 7
+  },
+  "cases": [
+    {
+      "name": "breaker-tripped-beats-a-clean-round",
+      "state": {
+        "round": 1,
+        "maxRounds": 7,
+        "invariantState": "pass",
+        "openFindings": 0,
+        "evidenceComplete": true,
+        "breakerLevel": 3
+      },
+      "expect": {
+        "action": "halt",
+        "reason": "circuit-breaker-tripped",
+        "round": 1,
+        "maxRounds": 7
+      }
+    },
+    {
+      "name": "budget-spent-beats-open-findings",
+      "state": {
+        "round": 7,
+        "maxRounds": 7,
+        "invariantState": "fail",
+        "openFindings": 2,
+        "evidenceComplete": true,
+        "breakerLevel": 0
+      },
+      "expect": {
+        "action": "halt",
+        "reason": "round-budget-exhausted",
+        "round": 7,
+        "maxRounds": 7
+      }
+    },
+    {
+      "name": "errored-check-beats-open-findings",
+      "state": {
+        "round": 3,
+        "maxRounds": 7,
+        "invariantState": "error",
+        "openFindings": 1,
+        "evidenceComplete": false,
+        "breakerLevel": 0
+      },
+      "expect": {
+        "action": "halt",
+        "reason": "invariant-check-errored",
+        "round": 3,
+        "maxRounds": 7
+      }
+    },
+    {
+      "name": "open-findings-beats-failed-invariants",
+      "state": {
+        "round": 2,
+        "maxRounds": 7,
+        "invariantState": "fail",
+        "openFindings": 1,
+        "evidenceComplete": true,
+        "breakerLevel": 0
+      },
+      "expect": {
+        "action": "fix",
+        "reason": "open-findings",
+        "round": 2,
+        "maxRounds": 7
+      }
+    },
+    {
+      "name": "failed-invariants-with-no-findings-still-fix",
+      "state": {
+        "round": 2,
+        "maxRounds": 7,
+        "invariantState": "fail",
+        "openFindings": 0,
+        "evidenceComplete": true,
+        "breakerLevel": 0
+      },
+      "expect": {
+        "action": "fix",
+        "reason": "invariants-failed",
+        "round": 2,
+        "maxRounds": 7
+      }
+    },
+    {
+      "name": "pass-with-incomplete-evidence-is-not-converged",
+      "state": {
+        "round": 2,
+        "maxRounds": 7,
+        "invariantState": "pass",
+        "openFindings": 0,
+        "evidenceComplete": false,
+        "breakerLevel": 0
+      },
+      "expect": {
+        "action": "verify",
+        "reason": "evidence-incomplete",
+        "round": 2,
+        "maxRounds": 7
+      }
+    },
+    {
+      "name": "incomplete-evidence-beats-unmeasured-invariants",
+      "state": {
+        "round": 2,
+        "maxRounds": 7,
+        "invariantState": "unmeasured",
+        "openFindings": 0,
+        "evidenceComplete": false,
+        "breakerLevel": 0
+      },
+      "expect": {
+        "action": "verify",
+        "reason": "evidence-incomplete",
+        "round": 2,
+        "maxRounds": 7
+      }
+    },
+    {
+      "name": "unmeasured-invariants-with-evidence",
+      "state": {
+        "round": 2,
+        "maxRounds": 7,
+        "invariantState": "unmeasured",
+        "openFindings": 0,
+        "evidenceComplete": true,
+        "breakerLevel": 0
+      },
+      "expect": {
+        "action": "verify",
+        "reason": "invariants-unmeasured",
+        "round": 2,
+        "maxRounds": 7
+      }
+    },
+    {
+      "name": "breaker-level-two-is-not-tripped",
+      "state": {
+        "round": 2,
+        "maxRounds": 7,
+        "invariantState": "pass",
+        "openFindings": 0,
+        "evidenceComplete": true,
+        "breakerLevel": 2
+      },
+      "expect": {
+        "action": "converged",
+        "reason": "all-gates-green",
+        "round": 2,
+        "maxRounds": 7
+      }
+    },
+    {
+      "name": "zero-round",
+      "state": {
+        "round": 0,
+        "maxRounds": 7,
+        "invariantState": "pass",
+        "openFindings": 0,
+        "evidenceComplete": true,
+        "breakerLevel": 0
+      },
+      "expect": "refused",
+      "path": "round"
+    },
+    {
+      "name": "breaker-level-out-of-range",
+      "state": {
+        "round": 1,
+        "maxRounds": 7,
+        "invariantState": "pass",
+        "openFindings": 0,
+        "evidenceComplete": true,
+        "breakerLevel": 4
+      },
+      "expect": "refused",
+      "path": "breakerLevel"
+    },
+    {
+      "name": "unknown-invariant-state",
+      "state": {
+        "round": 1,
+        "maxRounds": 7,
+        "invariantState": "probably",
+        "openFindings": 0,
+        "evidenceComplete": true,
+        "breakerLevel": 0
+      },
+      "expect": "refused",
+      "path": "invariantState"
+    },
+    {
+      "name": "missing-evidence-complete",
+      "state": {
+        "round": 1,
+        "maxRounds": 7,
+        "invariantState": "pass",
+        "openFindings": 0,
+        "breakerLevel": 0
+      },
+      "expect": "refused",
+      "path": "evidenceComplete"
+    },
+    {
+      "name": "negative-findings",
+      "state": {
+        "round": 1,
+        "maxRounds": 7,
+        "invariantState": "pass",
+        "openFindings": -1,
+        "evidenceComplete": true,
+        "breakerLevel": 0
+      },
+      "expect": "refused",
+      "path": "openFindings"
+    },
+    {
+      "name": "invented-key",
+      "state": {
+        "round": 1,
+        "maxRounds": 7,
+        "invariantState": "pass",
+        "openFindings": 0,
+        "evidenceComplete": true,
+        "breakerLevel": 0,
+        "confidence": 0.9
+      },
+      "expect": "refused",
+      "path": "",
+      "messageIncludes": "confidence"
+    }
+  ]
+}

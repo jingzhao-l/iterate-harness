@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from iterate_harness.commands.iterate import iterate_command_handler
 from iterate_harness.commands.registry import CommandContext
 from iterate_harness.iterate.decision_log import DecisionLogEntry, append_entry
-from iterate_harness.iterate.replay import build_replay_lines, render_replay
+from iterate_harness.iterate.replay import _parse_timestamp, build_replay_lines, render_replay
 
 
 def _entry(
@@ -120,3 +122,42 @@ class TestCliReplay:
         monkeypatch.chdir(tmp_path)
         iterate_log(tail=20, as_json=False, trend=False, replay=True)
         assert "nothing to replay" in capsys.readouterr().out
+
+
+class TestZuluTimestamps:
+    """``datetime.fromisoformat`` only learned the ``Z`` designator in Python
+    3.11 — on 3.10 every ``...Z`` decision-log entry degraded to ``[+?s]``."""
+
+    def test_parse_timestamp_accepts_the_zulu_designator(self):
+        zulu = _parse_timestamp("2026-08-15T10:00:00Z")
+        offset = _parse_timestamp("2026-08-15T10:00:00+00:00")
+        assert zulu is not None
+        assert offset is not None
+        assert zulu == offset
+        assert zulu.utcoffset() == timedelta(0)
+
+    def test_parse_timestamp_treats_naive_as_utc(self):
+        naive = _parse_timestamp("2026-08-15T10:00:00")
+        assert naive is not None
+        assert naive.utcoffset() == timedelta(0)
+
+    def test_parse_timestamp_still_rejects_junk(self):
+        assert _parse_timestamp("") is None
+        assert _parse_timestamp("not-a-timestamp") is None
+
+    def test_offsets_are_computed_for_zulu_entries(self):
+        entries = [
+            _entry("round_start", 1, "2026-08-15T10:00:00Z", {"goal": "g"}),
+            _entry("validation", 1, "2026-08-15T10:00:45Z", {"command": "pytest"}),
+        ]
+        lines = build_replay_lines(entries)
+        assert lines[0].startswith("[+0s] r1 round_start")
+        assert lines[1].startswith("[+45s] r1 validation")
+
+    def test_mixed_naive_and_zulu_entries_share_one_clock(self):
+        entries = [
+            _entry("round_start", 1, "2026-08-15T10:00:00", {"goal": "g"}),
+            _entry("validation", 1, "2026-08-15T10:00:30Z", {"command": "pytest"}),
+        ]
+        lines = build_replay_lines(entries)
+        assert lines[1].startswith("[+30s] r1 validation")

@@ -62,14 +62,19 @@ class _ReportHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=served, **kwargs)  # type: ignore[arg-type]
 
     def do_GET(self) -> None:
-        # Serve /report.html and /replay.html as the default pages.
-        if self.path in ("", "/"):
+        # Serve /report.html and /replay.html as the default pages. The alias
+        # is matched on the path ONLY: ``/replay?round=3`` is the replay page
+        # carrying a query, not a 404, so the query is split off, matched
+        # against, and re-appended verbatim.
+        path_only, separator, query = self.path.partition("?")
+        if path_only in ("", "/"):
             report_path = Path(self._report_directory) / "report.html"
-            self.path = "/report.html" if report_path.exists() else "/"
-        elif self.path == "/replay":
-            self.path = "/replay.html"
-        elif self.path == "/report":
-            self.path = "/report.html"
+            path_only = "/report.html" if report_path.exists() else "/"
+        elif path_only == "/replay":
+            path_only = "/replay.html"
+        elif path_only == "/report":
+            path_only = "/report.html"
+        self.path = path_only + separator + query
         return super().do_GET()
 
     def log_message(self, fmt: str, *args: object) -> None:
@@ -101,9 +106,9 @@ def serve_report(
     served: list[str] = []
 
     class _BoundReportHandler(_ReportHandler):
-        # ``served`` is a per-call list bound as a closure cell below, so the
-        # oneshot path can tell "a request was actually handled" from "the
-        # server just hit its idle timeout".
+        # Per-call subclass: it carries the report directory (set below) and
+        # the request-tracking ``do_GET`` without mutating ``_ReportHandler``
+        # for any other server in this process.
         pass
 
     _BoundReportHandler._report_directory = str(report_dir)

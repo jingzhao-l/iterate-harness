@@ -31,6 +31,7 @@ import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
 from iterate_harness.utils.fs import atomic_write_text
 
 from . import init_wizard, onboarding, prompts
+from .dimension_context import DIMENSION_E_EMPTY, DimensionContextError
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +261,15 @@ def run_onboard(
         _print_flush(f"  - {line}")
 
     chosen, final_goal, rounds = _confirm_questions(yes=yes, profile=profile, goal=goal)
-    assert chosen is not None  # _confirm_questions re-prompts until the selection is valid
+    if chosen is None:
+        # Unreachable through the interactive loop (it re-prompts until the
+        # selection parses), but an ``assert`` vanishes under ``python -O``
+        # and the None then crashed build_config_dict with a TypeError.
+        raise DimensionContextError(
+            DIMENSION_E_EMPTY,
+            "onboarding produced no dimension selection",
+            "answer the dimension prompt with numbers or exact dimension names",
+        )
 
     config = init_wizard.build_config_dict(
         goal=final_goal,

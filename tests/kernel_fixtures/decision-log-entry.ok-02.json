@@ -1,0 +1,20 @@
+{
+  "entryId": "dl_0123456789ABCDEFGHJKMNPQRT",
+  "sequence": 2,
+  "prevEntryHash": "5f9c1e7b0a3d6c8e2b4f1a0c3d5e7f9a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e",
+  "operationId": "op_0123456789ABCDEFGHJKMNPQRT",
+  "summary": "review_result(round 3): 2 findings, 1 blocking, across 2 dimensions",
+  "outcome": "fail",
+  "createdAt": "2026-10-11T02:28:11.042Z",
+  "kind": "review_result",
+  "round": 3,
+  "dimension": "ui-consistency",
+  "payload": {
+    "findings": [
+      { "dimension": "ui-consistency", "file": "src/client/index.ts", "severity": "medium", "summary": "hard-coded colour outside the token set" },
+      { "dimension": "accessibility", "file": "src/client/index.ts", "severity": "blocking", "summary": "focus ring removed" }
+    ],
+    "blocking": 1,
+    "dimensionsWithoutFindings": ["performance"]
+  }
+}

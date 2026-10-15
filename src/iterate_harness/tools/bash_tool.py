@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 from pathlib import Path
 from typing import Iterable
 
@@ -70,6 +72,10 @@ class BashTool(BaseTool[BashToolInput]):
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                # Own session/process group: on timeout or cancellation we can
+                # kill the whole tree with one killpg instead of leaking
+                # grandchildren that keep running and hold the pipes open.
+                start_new_session=True,
             )
         except SandboxUnavailableError as exc:
             return ToolResult(output=str(exc), is_error=True)
@@ -110,23 +116,65 @@ async def _terminate_process(process: asyncio.subprocess.Process, *, force: bool
     if process.returncode is not None:
         return
     if force:
-        process.kill()
+        _signal_process(process, signal.SIGKILL)
         try:
             await process.wait()
         except ProcessLookupError:
             return
         return
-    process.terminate()
+    _signal_process(process, signal.SIGTERM)
     try:
         await asyncio.wait_for(process.wait(), timeout=2.0)
     except asyncio.TimeoutError:
-        process.kill()
+        _signal_process(process, signal.SIGKILL)
         try:
             await process.wait()
         except ProcessLookupError:
             return
     except ProcessLookupError:
         return
+
+
+def _own_process_group(process: asyncio.subprocess.Process) -> int | None:
+    """Return the child's process group when the child *leads* that group.
+
+    ``start_new_session=True`` puts the bash child in a fresh session whose
+    process-group id equals its pid. When the pgid differs (docker sandbox
+    transport, platforms without setsid, or test doubles) the child shares
+    another group — possibly the harness' own — so signalling the group would
+    be wrong and callers must fall back to the direct child.
+    """
+    pid = getattr(process, "pid", None)
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        pgid = os.getpgid(pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        return None
+    return pgid if pgid == pid else None
+
+
+def _signal_process(process: asyncio.subprocess.Process, sig: int) -> None:
+    """Deliver *sig* to the child's process group, falling back to the child.
+
+    Killing only the direct shell leaves its backgrounded grandchildren
+    running and holding the output pipes open, which both leaks processes and
+    makes the post-timeout output drain block until the read timeout.
+    """
+    pgid = _own_process_group(process)
+    if pgid is not None:
+        try:
+            os.killpg(pgid, sig)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    try:
+        if sig == signal.SIGKILL:
+            process.kill()
+        else:
+            process.terminate()
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
 
 
 async def _read_remaining_output(process: asyncio.subprocess.Process) -> bytearray:

@@ -349,7 +349,15 @@ class AuthManager:
             self.use_profile(name)
             return
         if name in _KNOWN_PROVIDERS:
-            self.use_profile(_PROFILE_BY_PROVIDER.get(name, "openai-compatible" if name == "openai" else "claude-api"))
+            profile_name = _PROFILE_BY_PROVIDER.get(name)
+            if profile_name is None:
+                # Never guess a profile: silently landing on claude-api would
+                # switch the user's active provider without saying so.
+                raise ValueError(
+                    f"Provider {name!r} has no default profile mapping. "
+                    f"Mapped providers: {sorted(_PROFILE_BY_PROVIDER)}"
+                )
+            self.use_profile(profile_name)
             return
         raise ValueError(
             f"Unknown provider or auth source: {name!r}. "

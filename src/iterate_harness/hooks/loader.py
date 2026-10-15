@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
+
 from iterate_harness.config.settings import Settings
 from iterate_harness.hooks.events import HookEvent
 from iterate_harness.hooks.schemas import HookDefinition
 from iterate_harness.plugins.types import LoadedPlugin
+
+log = logging.getLogger(__name__)
 
 
 class HookRegistry:
@@ -42,10 +46,19 @@ class HookRegistry:
 def load_hook_registry(settings: Settings, plugins: list[LoadedPlugin] | None = None) -> HookRegistry:
     """Load hooks from the current settings object."""
     registry = HookRegistry()
+    valid_events = [event.value for event in HookEvent]
     for raw_event, hooks in settings.hooks.items():
         try:
             event = HookEvent(raw_event)
         except ValueError:
+            # A typo'd event name would otherwise silently drop the whole
+            # section: the hook never fires and nothing tells the user. Log
+            # the invalid value together with the accepted spellings.
+            log.warning(
+                "Ignoring hooks with unknown event %r (valid events: %s)",
+                raw_event,
+                ", ".join(valid_events),
+            )
             continue
         for hook in hooks:
             registry.register(event, hook)
@@ -56,6 +69,12 @@ def load_hook_registry(settings: Settings, plugins: list[LoadedPlugin] | None = 
             try:
                 event = HookEvent(raw_event)
             except ValueError:
+                log.warning(
+                    "Ignoring plugin %r hooks with unknown event %r (valid events: %s)",
+                    getattr(plugin, "name", plugin),
+                    raw_event,
+                    ", ".join(valid_events),
+                )
                 continue
             for plugin_hook in plugin_event_hooks:
                 if isinstance(plugin_hook, HookDefinition):

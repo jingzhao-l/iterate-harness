@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -178,6 +179,22 @@ class RunManagerError(Exception):
     """Rejected run operation with a human-readable message (maps to 4xx)."""
 
 
+class RunConflictError(RunManagerError):
+    """The request conflicts with an existing run (structural 409).
+
+    Raised by :meth:`RunManager.start` both for the in-process state conflict
+    (a run is already active in this server) and for the cross-process
+    conflict (another driver holds the project's run lease). The route layer
+    maps this exception class — not a message substring — to HTTP 409.
+    """
+
+
+#: Serializes append + trim on the shared chat journal. The writes run in
+#: worker threads (``asyncio.to_thread``), so without this lock two
+#: concurrent publishes could trim the journal while the other is mid-append.
+_chat_journal_lock = threading.Lock()
+
+
 class RunManager:
     """Owns the single live iterate loop inside the WebUI process."""
 
@@ -210,6 +227,11 @@ class RunManager:
         #: run_id that placed the current stop request, so an old run's
         #: finally block cannot clear a newer run's stop flag.
         self._stopping_by: str = ""
+        #: True while the current pause-menu wait is the result of an
+        #: explicit operator pause request (see :meth:`_pause`). A menu
+        #: timeout on an operator-paused run must never auto-resume
+        #: unattended — it falls back to the safe "stop" action instead.
+        self._pause_requested: bool = False
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -243,35 +265,63 @@ class RunManager:
         # could open the WebUI on a project the TUI was iterating, see
         # ``idle``, and start a *second* loop — two writers on ``.iterate/``
         # and on git. The shared lease is the same guard for both front ends.
-        driver = foreign_driver(project_root)
+        # The probe reads a small lease file, so it runs in a worker thread.
+        driver = await asyncio.to_thread(foreign_driver, project_root)
         if driver is not None:
-            raise RunManagerError(
+            raise RunConflictError(
                 f"检测到另一个 iterate 循环正在运行（{driver.describe()}）。"
                 "WebUI 是辅助干预通道，不能并发启动第二个循环；"
                 "请在原终端停止，或等待其结束后再启动。"
             )
         async with self._lock:
-            if self.state in ("starting", "running", "paused"):
-                raise RunManagerError("已有运行中的 iterate 循环，请先停止或等待结束")
+            # Reject on every non-terminal state. ``pausing``/``stopping``
+            # persist until the next round boundary, and ``stopped`` is set
+            # *before* the old task's ``finally`` finishes closing the
+            # runtime / releasing the lease — so a live (not-yet-done) task
+            # is a conflict even when the state already reads ``stopped``.
+            # Overwriting the state while the old task is mid-cleanup leaked
+            # its sandbox/MCP runtime (``_bundle`` was reset under it) and
+            # let its lease release unlink the *new* run's lease file.
+            task = self._task
+            if self.state not in ("idle", "stopped") or (
+                task is not None and not task.done()
+            ):
+                raise RunConflictError("已有运行中的 iterate 循环，请先停止或等待结束")
             self._reset(project_root)
             run_id = uuid4().hex[:12]
             self.run_id = run_id
             self.mode = mode
             self.permission_mode = permission_mode
             self.state = "starting"
-        # Pre-validate the kickoff synchronously so an invalid ref / clean
-        # worktree fails fast as a 4xx instead of being swallowed by the
-        # background task (which used to return 200 with a doomed run).
+        # Pre-validate the kickoff so an invalid ref / clean worktree fails
+        # fast as a 4xx instead of being swallowed by the background task
+        # (which used to return 200 with a doomed run). The build runs up to
+        # three ``subprocess.run`` git calls, so it runs in a worker thread.
         try:
-            self._build_kickoff(project_root, mode, changed, ref)
+            # The return value is discarded — this call only pre-validates;
+            # ``_run_loop`` rebuilds the kickoff for its own run.
+            await asyncio.to_thread(self._build_kickoff, project_root, mode, changed, ref)
         except RunManagerError:
             async with self._lock:
                 self._reset(project_root)
                 self.state = "idle"
             raise
         await self._publish_chat("system", f"收到启动指令：iterate {mode}", kind="status")
-        if project_root:
-            AuditLog(project_root).record("run.start", mode, summary={"run_id": run_id})
+        await self._audit("run.start", mode, summary={"run_id": run_id})
+        # Re-check the stop flag after the awaits above: a concurrent stop
+        # request landing during this window used to be silently clobbered
+        # when the freshly created run task published ``running`` over
+        # ``stopping``. Honour it — do not launch the run at all.
+        async with self._lock:
+            cancelled_by_stop = self._stopping or self.state != "starting"
+            if cancelled_by_stop:
+                self._reset(project_root)
+                self.state = "stopped"
+        if cancelled_by_stop:
+            message = "启动已取消：stop 在循环启动前到达，未启动新循环"
+            await self._publish_chat("system", message, kind="error")
+            await self._publish_hub("run-state", {"state": "stopped", "message": message})
+            return run_id
         self._task = asyncio.create_task(
             self._run_loop(project_root, mode, changed, ref, run_id, permission_mode)
         )
@@ -293,6 +343,7 @@ class RunManager:
             # a done/cancelled future would raise InvalidStateError -> 500.
             pending = [f for f in self._request_registry.values() if not f.done()]
             waiting = self.waiting_for
+            permission_tool = self.permission_tool
         if pending:
             future = pending[0]
             result: str | bool
@@ -319,12 +370,24 @@ class RunManager:
                 else:
                     raise RunManagerError("该请求已超时或已失效，请重新操作")
             await self._publish_chat("user", content, kind=kind)
+            if waiting == "permission":
+                # A permission decision is a human intervention and must be
+                # auditable — not just a chat line that scrolls away.
+                await self._audit(
+                    "run.permission",
+                    "approve" if result else "deny",
+                    summary={"tool": permission_tool or "(unknown)", "run_id": self.run_id},
+                )
             return {"answered": True, "waitingFor": waiting}
         if self.state == "running":
             await self._nudge(content)
             return {"answered": True, "nudged": True}
         if self.state == "starting":
             raise RunManagerError("运行正在启动，请稍候再发送消息")
+        if self.state == "pausing":
+            raise RunManagerError("循环正在暂停中，请稍候再试")
+        if self.state == "stopping":
+            raise RunManagerError("循环正在停止中，请稍候再试")
         raise RunManagerError("当前没有运行中的循环")
 
     async def control(self, action: str) -> dict[str, Any]:
@@ -452,6 +515,21 @@ class RunManager:
         # clears references that still point at *this* run. A fresh run started
         # immediately after this one ends must not have its handle clobbered.
         task_handle = asyncio.current_task()
+        # Bail out before claiming the lease when a stop request for *this*
+        # run already arrived (it raced into the window before the task was
+        # scheduled). Launching anyway used to clobber the pending "stopping"
+        # state with "running" and start a run the operator asked to stop.
+        async with self._lock:
+            stop_requested = self._stopping and self._stopping_by == run_id
+        if stop_requested:
+            message = "启动已取消：stop 在循环启动前到达"
+            await self._clear_stopping_if_owned(run_id)
+            async with self._lock:
+                if self._task is task_handle:
+                    self._task = None
+            await self._publish_chat("system", message, kind="error")
+            await self._set_state("stopped", message=message)
+            return
         # Hold the project's cross-process run lease for the whole run so a
         # console-driven loop and a WebUI-driven loop can never both be
         # writing. Entered before the kickoff build so a conflicting claim
@@ -465,7 +543,13 @@ class RunManager:
             await self._set_state("stopped", message=str(exc))
             return
         try:
-            kickoff, rounds = self._build_kickoff(project_root, mode, changed, ref)
+            # Rebuild the kickoff in a worker thread: the build runs up to
+            # three ``subprocess.run`` git calls with 15s timeouts each, and
+            # blocking disk/process I/O on the event loop stalls every SSE
+            # stream and intervention channel.
+            kickoff, rounds = await asyncio.to_thread(
+                self._build_kickoff, project_root, mode, changed, ref
+            )
             try:
                 from iterate_harness.iterate.onboard_cmd import (
                     ensure_onboarding_fingerprints,
@@ -783,23 +867,42 @@ class RunManager:
             },
         )
         try:
-            # Bounded wait: on timeout fall back to the menu's first option,
-            # which is the documented Esc-cancel (safe default, "resume").
+            # Bounded wait: on timeout fall back to the menu's first option —
+            # the documented Esc-cancel (safe default, "resume") — *unless*
+            # the pause came from an explicit operator request, in which case
+            # auto-resuming the run unattended is exactly what the operator
+            # did not want: fall back to the engine's clean "stop" action
+            # (worktree rollback + final report) and say so visibly.
             try:
                 return await asyncio.wait_for(future, timeout=_QUESTION_TIMEOUT)
             except asyncio.TimeoutError:
-                fallback = str(options[0].get("value", "resume")) if options else "resume"
+                async with self._lock:
+                    operator_paused = self._pause_requested
+                if operator_paused:
+                    fallback = "stop"
+                    notice = (
+                        f"操作员暂停的选择菜单超时未答复（{_QUESTION_TIMEOUT:.0f}s）。"
+                        "为避免无人值守自动继续，已按「停止」结束该循环。"
+                    )
+                    kind = "error"
+                else:
+                    fallback = (
+                        str(options[0].get("value", "resume")) if options else "resume"
+                    )
+                    notice = (
+                        f"选择超时未答复（{_QUESTION_TIMEOUT:.0f}s），"
+                        f"已按默认「{fallback}」继续。"
+                    )
+                    kind = "status"
                 log.warning(
-                    "user select %s timed out after %.0fs; applying fallback %r",
+                    "user select %s timed out after %.0fs; applying fallback %r"
+                    " (operator_paused=%s)",
                     request_id,
                     _QUESTION_TIMEOUT,
                     fallback,
+                    operator_paused,
                 )
-                await self._publish_chat(
-                    "system",
-                    f"选择超时未答复（{_QUESTION_TIMEOUT:.0f}s），已按默认「{fallback}」继续。",
-                    kind="status",
-                )
+                await self._publish_chat("system", notice, kind=kind)
                 return fallback
         finally:
             async with self._lock:
@@ -807,6 +910,9 @@ class RunManager:
                 self.waiting_for = "none"
                 self.question = None
                 self.options = None
+                # The pause-menu wait is over (answered or timed out): the
+                # pause-intent flag only spans one menu presentation.
+                self._pause_requested = False
                 if not self._stopping:
                     self.state = "running"
             if not self._stopping:
@@ -832,13 +938,15 @@ class RunManager:
             # ``paused`` once the round boundary is reached.
             self.state = "pausing"
             self.last_message = "已请求暂停，将在下一轮边界生效"
+            # Record the operator's intent: the pause menu opened by this
+            # request must never auto-resume on timeout (see _ask_user_select).
+            self._pause_requested = True
         await self._publish_hub(
             "run-state",
             {"state": "pausing", "message": "已请求暂停，将在下一轮边界生效"},
         )
         await self._publish_chat("system", "已请求暂停，将在下一轮边界生效", kind="status")
-        if self.project_root:
-            AuditLog(self.project_root).record("run.pause", self.run_id)
+        await self._audit("run.pause", self.run_id)
         return {"ok": True, "message": "已请求暂停，将在下一轮边界生效"}
 
     async def _resume(self) -> dict[str, Any]:
@@ -855,33 +963,53 @@ class RunManager:
         except asyncio.InvalidStateError:  # pragma: no cover - raced resolve
             raise RunManagerError("暂停请求已失效") from None
         await self._publish_chat("user", "resume", kind="decision")
-        if self.project_root:
-            AuditLog(self.project_root).record("run.resume", self.run_id)
+        await self._audit("run.resume", self.run_id)
         return {"ok": True, "message": "已继续运行"}
 
     async def _stop(self) -> dict[str, Any]:
         async with self._lock:
             task = self._task
             has_live_task = task is not None and not task.done()
-            # Nothing to stop. Returning ok here told the operator the stop was
-            # accepted and left `last_message = "正在停止…"` pinned for the rest
-            # of the session, so the status card read "空闲 / 正在停止…" forever.
-            # An intervention channel must report the truth: say there is no
-            # run, and leave no state behind.
-            if not has_live_task and not self._request_registry:
-                if self.state not in ("starting", "running", "paused", "pausing", "stopping"):
-                    raise RunManagerError("当前没有运行中的循环，无需停止")
-            # Skip already-resolved futures so a repeated stop click returns
-            # ok instead of raising InvalidStateError → 500.
+            # Only *pending* futures keep a run alive. A registry holding
+            # nothing but already-resolved futures means nothing is left to
+            # transition the state, so committing "stopping" here pinned the
+            # console on "正在停止…" forever.
             pending = [f for f in self._request_registry.values() if not f.done()]
             waiting = self.waiting_for
-            self._stopping = True
-            self._stopping_by = self.run_id
-            # "stopping" until the task actually exits (or the pending request
-            # resolves). Without it the card showed "运行中" while the run was
-            # already being torn down.
-            self.state = "stopping"
-            self.last_message = "正在停止…"
+            policy = self._policy()
+            has_pause_channel = policy is not None and callable(
+                getattr(policy, "request_pause", None)
+            )
+            # A run mid-``start()`` has no task yet; its stop lives in the
+            # ``_stopping`` flag, which ``start()`` re-checks before creating
+            # the run task (a stop during start's await window used to be
+            # silently lost).
+            starting = self.state == "starting"
+            nothing_live = not (has_live_task or pending or has_pause_channel or starting)
+            stale_state = False
+            if nothing_live:
+                # Nothing could ever leave "stopping" behind: report the truth
+                # and leave no pending state. A stale non-terminal state (a
+                # "paused" whose task and futures are all gone) is recovered
+                # to "stopped" so the console is not pinned on it either.
+                stale_state = self.state not in ("idle", "stopped")
+                if stale_state:
+                    self.state = "stopped"
+                    self.last_message = "运行已结束"
+            else:
+                self._stopping = True
+                self._stopping_by = self.run_id
+                # "stopping" until the task actually exits (or the pending
+                # request resolves). Without it the card showed "运行中" while
+                # the run was already being torn down.
+                self.state = "stopping"
+                self.last_message = "正在停止…"
+        if nothing_live:
+            if stale_state:
+                await self._publish_hub(
+                    "run-state", {"state": "stopped", "message": "运行已结束"}
+                )
+            raise RunManagerError("当前没有运行中的循环，无需停止")
         await self._publish_hub("run-state", {"state": "stopping", "message": "正在停止…"})
         if pending:
             if waiting == "user_select":
@@ -889,30 +1017,27 @@ class RunManager:
                     pending[0].set_result("stop")
                 except asyncio.InvalidStateError:  # pragma: no cover - raced resolve
                     pass
-                if self.project_root:
-                    AuditLog(self.project_root).record("run.stop", self.run_id, summary={"method": "select-resolve"})
+                await self._audit(
+                    "run.stop", self.run_id, summary={"method": "select-resolve"}
+                )
                 return {"ok": True, "message": "正在停止…"}
             # A question/permission is pending with no clean answer channel:
             # abort the run task (engine state is checkpointed for resume).
             task = self._task
             if task is not None and not task.done():
                 task.cancel()
-            if self.project_root:
-                AuditLog(self.project_root).record("run.stop", self.run_id, summary={"method": "task-cancel"})
+            await self._audit("run.stop", self.run_id, summary={"method": "task-cancel"})
             return {"ok": True, "message": "正在停止…"}
-        policy = self._policy()
-        if policy is not None:
+        if has_pause_channel and policy is not None:
             pause_requested = getattr(policy, "request_pause", None)
             if callable(pause_requested):
                 pause_requested()
-                if self.project_root:
-                    AuditLog(self.project_root).record("run.stop", self.run_id, summary={"method": "policy-pause"})
+                await self._audit("run.stop", self.run_id, summary={"method": "policy-pause"})
                 return {"ok": True, "message": "已请求停止，将在下一轮边界生效"}
         task = self._task
         if task is not None and not task.done():
             task.cancel()
-        if self.project_root:
-            AuditLog(self.project_root).record("run.stop", self.run_id, summary={"method": "direct-cancel"})
+        await self._audit("run.stop", self.run_id, summary={"method": "direct-cancel"})
         return {"ok": True, "message": "正在停止…"}
 
     async def _clear_stopping_if_owned(self, run_id: str) -> None:
@@ -1070,6 +1195,21 @@ class RunManager:
         if text:
             await self._publish_chat("assistant", text, kind="text")
 
+    async def _audit(
+        self, action: str, target: str, *, summary: dict[str, Any] | None = None
+    ) -> None:
+        """Record one audit entry off the event loop (best-effort).
+
+        ``AuditLog.record`` appends a line to ``.iterate/web-audit.jsonl`` —
+        blocking disk I/O that must not sit on the event loop in an async
+        path (it would stall every SSE stream and intervention channel).
+        No-op when this run has no project root.
+        """
+        root = self.project_root
+        if not root:
+            return
+        await asyncio.to_thread(AuditLog(root).record, action, target, summary=summary)
+
     async def _publish_hub(
         self, type: str, data: dict[str, Any], *, project_root: str | None = None
     ) -> None:
@@ -1113,9 +1253,29 @@ class RunManager:
         # Synchronous file append (disk-backed chat history). Runs in a worker
         # thread: `open().write()` is blocking I/O and must never sit on the
         # event loop — a slow/contended disk would stall every SSE broadcast.
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        with _chat_journal_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+            # Write-side cap: keep at most ``_HISTORY_LIMIT`` lines so the
+            # journal cannot grow without bound over a long session. The trim
+            # rewrites atomically (temp file + replace) under the same lock
+            # that serializes appends, so a concurrent write is never lost.
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                return
+            if len(lines) <= _HISTORY_LIMIT:
+                return
+            tmp_path = path.with_name(path.name + ".tmp")
+            try:
+                tmp_path.write_text(
+                    "\n".join(lines[-_HISTORY_LIMIT:]) + "\n", encoding="utf-8"
+                )
+                tmp_path.replace(path)
+            except OSError as exc:
+                log.warning("web chat journal trim failed: %s", exc)
 
     async def _publish_tool(self, content: str) -> None:
         # Persist like every other chat entry. Tool activity used to be
@@ -1143,16 +1303,22 @@ class RunManager:
         self.permission_reason = None
         self.error = None
         self.last_message = ""
-        self._chat_dir = Path(project_root) / ".iterate" if project_root else None
+        # Keep the chat journal readable after an explicit reset: wiping
+        # ``_chat_dir`` made ``GET /chat/history`` return [] even though
+        # ``web-chat.jsonl`` persists on disk. A *new* project root still
+        # switches the journal directory.
+        if project_root:
+            self._chat_dir = Path(project_root) / ".iterate"
         self._bundle = None
         self._request_registry = {}
         self._assistant_buffer = ""
         self._stopping = False
         self._stopping_by = ""
+        self._pause_requested = False
 
 
 #: Module-level singleton shared by the route layer (design §18.3).
 run_manager = RunManager()
 
 
-__all__ = ["RunManager", "RunManagerError", "run_manager"]
+__all__ = ["RunConflictError", "RunManager", "RunManagerError", "run_manager"]

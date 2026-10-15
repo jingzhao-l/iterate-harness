@@ -75,6 +75,8 @@ class BackendHostConfig:
     verbose: bool | None = None
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
+    #: ``--append-system-prompt`` text appended to the assembled system prompt.
+    append_system_prompt: str | None = None
 
 
 class ReactBackendHost:
@@ -122,6 +124,7 @@ class ReactBackendHost:
             verbose=self._config.verbose,
             allowed_tools=self._config.allowed_tools,
             disallowed_tools=self._config.disallowed_tools,
+            append_system_prompt=self._config.append_system_prompt,
         )
         if self._bundle is None:
             raise RuntimeError("backend host started before runtime bundle was built")
@@ -133,6 +136,10 @@ class ReactBackendHost:
                 [f"/{command.name}" for command in self._bundle.commands.list_commands()],
             )
         )
+        # A restored session must be visible in the UI, not just loaded into
+        # the engine: replay the restored transcript before the first status
+        # snapshot so the frontend shows the conversation that was resumed.
+        await self._replay_restored_transcript()
         await self._emit(self._status_snapshot())
         await self._emit_last_loop_state()
 
@@ -950,6 +957,60 @@ class ReactBackendHost:
         finally:
             self._question_requests.pop(request_id, None)
 
+    async def _replay_restored_transcript(self) -> None:
+        """Replay a restored conversation into the frontend transcript.
+
+        ``restore_messages`` loads history into the engine, but the React UI
+        only renders what the backend emits — without this replay a resumed
+        session looked empty even though the runtime had the full history.
+        """
+        bundle = self._bundle
+        if bundle is None or not self._config.restore_messages:
+            return
+        from iterate_harness.engine.messages import ToolResultBlock
+
+        for message in bundle.engine.messages:
+            if message.role == "user":
+                if message.text.strip():
+                    await self._emit(
+                        BackendEvent(
+                            type="transcript_item",
+                            item=TranscriptItem(role="user", text=message.text.strip()),
+                        )
+                    )
+                for block in message.content:
+                    if isinstance(block, ToolResultBlock):
+                        await self._emit(
+                            BackendEvent(
+                                type="transcript_item",
+                                item=TranscriptItem(
+                                    role="tool_result",
+                                    text=block.content.strip(),
+                                    tool_name=block.tool_use_id or None,
+                                ),
+                            )
+                        )
+            elif message.role == "assistant":
+                for tool_use in message.tool_uses:
+                    await self._emit(
+                        BackendEvent(
+                            type="transcript_item",
+                            item=TranscriptItem(
+                                role="tool",
+                                text=f"{tool_use.name} {json.dumps(tool_use.input, ensure_ascii=True)}",
+                                tool_name=tool_use.name,
+                                tool_input=tool_use.input,
+                            ),
+                        )
+                    )
+                if message.text.strip():
+                    await self._emit(
+                        BackendEvent(
+                            type="transcript_item",
+                            item=TranscriptItem(role="assistant", text=message.text.strip()),
+                        )
+                    )
+
     async def _emit_last_loop_state(self) -> None:
         """Send the resume screen payload when iterate history exists."""
         if self._bundle is None:
@@ -1002,6 +1063,7 @@ async def run_backend_host(
     verbose: bool | None = None,
     allowed_tools: list[str] | None = None,
     disallowed_tools: list[str] | None = None,
+    append_system_prompt: str | None = None,
 ) -> int:
     """Run the structured React backend host."""
     if cwd:
@@ -1031,6 +1093,7 @@ async def run_backend_host(
             verbose=verbose,
             allowed_tools=allowed_tools,
             disallowed_tools=disallowed_tools,
+            append_system_prompt=append_system_prompt,
         )
     )
     return await host.run()

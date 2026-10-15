@@ -463,14 +463,25 @@ async def test_query_engine_coordinator_mode_uses_coordinator_prompt_and_runs_ag
                 isinstance(block, ToolResultBlock)
                 for block in nxt.content
             ), "coordinator context must not interleave between tool_use and tool_result"
-    coordinator_after_tools = [
-        msg for i, msg in enumerate(second_request_messages)
-        if msg.role == "user"
-        and "Coordinator User Context" in msg.text
-        and i > 0
-        and second_request_messages[i - 1].role == "user"
+    coordinator_indices = [
+        i for i, msg in enumerate(second_request_messages)
+        if msg.role == "user" and "Coordinator User Context" in msg.text
     ]
-    assert coordinator_after_tools, "coordinator context should trail the tool results"
+    assert coordinator_indices, "coordinator context should be present after the tool round"
+    tool_result_indices = [
+        i for i, msg in enumerate(second_request_messages)
+        if msg.role == "user"
+        and any(isinstance(block, ToolResultBlock) for block in msg.content)
+    ]
+    assert tool_result_indices, "tool results must be present"
+    # The coordinator context must trail the tool results (and the final
+    # assistant message) as the LAST message of the turn — that is what lets
+    # the pop/re-append negotiation in run_query find it again next iteration.
+    # A coordinator copy stuck mid-history (e.g. between the first user
+    # message and the first assistant reply) is exactly the regression this
+    # guards: the old gate never fired for the real coordinator prompt.
+    assert coordinator_indices[-1] == len(second_request_messages) - 1
+    assert coordinator_indices[-1] > tool_result_indices[-1]
 
 
 @pytest.mark.asyncio

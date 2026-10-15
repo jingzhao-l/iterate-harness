@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.responses import StreamingResponse
 
 from ..iterate.checkpoint import load_checkpoint
@@ -46,8 +46,6 @@ _HUB_WAKEUP = 0.5
 
 def _resolve_project(project_root: str) -> Path:
     root = Path(project_root) if project_root else Path.cwd()
-    if not root.is_dir():
-        raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     # ``project_root`` is caller-controlled, so containment inside the root is
@@ -177,10 +175,12 @@ def _sse_frame(event_type: str, data: Any, event_id: int | None = None) -> str:
     """Render one Server-Sent Event frame.
 
     ``id:`` is emitted for every event so a reconnecting ``EventSource`` sends
-    the last id it saw back in ``Last-Event-ID``, which lets the stream (and
-    the client) reason about gaps instead of silently restarting from nothing.
-    The frame order (``id`` → ``event`` → ``data``) matches the SSE spec; the
-    id is a plain integer counter maintained by :func:`_event_generator`.
+    the last id it saw back in ``Last-Event-ID``. Ids come from the hub's
+    global monotonic counter (hub events carry the id assigned at publish
+    time; locally generated frames allocate the next id), so the id sequence
+    is meaningful across reconnects and the stream can replay missed events
+    or explicitly announce a gap (see :func:`_event_generator`). The frame
+    order (``id`` → ``event`` → ``data``) matches the SSE spec.
     """
     lines: list[str] = []
     if event_id is not None:
@@ -190,13 +190,21 @@ def _sse_frame(event_type: str, data: Any, event_id: int | None = None) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-async def _event_generator(project_root: Path, stream_all: bool) -> Any:
+async def _event_generator(
+    project_root: Path, stream_all: bool, last_event_id: int | None = None
+) -> Any:
     """Async generator interleaving hub events with periodic file snapshots.
 
-    Each emitted event carries a monotonically increasing ``id:`` so a
-    reconnecting ``EventSource`` can send ``Last-Event-ID`` back and both sides
-    can detect a gap (and so the browser can resume rather than treat the
-    stream as wholly new).
+    Every emitted frame carries a hub-global monotonic ``id:``. When the
+    client reconnects with a ``Last-Event-ID``, the events published after
+    that id are replayed from the hub's bounded ring buffer; when the id is
+    too old to replay (evicted) an explicit ``sse-gap`` notice frame is
+    emitted first so the client knows it must re-sync via REST instead of
+    assuming a continuous stream. Note that frames from *other* sources
+    (periodic status snapshots, decision-log tails) interleave with hub
+    events, so a duplicate replay after an out-of-order id is possible —
+    chat entries carry unique ids and run-state/progress payloads are
+    idempotent, which makes duplicates harmless.
     """
     log_path = project_root / ".iterate" / "decision-log.jsonl"
     try:
@@ -211,16 +219,31 @@ async def _event_generator(project_root: Path, stream_all: bool) -> Any:
     # watching project B mirror project A's run state and chat.
     queue = await hub.subscribe(str(project_root))
     last_flush = 0.0
-    event_id = 0
     try:
+        if last_event_id is not None:
+            missed, complete = hub.resume_after(last_event_id, str(project_root))
+            if not complete:
+                yield _sse_frame(
+                    "sse-gap",
+                    {
+                        "reason": "unresumable",
+                        "lastEventId": last_event_id,
+                        "message": (
+                            "断线重连：上次位置之后的部分事件已被淘汰，无法完整回放；"
+                            "请以 REST 状态为准重新同步。"
+                        ),
+                    },
+                    hub.next_event_id(),
+                )
+            for missed_event in missed:
+                yield _sse_frame(missed_event.type, missed_event.data, missed_event.id)
         while True:
             # 1) Drain live hub events (chat / run-state / progress) promptly.
             #    No ``continue`` here: the snapshot below is time-gated so a
             #    steady event stream can never starve the status push.
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=_HUB_WAKEUP)
-                event_id += 1
-                yield _sse_frame(event.type, event.data, event_id)
+                yield _sse_frame(event.type, event.data, event.id)
             except asyncio.TimeoutError:
                 pass
 
@@ -232,21 +255,22 @@ async def _event_generator(project_root: Path, stream_all: bool) -> Any:
             if now - last_flush >= _POLL_INTERVAL:
                 last_flush = now
                 status = await asyncio.to_thread(_build_status_payload, project_root)
-                event_id += 1
-                yield _sse_frame("status", status, event_id)
+                yield _sse_frame("status", status, hub.next_event_id())
                 if stream_all:
                     entries, cursor = await asyncio.to_thread(
                         _decision_log_tail, log_path, cursor
                     )
                     if entries:
-                        event_id += 1
-                        yield _sse_frame("decision-log", entries, event_id)
+                        yield _sse_frame(
+                            "decision-log", entries, hub.next_event_id()
+                        )
     finally:
         await hub.unsubscribe(queue)
 
 
 @router.get("/events")
 async def stream_events(
+    request: Request,
     project_root: str = "",
     stream: str = Query("status", description="Stream type: status (default) or all"),
 ) -> StreamingResponse:
@@ -260,10 +284,23 @@ async def stream_events(
     Live chat / run-state events are always streamed regardless of ``stream``
     (they originate in-process, see design §18).
 
+    The standard ``Last-Event-ID`` header (sent by a reconnecting
+    ``EventSource``) is honoured: still-buffered events published after that
+    id are replayed; when the id is too old to replay the stream starts from
+    the current state and opens with an explicit ``sse-gap`` notice so the
+    client knows to re-sync.
+
     The client connects via ``EventSource('/api/v1/events?stream=all')``.
     """
     root = _resolve_project(project_root)
-    generator = _event_generator(root, stream == "all")
+    # EventSource sends this automatically on reconnect. Only a plain
+    # non-negative integer is honoured; anything else starts a fresh stream
+    # (no gap notice — a first-time connect has no Last-Event-ID at all).
+    raw_last_id = request.headers.get("last-event-id", "").strip()
+    last_event_id: int | None = None
+    if raw_last_id.isdigit():
+        last_event_id = int(raw_last_id)
+    generator = _event_generator(root, stream == "all", last_event_id)
     return StreamingResponse(
         generator,
         media_type="text/event-stream",

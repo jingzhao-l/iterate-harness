@@ -87,6 +87,7 @@ def build_backend_command(
     max_turns: int | None = None,
     base_url: str | None = None,
     system_prompt: str | None = None,
+    append_system_prompt: str | None = None,
     api_format: str | None = None,
     permission_mode: str | None = None,
     config_path: str | None = None,
@@ -94,6 +95,7 @@ def build_backend_command(
     verbose: bool | None = None,
     allowed_tools: list[str] | None = None,
     disallowed_tools: list[str] | None = None,
+    restore_session_id: str | None = None,
 ) -> list[str]:
     """Return the command used by the React frontend to spawn the backend host.
 
@@ -101,6 +103,10 @@ def build_backend_command(
     inherited environment (``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY``), never
     as a ``--api-key <value>`` argv element that leaks into process listings
     and the ``ITERATE_FRONTEND_CONFIG`` JSON blob.
+
+    ``restore_session_id`` lets the spawned backend reload a resumed session
+    from disk — without it the resume would be dropped (the parent process
+    loads the snapshot but the runtime lives in the child).
     """
     command = [sys.executable, "-m", "iterate_harness", "--backend-only"]
     if cwd:
@@ -113,6 +119,8 @@ def build_backend_command(
         command.extend(["--base-url", base_url])
     if system_prompt:
         command.extend(["--system-prompt", system_prompt])
+    if append_system_prompt:
+        command.extend(["--append-system-prompt", append_system_prompt])
     if api_format:
         command.extend(["--api-format", api_format])
     if permission_mode:
@@ -123,6 +131,8 @@ def build_backend_command(
         command.extend(["--effort", effort])
     if verbose:
         command.append("--verbose")
+    if restore_session_id:
+        command.extend(["--restore-session", restore_session_id])
     for tool in allowed_tools or []:
         command.extend(["--allowed-tools", tool])
     for tool in disallowed_tools or []:
@@ -138,6 +148,7 @@ async def launch_react_tui(
     max_turns: int | None = None,
     base_url: str | None = None,
     system_prompt: str | None = None,
+    append_system_prompt: str | None = None,
     api_key: str | None = None,
     api_format: str | None = None,
     permission_mode: str | None = None,
@@ -146,6 +157,7 @@ async def launch_react_tui(
     verbose: bool | None = None,
     allowed_tools: list[str] | None = None,
     disallowed_tools: list[str] | None = None,
+    restore_session_id: str | None = None,
 ) -> int:
     """Launch the React terminal frontend as the default UI."""
     frontend_dir = get_frontend_dir()
@@ -187,6 +199,7 @@ async def launch_react_tui(
                 max_turns=max_turns,
                 base_url=base_url,
                 system_prompt=system_prompt,
+                append_system_prompt=append_system_prompt,
                 api_format=api_format,
                 permission_mode=permission_mode,
                 config_path=config_path,
@@ -194,6 +207,7 @@ async def launch_react_tui(
                 verbose=verbose,
                 allowed_tools=allowed_tools,
                 disallowed_tools=disallowed_tools,
+                restore_session_id=restore_session_id,
             ),
             "initial_prompt": prompt,
             "theme": _resolve_theme(),

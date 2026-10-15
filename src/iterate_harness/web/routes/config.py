@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import shutil
-from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
@@ -76,16 +75,20 @@ def _restore_redacted(
         elif isinstance(value, list):
             prior = existing.get(key)
             if isinstance(prior, list):
-                # zip() would silently truncate a new list longer than the
-                # prior one, dropping freshly-added items on a config save.
-                # Use the longer length so every incoming item resolves its
-                # redaction marker against the matching prior item when one
-                # exists.
+                # Iterate the *incoming* list only: a shortened draft must
+                # shrink the on-disk list, never be padded back out. The old
+                # zip_longest padded the incoming list with ``None`` when it
+                # was shorter than the prior one, and those ``None`` pads
+                # were written to YAML as literal ``- null`` entries. Items
+                # beyond the prior length (freshly added) pass through as-is
+                # so a longer draft still keeps every new item.
                 out[key] = [
-                    _restore_redacted(item, prev)
-                    if isinstance(item, dict) and isinstance(prev, dict)
+                    _restore_redacted(item, prior[i])
+                    if isinstance(item, dict)
+                    and i < len(prior)
+                    and isinstance(prior[i], dict)
                     else item
-                    for item, prev in zip_longest(value, prior)
+                    for i, item in enumerate(value)
                 ]
             else:
                 out[key] = value

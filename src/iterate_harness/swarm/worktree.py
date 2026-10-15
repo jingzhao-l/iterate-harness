@@ -29,6 +29,11 @@ _WORKTREE_META_FILENAME = ".iterate-harness-worktree.json"
 #: Length of the per-repo directory hash used to namespace worktrees.
 _REPO_SLUG_LENGTH = 12
 
+#: Upper bound on a single git invocation. Worktree/rev-parse calls are
+#: local and normally finish in well under a second; a hung git (stale
+#: lock, pathological repo) must not wedge the caller forever.
+_GIT_TIMEOUT_SECONDS = 30.0
+
 
 def repo_namespace(repo_path: str | Path) -> str:
     """Return a deterministic, path-safe namespace for a repository.
@@ -171,8 +176,15 @@ def _drop_sidecar(meta_path: Path) -> None:
         logger.exception("[worktree] Failed to remove metadata at %s", meta_path)
 
 
-async def _run_git(*args: str, cwd: Path) -> tuple[int, str, str]:
-    """Run a git command, returning (returncode, stdout, stderr)."""
+async def _run_git(
+    *args: str, cwd: Path, timeout: float = _GIT_TIMEOUT_SECONDS
+) -> tuple[int, str, str]:
+    """Run a git command, returning (returncode, stdout, stderr).
+
+    Bounded by *timeout*: a hung git is killed and reaped, and the call
+    returns a non-zero code with a "timed out" message instead of blocking
+    the event loop forever.
+    """
     proc = await asyncio.create_subprocess_exec(
         "git",
         *args,
@@ -181,7 +193,16 @@ async def _run_git(*args: str, cwd: Path) -> tuple[int, str, str]:
         stderr=asyncio.subprocess.PIPE,
         env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""},
     )
-    stdout_bytes, stderr_bytes = await proc.communicate()
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except OSError:
+            pass  # already exited on its own
+        # Reap the child so it never lingers as a zombie.
+        await proc.wait()
+        return (-1, "", f"git {args[0] if args else ''} timed out after {timeout}s")
     return (
         proc.returncode or 0,
         stdout_bytes.decode(errors="replace").strip(),

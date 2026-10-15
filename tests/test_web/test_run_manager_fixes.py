@@ -76,17 +76,21 @@ class TestResumeStopOnResolvedFuture:
         assert await asyncio.wait_for(live, timeout=0.5) == "resume"
         assert stale.result() == "resume"  # untouched
 
-    async def test_stop_skips_already_resolved_future(self, manager: RunManager):
-        """Regression: a repeated "stop" while the select future is already
-        resolved must return ok instead of raising InvalidStateError."""
+    async def test_stop_with_only_done_futures_reports_no_run(self, manager: RunManager):
+        """A repeated "stop" after the select future was already resolved
+        must not commit the "stopping" state (there is nothing live left to
+        transition it — the old code pinned the console on "正在停止…"
+        forever). It reports "no run" and leaves the state untouched."""
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         future.set_result("stop")
         manager.waiting_for = "user_select"
         manager._request_registry["r1"] = future
 
-        result = await manager.control("stop")
-        assert result["ok"] is True
+        with pytest.raises(RunManagerError, match="无需停止"):
+            await manager.control("stop")
         assert future.result() == "stop"
+        assert manager.state == "idle"
+        assert manager._stopping is False
 
 
 # ---------------------------------------------------------------------------

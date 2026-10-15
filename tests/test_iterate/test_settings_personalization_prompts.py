@@ -7,9 +7,11 @@ from pathlib import Path
 from iterate_harness.iterate import prompts
 from iterate_harness.iterate.personalization import (
     PersonalizationData,
+    _parse_config_known,
     known_intentional_of,
     load,
     save,
+    storage_dir,
 )
 from iterate_harness.iterate.settings import (
     IterateSettings,
@@ -208,3 +210,77 @@ class TestWorktreeFlow:
             await worktree_flow.exit_session(session, manager, merged=False)
 
         asyncio.run(scenario())
+
+
+class TestKnownIntentionalLineParsing:
+    """``line: true`` is a YAML bool; accepting it as "line 1" silently moved
+    the known-intentional anchor to the top of the file."""
+
+    def test_boolean_line_is_rejected(self):
+        entries = _parse_config_known(
+            [{"file": "a.py", "dimension": "security", "reason": "r", "line": True}]
+        )
+        assert entries[0].line is None
+
+    def test_integer_and_numeric_string_lines_are_accepted(self):
+        assert _parse_config_known([{"file": "a.py", "line": 7}])[0].line == 7
+        assert _parse_config_known([{"file": "a.py", "line": "12"}])[0].line == 12
+
+    def test_junk_line_is_rejected(self):
+        assert _parse_config_known([{"file": "a.py", "line": "first"}])[0].line is None
+        assert _parse_config_known([{"file": "a.py", "line": 1.5}])[0].line is None
+
+
+class TestPersonalizationDataDirSetting:
+    """``iterate.data_dir`` relocates personalization storage for every
+    project; an explicit ``base_dir`` still wins."""
+
+    @staticmethod
+    def _stub_settings(monkeypatch, data_dir):
+        from iterate_harness.config.settings import Settings
+
+        settings = Settings()
+        settings.iterate.data_dir = data_dir
+        monkeypatch.setattr(
+            "iterate_harness.config.settings.load_settings", lambda *a, **k: settings
+        )
+
+    def test_base_dir_setting_is_read_from_settings(self, monkeypatch):
+        from iterate_harness.iterate.settings import personalization_base_dir
+
+        self._stub_settings(monkeypatch, "/custom/iterate-data")
+        assert personalization_base_dir() == "/custom/iterate-data"
+
+    def test_unset_setting_returns_none(self, monkeypatch):
+        from iterate_harness.iterate.settings import personalization_base_dir
+
+        self._stub_settings(monkeypatch, None)
+        assert personalization_base_dir() is None
+
+    def test_unreadable_settings_degrade_to_none(self, monkeypatch):
+        from iterate_harness.iterate.settings import personalization_base_dir
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("settings.json is unreadable")
+
+        monkeypatch.setattr("iterate_harness.config.settings.load_settings", _boom)
+        assert personalization_base_dir() is None
+
+    def test_storage_dir_honours_the_configured_data_dir(self, tmp_path, monkeypatch):
+        custom = tmp_path / "custom-data"
+        self._stub_settings(monkeypatch, str(custom))
+        directory = storage_dir(None, tmp_path / "project")
+        assert custom in directory.parents
+
+    def test_storage_dir_falls_back_to_the_home_default(self, tmp_path, monkeypatch):
+        self._stub_settings(monkeypatch, None)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        directory = storage_dir(None, tmp_path / "project")
+        assert tmp_path / ".iterate-harness" / "iterate" in directory.parents
+
+    def test_explicit_base_dir_still_wins(self, tmp_path, monkeypatch):
+        self._stub_settings(monkeypatch, str(tmp_path / "custom-data"))
+        explicit = tmp_path / "explicit"
+        directory = storage_dir(explicit, tmp_path / "project")
+        assert explicit in directory.parents
+        assert (tmp_path / "custom-data") not in directory.parents

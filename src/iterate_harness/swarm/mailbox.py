@@ -22,6 +22,12 @@ from iterate_harness.swarm.lockfile import exclusive_file_lock
 
 log = logging.getLogger(__name__)
 
+#: How long an already-read message is retained on disk. Read messages are
+#: consumed data — every consumer polls with ``unread_only=True`` — so
+#: without a retention bound an inbox of a long-lived teammate grows forever.
+#: Unread messages are never pruned here: the leader may simply be offline.
+_READ_RETENTION_SECONDS = 6 * 3600.0
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -154,6 +160,35 @@ def get_agent_mailbox_dir(team_name: str, agent_id: str) -> Path:
     return inbox
 
 
+def _prune_read_messages(inbox: Path, *, retention: float) -> int:
+    """Delete read messages older than *retention* (caller holds the write lock).
+
+    The mtime check runs first so a busy inbox does not re-parse every file;
+    a message is only decoded once it is old enough to be a prune candidate,
+    and only messages already marked ``read`` are removed — an old *unread*
+    message belongs to a consumer that has not polled yet.
+    """
+    cutoff = time.time() - retention
+    removed = 0
+    for path in inbox.glob("*.json"):
+        if path.name.startswith("."):
+            continue
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or not data.get("read"):
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError as exc:
+            log.debug("Could not prune read message %s: %s", path, exc)
+    return removed
+
+
 # ---------------------------------------------------------------------------
 # TeammateMailbox
 # ---------------------------------------------------------------------------
@@ -194,6 +229,10 @@ class TeammateMailbox:
         acquires an exclusive lock to prevent concurrent write conflicts.
         """
         inbox = self.get_mailbox_dir()
+        if any(sep in msg.id for sep in ("/", "\\", "\x00")):
+            # The message id becomes part of the on-disk filename; an id with
+            # a path separator could escape the inbox directory.
+            raise ValueError(f"message id is not path-safe: {msg.id!r}")
         filename = f"{msg.timestamp:.6f}_{msg.id}.json"
         final_path = inbox / filename
         tmp_path = inbox / f"{filename}.tmp"
@@ -205,6 +244,7 @@ class TeammateMailbox:
             with exclusive_file_lock(lock_path):
                 tmp_path.write_text(payload, encoding="utf-8")
                 os.replace(tmp_path, final_path)
+                _prune_read_messages(inbox, retention=_READ_RETENTION_SECONDS)
 
         # Offload blocking I/O to thread pool
         loop = asyncio.get_running_loop()
@@ -231,7 +271,7 @@ class TeammateMailbox:
                     msg = MailboxMessage.from_dict(data)
                     if not unread_only or not msg.read:
                         messages.append(msg)
-                except (json.JSONDecodeError, KeyError):
+                except (json.JSONDecodeError, KeyError, OSError, UnicodeDecodeError, TypeError):
                     # Skip corrupted message files rather than crashing.
                     continue
             return messages
@@ -257,7 +297,9 @@ class TeammateMailbox:
                         continue
                     try:
                         data = json.loads(path.read_text(encoding="utf-8"))
-                    except (json.JSONDecodeError, OSError):
+                    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                        continue
+                    if not isinstance(data, dict):
                         continue
 
                     if data.get("id") == message_id:

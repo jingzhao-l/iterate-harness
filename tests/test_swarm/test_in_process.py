@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from pathlib import Path
 
 import pytest
 
+from iterate_harness.swarm import in_process as in_process_mod
 from iterate_harness.swarm.in_process import (
     InProcessBackend,
     TeammateContext,
@@ -36,6 +39,16 @@ def spawn_config():
 def backend(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     return InProcessBackend()
+
+
+def spawn_config_for(name: str, team: str) -> TeammateSpawnConfig:
+    return TeammateSpawnConfig(
+        name=name,
+        team=team,
+        prompt="hello",
+        cwd="/tmp",
+        parent_session_id="sess-001",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -369,3 +382,110 @@ async def test_shutdown_all(backend, tmp_path, monkeypatch):
 
     await backend.shutdown_all(force=True, timeout=2.0)
     assert backend.active_agents() == []
+
+
+# ---------------------------------------------------------------------------
+# Regression: no-query-context teammate must FAIL, not report success
+# ---------------------------------------------------------------------------
+
+
+async def _wait_terminal(manager, task_id, timeout=10.0):
+    """Poll the task manager until the record reaches a terminal state."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        record = manager.get_task(task_id)
+        if record is not None and record.status in {"completed", "failed", "killed"}:
+            return record
+        await asyncio.sleep(0.05)
+    return manager.get_task(task_id)
+
+
+async def test_teammate_without_query_context_records_failure(
+    backend, tmp_path, monkeypatch
+):
+    """Regression: a teammate that cannot build a QueryContext used to run a
+    cancel-aware stub and then report ``completed`` — a prompt that was never
+    executed masquerading as a successful run. It must be recorded FAILED and
+    the leader must be told so."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    # Patch the collection-time module object: ``test_imports.py`` pops the
+    # swarm modules from ``sys.modules``, so a string-target patch would
+    # re-import a *fresh* module and miss the globals the backend code
+    # actually consults at runtime.
+    monkeypatch.setattr(in_process_mod, "build_teammate_query_context", lambda config: None)
+    result = await backend.spawn(spawn_config_for("worker", "test-team"))
+
+    # Let the teammate hit its no-context failure path (1s cancel-aware window).
+    task = backend._active["worker@test-team"].task
+    await asyncio.wait([task], timeout=10.0)
+
+    from iterate_harness.tasks import get_task_manager
+
+    manager = get_task_manager()
+    record = await _wait_terminal(manager, result.task_id)
+    assert record is not None
+    assert record.status == "failed"
+    assert record.return_code == 1
+
+    # The leader's idle notification carries the failure, not "finished".
+    from iterate_harness.swarm.mailbox import TeammateMailbox
+
+    leader_box = TeammateMailbox(team_name="test-team", agent_id="leader")
+    messages = await leader_box.read_all(unread_only=False)
+    assert any("FAILED" in (m.payload.get("summary") or "") for m in messages)
+
+
+async def test_graceful_shutdown_of_unrunnable_teammate_marks_killed(
+    backend, tmp_path, monkeypatch
+):
+    """A teammate stopped before it could run its prompt must not be recorded
+    as a successful completion."""
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    # Patch the collection-time module object (see the note in
+    # ``test_teammate_without_query_context_records_failure``).
+    monkeypatch.setattr(in_process_mod, "build_teammate_query_context", lambda config: None)
+    result = await backend.spawn(spawn_config_for("worker", "test-team"))
+
+    assert await backend.shutdown("worker@test-team", timeout=5.0) is True
+
+    from iterate_harness.tasks import get_task_manager
+
+    manager = get_task_manager()
+    record = await _wait_terminal(manager, result.task_id)
+    assert record is not None
+    assert record.status == "killed"
+
+
+async def test_predecessor_done_callback_does_not_evict_respawned_entry(backend, spawn_config):
+    """Race regression: the done-callback of a finished task can fire after a
+    respawn replaced ``_active[agent_id]``. It must not unregister the NEW
+    teammate's registry entry (which silently dropped it from
+    ``active_agents`` / ``list_teammates`` while it was still running)."""
+    from iterate_harness.swarm.in_process import TeammateAbortController, _TeammateEntry
+
+    await backend.spawn(spawn_config)
+    agent_id = "worker@test-team"
+    old_entry = backend._active[agent_id]
+
+    # Simulate the respawn: a fresh entry replaces the old one in the registry.
+    new_task = asyncio.create_task(asyncio.sleep(60))
+    new_entry = _TeammateEntry(
+        task=new_task,
+        abort_controller=TeammateAbortController(),
+        task_id="in_process_replacement",
+    )
+    backend._active[agent_id] = new_entry
+
+    # Now the old task dies; its done callback must leave the new entry alone.
+    old_entry.task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await old_entry.task
+    # Yield once so the done-callback (scheduled via call_soon) has run.
+    await asyncio.sleep(0)
+
+    assert backend._active.get(agent_id) is new_entry
+    assert backend.is_active(agent_id) is True
+
+    new_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await new_task

@@ -8,7 +8,7 @@ import difflib
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Literal, cast
 from uuid import uuid4
@@ -82,6 +82,32 @@ MAX_TRACKED_WORK_LOG = 10
 MAX_TRACKED_USER_GOALS = 5
 MAX_TRACKED_ACTIVE_ARTIFACTS = 8
 MAX_TRACKED_VERIFIED_WORK = 10
+
+#: Opening sentence of the REAL coordinator system prompt
+#: (``coordinator.get_coordinator_system_prompt()``). The prompt historically
+#: began with "You are Claude Code, an AI assistant that orchestrates …", so a
+#: gate matching only the later "You are a **coordinator**." sentence at
+#: position 0 never fired for production coordinator sessions.
+_COORDINATOR_PROMPT_PREFIX = "You are Claude Code, an AI assistant that orchestrates"
+#: The explicit coordinator-role sentence, scanned within the first
+#: ``_COORDINATOR_PROMPT_SCAN_CHARS`` so a long agent prompt that merely
+#: mentions coordinators deeper in its body cannot trigger the pop/re-append.
+_COORDINATOR_PROMPT_SENTINEL = "You are a **coordinator**."
+_COORDINATOR_PROMPT_SCAN_CHARS = 500
+
+
+def _is_coordinator_system_prompt(system_prompt: str) -> bool:
+    """Whether ``system_prompt`` is the coordinator-mode runtime prompt.
+
+    Matches both the real coordinator prompt (its opening orchestration
+    sentence) and the shorter test/embedded variants whose first line is the
+    ``You are a **coordinator**.`` role sentence. Only the first ~500 chars
+    are scanned for the sentinel so unrelated prompts that discuss
+    coordinators later in their body are never misclassified.
+    """
+    if system_prompt.startswith(_COORDINATOR_PROMPT_PREFIX):
+        return True
+    return _COORDINATOR_PROMPT_SENTINEL in system_prompt[:_COORDINATOR_PROMPT_SCAN_CHARS]
 
 
 def _is_prompt_too_long_error(exc: Exception) -> bool:
@@ -174,6 +200,12 @@ class QueryContext:
     max_turns: int | None = 200
     hook_executor: HookExecutor | None = None
     tool_metadata: dict[str, object] | None = None
+    #: Serializes interactive permission prompts within ONE query run: when
+    #: several tools execute concurrently (multi-tool turn), only one
+    #: ``permission_prompt`` await may be in flight at a time so the UI shows
+    #: a single prompt instead of racing overlapping dialogs. The lock guards
+    #: ONLY the prompt wait — tool execution itself stays concurrent.
+    permission_prompt_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # LLM reasoning effort ('low' | 'medium' | 'high'); None = provider default.
     reasoning_effort: str | None = None
     # Iterate loop policy (design §11.4.1 kernel fix #1): when set, the
@@ -621,6 +653,12 @@ def _safe_tool_artifact_name(tool_name: str) -> str:
     return (normalized or "tool")[:80]
 
 
+#: Fallback inline head size when the artifact offload itself fails (disk
+#: full, unwritable data dir, …). Small enough to stay well within a normal
+#: tool-result budget, large enough to keep the failure diagnosable.
+_OFFLOAD_FALLBACK_INLINE_CHARS = 4096
+
+
 def _offload_tool_output_if_needed(
     *,
     tool_name: str,
@@ -631,13 +669,42 @@ def _offload_tool_output_if_needed(
     if len(output) <= inline_limit:
         return output, None
 
-    artifact_dir = _tool_artifact_dir()
-    artifact_path = (
-        artifact_dir
-        / f"{time.strftime('%Y%m%d-%H%M%S')}-{_safe_tool_artifact_name(tool_name)}-{uuid4().hex[:12]}.txt"
-    )
-    artifact_path.write_text(output, encoding="utf-8", errors="replace")
-    _prune_tool_artifacts(artifact_dir)
+    artifact_dir: Path | None = None
+    artifact_path: Path | None = None
+    try:
+        artifact_dir = _tool_artifact_dir()
+        artifact_path = (
+            artifact_dir
+            / f"{time.strftime('%Y%m%d-%H%M%S')}-{_safe_tool_artifact_name(tool_name)}-{uuid4().hex[:12]}.txt"
+        )
+        artifact_path.write_text(output, encoding="utf-8", errors="replace")
+        _prune_tool_artifacts(artifact_dir)
+    except OSError:
+        # An offload failure must never fail a SUCCESSFUL tool call: the tool
+        # already did its work — only the artifact hand-off broke. Fall back
+        # to a bounded inline head plus a short note instead of raising into
+        # the tool-call containment (which would re-record the successful
+        # call as an error).
+        log.warning(
+            "tool output offload failed for %s (%s); returning bounded inline head",
+            tool_name,
+            artifact_path if artifact_path is not None else artifact_dir,
+            exc_info=True,
+        )
+        head = output[:_OFFLOAD_FALLBACK_INLINE_CHARS]
+        omitted = max(0, len(output) - len(head))
+        inline = (
+            "[Tool output offload failed; showing bounded inline head]\n"
+            f"Tool: {tool_name}\n"
+            f"Tool use id: {tool_use_id}\n"
+            f"Original size: {len(output)} chars"
+        )
+        if omitted:
+            inline += f" ({omitted} chars omitted)"
+        if head:
+            inline += f"\n\n{head}"
+        return inline, None
+
     preview = output[:tool_output_preview_chars()]
     omitted = max(0, len(output) - len(preview))
     inline = (
@@ -973,7 +1040,7 @@ async def run_query(
             return
 
         coordinator_context_message: ConversationMessage | None = None
-        if context.system_prompt.startswith("You are a **coordinator**."):
+        if _is_coordinator_system_prompt(context.system_prompt):
             if messages and messages[-1].role == "user" and messages[-1].text.startswith("# Coordinator User Context"):
                 coordinator_context_message = messages.pop()
 
@@ -1339,22 +1406,30 @@ async def _execute_tool_call(
                         "reason": decision.reason,
                     },
                 )
-            try:
-                confirmed = await asyncio.wait_for(
-                    context.permission_prompt(tool_name, decision.reason),
-                    timeout=PAUSE_CHANNEL_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                # No answer within the intervention window: fail closed. The
-                # pause menus above resolve a hung channel the same way so a
-                # dropped/detached UI can never leave the query wedged on an
-                # unanswered deny-by-default prompt.
-                log.warning(
-                    "permission prompt timed out after %ss for %s; denying",
-                    PAUSE_CHANNEL_TIMEOUT_SECONDS,
-                    tool_name,
-                )
-                confirmed = False
+            # Serialize permission prompts: concurrent tool calls in one turn
+            # may each need approval, but only ONE prompt may be in flight at
+            # a time or the UI races overlapping dialogs. The lock guards only
+            # the interactive wait (the notification hook above stays outside
+            # it so it is never serialized behind another tool's prompt) and is
+            # released via the ``async with`` on every exit path, including
+            # cancellation.
+            async with context.permission_prompt_lock:
+                try:
+                    confirmed = await asyncio.wait_for(
+                        context.permission_prompt(tool_name, decision.reason),
+                        timeout=PAUSE_CHANNEL_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    # No answer within the intervention window: fail closed. The
+                    # pause menus above resolve a hung channel the same way so a
+                    # dropped/detached UI can never leave the query wedged on an
+                    # unanswered deny-by-default prompt.
+                    log.warning(
+                        "permission prompt timed out after %ss for %s; denying",
+                        PAUSE_CHANNEL_TIMEOUT_SECONDS,
+                        tool_name,
+                    )
+                    confirmed = False
             if not confirmed:
                 log.debug("permission denied by user for %s", tool_name)
                 return ToolResultBlock(
@@ -1448,7 +1523,13 @@ async def _execute_tool_call(
                 log.exception("defensive rollback failed during cancellation for %s", defensive_path)
             raise
         if defensive_failure:
-            result = ToolResult(output=defensive_failure, is_error=True)
+            # Carry the tool's own metadata into the replacement error result
+            # so the failure path never silently drops bookkeeping the tool
+            # recorded (e.g. spawned-agent identity that `_record_tool_carryover`
+            # below reads to keep async-agent state consistent).
+            result = ToolResult(
+                output=defensive_failure, is_error=True, metadata=dict(result.metadata)
+            )
     # Carry tool metadata writes back into the durable per-session state so
     # cross-turn consumers (e.g. the iterate loop policy reading
     # "iterate_state") observe them. Only keys the tool introduced or replaced

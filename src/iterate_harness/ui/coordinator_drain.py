@@ -19,7 +19,6 @@ from iterate_harness.coordinator.coordinator_mode import (
     format_task_notification,
 )
 from iterate_harness.engine.query import MaxTurnsExceeded
-from iterate_harness.prompts.context import build_runtime_system_prompt
 from iterate_harness.tasks.manager import get_task_manager
 from iterate_harness.ui.runtime import (
     RuntimeBundle,
@@ -176,14 +175,9 @@ async def submit_follow_up(
     settings = bundle.current_settings()
     if bundle.enforce_max_turns:
         bundle.engine.set_max_turns(settings.max_turns)
-    system_prompt = build_runtime_system_prompt(
-        settings,
-        cwd=bundle.cwd,
-        latest_user_prompt=prompt_seed,
-        extra_skill_dirs=bundle.extra_skill_dirs,
-        extra_plugin_roots=bundle.extra_plugin_roots,
-        include_project_memory=getattr(bundle, "include_project_memory", True),
-    )
+    # Route through session_system_prompt so ``--append-system-prompt`` (and
+    # every other prompt rebuild concern) survives coordinator follow-ups.
+    system_prompt = bundle.session_system_prompt(latest_user_prompt=prompt_seed)
     bundle.engine.set_system_prompt(system_prompt)
     try:
         async for event in bundle.engine.submit_message(message):

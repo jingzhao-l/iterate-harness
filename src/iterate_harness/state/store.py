@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import Callable
 from dataclasses import replace
@@ -15,6 +16,8 @@ else:  # pragma: no cover - exercised on Python 3.10 only
     from typing_extensions import Unpack
 
 from iterate_harness.state.app_state import AppState, AppStateUpdates
+
+log = logging.getLogger(__name__)
 
 
 Listener = Callable[[AppState], None]
@@ -32,10 +35,19 @@ class AppStateStore:
         return self._state
 
     def set(self, **updates: Unpack[AppStateUpdates]) -> AppState:
-        """Update the state and notify listeners."""
+        """Update the state and notify listeners.
+
+        The update itself is not rolled back when a listener fails, and the
+        remaining listeners still run: one misbehaving subscriber used to
+        abort the notification loop and surface as an error inside whatever
+        state mutation happened to trigger it.
+        """
         self._state = replace(self._state, **updates)
         for listener in list(self._listeners):
-            listener(self._state)
+            try:
+                listener(self._state)
+            except Exception:  # noqa: BLE001 - a listener must not break the update
+                log.exception("State listener %r failed; continuing", listener)
         return self._state
 
     def subscribe(self, listener: Listener) -> Callable[[], None]:

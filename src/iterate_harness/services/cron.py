@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -14,6 +15,8 @@ from iterate_harness.config.paths import get_cron_registry_path
 from iterate_harness.utils.file_lock import exclusive_file_lock
 from iterate_harness.utils.fs import atomic_write_text
 
+log = logging.getLogger(__name__)
+
 #: Python 3.10 compatibility — ``datetime.UTC`` is only available in 3.11+.
 UTC = timezone.utc
 
@@ -24,15 +27,27 @@ def _cron_lock_path() -> Path:
 
 
 def load_cron_jobs() -> list[dict[str, Any]]:
-    """Load stored cron jobs."""
+    """Load stored cron jobs.
+
+    A corrupt or hand-edited registry must not crash ``ih cron``: the file is
+    reported (path + reason) and the caller starts from an empty job list.
+    """
     path = get_cron_registry_path()
     if not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Corrupt cron registry %s (%s) — using an empty job list", path, exc)
         return []
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        log.warning(
+            "Corrupt cron registry %s (root is %s, expected a list) — using an empty job list",
+            path,
+            type(data).__name__,
+        )
+        return []
+    return data
 
 
 def save_cron_jobs(jobs: list[dict[str, Any]]) -> None:
