@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -400,6 +401,41 @@ class QueryEngine:
             )
         ]
 
+    def _heal_unmatched_tool_use(self) -> None:
+        """Close out assistant ``tool_use`` calls that never received a result.
+
+        A run can unwind (user cancellation, provider error, compaction
+        failure) after the assistant message carrying ``tool_use`` blocks was
+        produced but before their ``tool_result`` message was appended.
+        Providers reject any later request whose history pairs a ``tool_use``
+        with no ``tool_result``, so the interrupted calls are closed out as
+        error results — the history stays valid and the model can see that the
+        calls were interrupted rather than silently vanished.
+        """
+        if not self._messages:
+            return
+        last = self._messages[-1]
+        if last.role != "assistant":
+            return
+        uses = last.tool_uses
+        if not uses:
+            return
+        self._messages.append(
+            ConversationMessage.from_user_content(
+                [
+                    ToolResultBlock(
+                        tool_use_id=use.id,
+                        content=(
+                            "Tool execution was interrupted before it completed "
+                            "(run cancelled or failed)."
+                        ),
+                        is_error=True,
+                    )
+                    for use in uses
+                ]
+            )
+        )
+
     async def submit_message(self, prompt: str | ConversationMessage) -> AsyncIterator[StreamEvent]:
         """Append a user message and execute the query loop."""
         if self._iterate_policy is not None:
@@ -414,8 +450,6 @@ class QueryEngine:
             if isinstance(prompt, ConversationMessage)
             else ConversationMessage.from_user_text(prompt)
         )
-        if user_message.text.strip() and not self._tool_metadata.pop("_suppress_next_user_goal", False):
-            remember_user_goal(self._tool_metadata, user_message.text)
         if self._hook_executor is not None:
             # USER_PROMPT_SUBMIT hooks run BEFORE the message joins history:
             # a blocked prompt must be rejected outright (reason surfaced to
@@ -440,6 +474,11 @@ class QueryEngine:
                     usage=UsageSnapshot(),
                 )
                 return
+        # Record the goal only for accepted prompts: a prompt rejected by a
+        # hook must not overwrite the task focus (or consume the one-shot
+        # ``_suppress_next_user_goal`` flag meant for the next accepted prompt).
+        if user_message.text.strip() and not self._tool_metadata.pop("_suppress_next_user_goal", False):
+            remember_user_goal(self._tool_metadata, user_message.text)
         self._messages.append(user_message)
         context = QueryContext(
             api_client=self._api_client,
@@ -483,6 +522,19 @@ class QueryEngine:
             # continuation (/continue) or snapshot see the completed tool round
             # instead of an unmatched tool_use block.
             self._sync_after_turn(query_messages, coordinator_context)
+            raise
+        except (Exception, asyncio.CancelledError):
+            # Cancellation (Esc while tools run) and any provider/tool error
+            # unwind through here after the assistant ``tool_use`` message was
+            # already produced but before its ``tool_result`` user message was
+            # appended. Fold the in-flight list back and close out the
+            # unanswered calls as error results — otherwise the next request
+            # carries a ``tool_use`` with no matching ``tool_result``, which
+            # providers reject, bricking the session. (``GeneratorExit`` is
+            # deliberately NOT caught: a consumer abandoning the stream must
+            # not persist a torn state.)
+            self._sync_after_turn(query_messages, coordinator_context)
+            self._heal_unmatched_tool_use()
             raise
         else:
             # The loop finished normally (final response, iterate stop, or an
@@ -532,6 +584,13 @@ class QueryEngine:
                 yield event
         except MaxTurnsExceeded:
             self._sync_after_turn(query_messages, coordinator_context)
+            raise
+        except (Exception, asyncio.CancelledError):
+            # Same interrupted-tool-round healing as ``submit_message``: a
+            # continuation that fails mid-tool must not leave an unmatched
+            # tool_use tail for the next turn.
+            self._sync_after_turn(query_messages, coordinator_context)
+            self._heal_unmatched_tool_use()
             raise
         else:
             # Same final-state fold as submit_message: a normal return after a

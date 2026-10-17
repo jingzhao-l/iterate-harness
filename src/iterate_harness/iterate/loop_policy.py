@@ -73,6 +73,10 @@ class AggregateSnapshot:
     # (empty when no budgets are configured or no usage was reported).
     exhausted_dimensions: list[str] = field(default_factory=list)
     all_dimensions_exhausted: bool = False
+    # The convergence contract's invariant verdict, or None when nothing measured
+    # it. Never defaulted: see iterate/invariant_state.py for why absent beats
+    # "unmeasured" beats "pass" here.
+    invariant_state: str | None = None
     # Reviewer-reported cumulative token totals per dimension (v1.2-c).
     # Subagent usage bills outside the main API stream, so these are reported
     # figures the policy relays into the CostMeter (monotonic running totals).
@@ -129,11 +133,23 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
         converged=bool(state.get("converged", False)),
         by_dimension=by_dim,
         mode=str(state.get("mode", "dry-run")),
+        invariant_state=_read_invariant_state(state.get("invariant_state")),
         exhausted_dimensions=exhausted,
         all_dimensions_exhausted=bool(state.get("all_dimensions_exhausted", False)),
         dimension_usage=usage,
         dimension_usage_io=usage_io,
     )
+
+
+def _read_invariant_state(raw: object) -> str | None:
+    """Accept only the four contract verdicts; anything else stays absent.
+
+    A producer that misspells the value must not silently upgrade "nobody looked"
+    into a verdict the convergence policy can act on.
+    """
+    from .invariant_state import INVARIANT_STATE_VALUES
+
+    return raw if isinstance(raw, str) and raw in INVARIANT_STATE_VALUES else None
 
 
 def _clean_usage_io(raw: object) -> dict[str, dict[str, int]]:
@@ -379,6 +395,15 @@ class IterateLoopPolicy:
     def _decide(self, snapshot: AggregateSnapshot, progress: object) -> LoopDecision:
         last_new = snapshot.findings_by_round[-1] if snapshot.findings_by_round else 0
         if snapshot.converged:
+            # A failing invariant is a STOP, never a pass: the reviewer claiming
+            # convergence while the project's own invariant gate failed used to
+            # produce a green "converged" run (and green CI) on broken code.
+            # ``None`` means nobody measured — that keeps the historical
+            # behavior rather than blocking projects without invariant gates.
+            if snapshot.invariant_state == "fail":
+                return self._stop_decision(
+                    snapshot, "invariant gate failed (reported converged)", progress
+                )
             return self._stop_decision(snapshot, "converged", progress)
         if snapshot.rounds_seen >= self.max_review_rounds:
             return self._stop_decision(
@@ -416,9 +441,12 @@ class IterateLoopPolicy:
         # on their behalf.
         if last_new == 0:
             if self.stall_pause_rounds <= 0:
-                # Feature disabled: preserve the historical hard-stop behavior.
+                # Feature disabled: hard-stop, but never CALL it converged —
+                # the reviewer did not claim convergence and the report may
+                # still contain open findings. The reason string is surfaced in
+                # the UI and consumed by report/CI consumers as success.
                 return self._stop_decision(
-                    snapshot, "converged (0 new findings in the last round)", progress
+                    snapshot, "stalled: 0 new findings in the last round", progress
                 )
             self._consecutive_zero_rounds += 1
             if self._consecutive_zero_rounds >= self.stall_pause_rounds:

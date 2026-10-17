@@ -106,11 +106,15 @@ async def chat_status() -> ChatRunStatus:
 
 
 @router.get("/chat/history", response_model=list[ChatMessage])
-async def chat_history() -> list[ChatMessage]:
+async def chat_history(
+    request: Request,
+    project_root: str = Query("", description="Project root (defaults to app/CWD)"),
+) -> list[ChatMessage]:
     """Persisted human-interaction transcript (oldest first, capped)."""
+    root = _resolve_project(request, project_root)
     # Off the loop: history() reads and parses the whole web-chat.jsonl, and a
     # blocking read in a coroutine stalls every concurrent stream/run.
-    entries = await asyncio.to_thread(run_manager.history)
+    entries = await asyncio.to_thread(run_manager.history, root)
     messages: list[ChatMessage] = []
     for entry in entries:
         if not isinstance(entry, dict):

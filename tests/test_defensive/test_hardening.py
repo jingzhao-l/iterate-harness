@@ -33,12 +33,37 @@ def test_snapshot_refcount_survives_sibling_commit(tmp_path: Path) -> None:
     buffer.commit(target)
     assert buffer.pending == [target.resolve()]
 
-    # The second mutation fails → rollback restores the shared original.
+    # The second mutation fails → rollback restores the last ACCEPTED state
+    # ("edit-1"), never the pre-first-edit original: the first edit was
+    # already reported as committed to the model, and silently reverting it
+    # would make the model's next read disagree with its own success result.
     target.write_text("edit-2", encoding="utf-8")
     restored = buffer.rollback(target)
     assert restored == [target.resolve()]
-    assert target.read_text(encoding="utf-8") == "original"
+    assert target.read_text(encoding="utf-8") == "edit-1"
     assert buffer.pending == []
+
+
+def test_rollback_before_any_commit_restores_original(tmp_path: Path) -> None:
+    target = tmp_path / "config.txt"
+    target.write_text("original", encoding="utf-8")
+
+    buffer = FileTransactionBuffer(tmp_path)
+    buffer.snapshot(target)
+    buffer.snapshot(target)
+
+    # The FIRST mutation fails while the sibling is still in flight → nothing
+    # on this path was accepted yet, so the shared original is the restore
+    # target and the snapshot stays for the sibling.
+    target.write_text("edit-1", encoding="utf-8")
+    assert buffer.rollback(target) == [target.resolve()]
+    assert target.read_text(encoding="utf-8") == "original"
+    assert buffer.pending == [target.resolve()]
+
+    # The sibling then commits: it settles the path and drops the snapshot.
+    buffer.commit(target)
+    assert buffer.pending == []
+    assert buffer.rollback(target) == []  # no snapshot left: no-op
 
 
 def test_single_mutation_commit_drops_snapshot(tmp_path: Path) -> None:

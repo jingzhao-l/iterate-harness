@@ -412,6 +412,23 @@ def _evaluate_dry_run_readiness(
     return {"level": level, "reasons": reasons, "next_actions": deduped_actions}
 
 
+def _split_tool_names(values: list[str] | None) -> list[str] | None:
+    """Split Click's list values on commas/whitespace into individual names.
+
+    Click does NOT split a list option: ``--allowed-tools "Read,Bash"`` arrives
+    as one literal item, producing a nonexistent tool name and a silently inert
+    allowlist. The help advertises comma/space separation, so honor it.
+    """
+    if not values:
+        return None
+    names: list[str] = []
+    for value in values:
+        for part in re.split(r"[,\s]+", value):
+            if part and part not in names:
+                names.append(part)
+    return names or None
+
+
 def _build_dry_run_preview(
     *,
     prompt: str | None,
@@ -452,8 +469,8 @@ def _build_dry_run_preview(
         permission_mode=permission_mode,
         effort=effort,
         verbose=verbose,
-        allowed_tools=allowed_tools,
-        disallowed_tools=disallowed_tools,
+        allowed_tools=_split_tool_names(allowed_tools),
+        disallowed_tools=_split_tool_names(disallowed_tools),
     )
     provider = detect_provider(settings)
     auth = auth_status(settings)
@@ -1624,11 +1641,19 @@ def iterate_report(
             "(run `ih iterate review` or `ih iterate run` first).",
             file=sys.stderr,
         )
+        # A missing report is "not measured", never "passed": CI with a gate
+        # used to print this warning and exit 0, marking the check green even
+        # though the review crashed before writing anything.
+        if threshold != "none":
+            raise typer.Exit(2)
     summary = ci_report.ReportSummary.from_entry(report_entry)
     gate = ci_report.threshold_gate(report_entry)
 
-    if html_out:
-        _write_html_report(html_report, entries, html_out)
+    if html_out or serve:
+        # ``--serve`` implies the HTML + replay artifacts: previously the whole
+        # serve block was nested inside ``if html_out``, so `--serve` alone
+        # printed the text report, opened no server, and exited 0 silently.
+        _write_html_report(html_report, entries, html_out or "-")
         if serve:
             _write_html_replay(html_report, entries)
             report_server.serve_report(
@@ -2861,7 +2886,7 @@ def main(
         None,
         "--resume",
         "-r",
-        help="Resume a conversation by session ID, or open picker",
+        help="Resume a conversation by session ID (pass '' to open the picker)",
         rich_help_panel="Session",
     ),
     # --- Model & Effort ---
@@ -3136,8 +3161,8 @@ def main(
             config_path=settings_file,
             effort=effort,
             verbose=verbose or None,
-            allowed_tools=allowed_tools,
-            disallowed_tools=disallowed_tools,
+            allowed_tools=_split_tool_names(allowed_tools),
+            disallowed_tools=_split_tool_names(disallowed_tools),
         )
         effective_output_format = output_format or "text"
         if effective_output_format == "text":
@@ -3153,6 +3178,18 @@ def main(
             )
             raise typer.Exit(1)
         return
+
+    # -p/--print is a non-interactive one-shot; --continue/--resume launch an
+    # interactive REPL. Combining them used to silently DROP the prompt and
+    # open the TUI (a pipe/CI run then hung on a full-screen UI). Reject the
+    # combination instead of guessing which side the user meant.
+    if print_mode is not None and (continue_session or resume is not None):
+        print(
+            "Error: -p/--print cannot be combined with --continue or --resume "
+            "(print mode starts a fresh one-shot session).",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
 
     # Handle --continue and --resume flags
     if continue_session or resume is not None:
@@ -3229,8 +3266,8 @@ def main(
                 config_path=settings_file,
                 effort=effort,
                 verbose=verbose or None,
-                allowed_tools=allowed_tools,
-                disallowed_tools=disallowed_tools,
+                allowed_tools=_split_tool_names(allowed_tools),
+                disallowed_tools=_split_tool_names(disallowed_tools),
             )
         )
         return
@@ -3265,8 +3302,8 @@ def main(
                     config_path=settings_file,
                     effort=effort,
                     verbose=verbose or None,
-                    allowed_tools=allowed_tools,
-                    disallowed_tools=disallowed_tools,
+                    allowed_tools=_split_tool_names(allowed_tools),
+                    disallowed_tools=_split_tool_names(disallowed_tools),
                     admin_opt_in=admin_opt_in,
                 )
             )
@@ -3297,8 +3334,8 @@ def main(
                 config_path=settings_file,
                 effort=effort,
                 verbose=verbose or None,
-                allowed_tools=allowed_tools,
-                disallowed_tools=disallowed_tools,
+                allowed_tools=_split_tool_names(allowed_tools),
+                disallowed_tools=_split_tool_names(disallowed_tools),
             )
         )
         return
@@ -3322,7 +3359,7 @@ def main(
             config_path=settings_file,
             effort=effort,
             verbose=verbose or None,
-            allowed_tools=allowed_tools,
-            disallowed_tools=disallowed_tools,
+            allowed_tools=_split_tool_names(allowed_tools),
+            disallowed_tools=_split_tool_names(disallowed_tools),
         )
     )

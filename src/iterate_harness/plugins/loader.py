@@ -10,6 +10,8 @@ import os
 import re
 import sys
 from pathlib import Path
+
+from pydantic import ValidationError
 from typing import Any, Iterable
 
 import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs in this env
@@ -848,7 +850,14 @@ def _load_plugin_mcp(path: Path) -> dict[str, McpServerConfig]:
     if not isinstance(raw, dict):
         logger.warning("Skipping MCP file %s: top-level value is not an object", path)
         return {}
-    parsed = McpJsonConfig.model_validate(raw)
+    try:
+        parsed = McpJsonConfig.model_validate(raw)
+    except ValidationError as exc:
+        # Valid JSON with an entry this build does not understand (e.g. an
+        # "sse" transport) must degrade, not crash plugin loading and thus
+        # runtime construction.
+        logger.warning("Skipping MCP file %s: %s", path, exc)
+        return {}
     return parsed.mcpServers
 
 

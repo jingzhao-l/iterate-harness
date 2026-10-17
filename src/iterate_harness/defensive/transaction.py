@@ -42,6 +42,13 @@ class FileTransactionBuffer:
         #: atomic-mutation guarantee silently degraded to "partial write
         #: kept".
         self._pending: dict[Path, int] = {}
+        #: Last ACCEPTED content per resolved path: updated on every commit and
+        #: used as the restore target for a sibling mutation's rollback. Two
+        #: writes to the same file in one turn must not let the second one's
+        #: rollback undo the first one's *committed* edit (restoring the shared
+        #: pre-first-edit snapshot), while the first was already reported as a
+        #: success to the model.
+        self._committed: dict[Path, bytes] = {}
         #: Guards the snapshot map so two concurrent mutations of the SAME
         #: path (parallel file tools inside one turn, or tool calls running on
         #: a worker thread) cannot interleave a read with a write to
@@ -69,20 +76,32 @@ class FileTransactionBuffer:
             self._pending[resolved] = self._pending.get(resolved, 0) + 1
 
     def commit(self, path: str | Path) -> None:
-        """Accept the edit: drop the snapshot for ``path`` (verified good).
+        """Accept the edit: mark the current content as the last-good state.
 
         The snapshot only disappears once the FINAL pending mutation for the
-        path commits, so a sibling edit of the same file can still roll back
-        to the shared original if it fails afterwards.
+        path commits, so a sibling edit of the same file can still roll back if
+        it fails afterwards. Each commit records the file's current bytes as
+        the restore target for such a sibling rollback — restoring the shared
+        original instead would silently undo an edit that was already reported
+        as committed.
         """
         resolved = self._resolve(path)
         with self._lock:
+            if resolved not in self._snapshots:
+                return
+            try:
+                self._committed[resolved] = resolved.read_bytes()
+            except OSError:
+                # The file vanished after the "successful" edit; treat the
+                # committed state as absence so a rollback removes it.
+                self._committed[resolved] = _MISSING_SENTINEL
             remaining = self._pending.get(resolved, 0) - 1
             if remaining > 0:
                 self._pending[resolved] = remaining
                 return
             self._pending.pop(resolved, None)
             self._snapshots.pop(resolved, None)
+            self._committed.pop(resolved, None)
 
     def rollback(
         self, paths: str | Path | Iterable[str | Path] | None = None
@@ -114,8 +133,14 @@ class FileTransactionBuffer:
                 original = self._snapshots.get(resolved)
                 if original is None:
                     continue
+                # Scoped rollback restores the last ACCEPTED state when a
+                # sibling mutation on this path already committed; the shared
+                # original snapshot is only the fallback when nothing on this
+                # path was accepted yet (otherwise a failing second edit would
+                # silently revert the first, already-successful edit).
+                target = original if paths is None else self._committed.get(resolved, original)
             try:
-                if original == _MISSING_SENTINEL:
+                if target == _MISSING_SENTINEL:
                     if resolved.exists():
                         resolved.unlink()
                         restored.append(resolved)
@@ -128,7 +153,7 @@ class FileTransactionBuffer:
                     )
                     try:
                         with os.fdopen(fd, "wb") as tmp_file:
-                            tmp_file.write(original)
+                            tmp_file.write(target)
                             tmp_file.flush()
                             os.fsync(tmp_file.fileno())
                         os.replace(tmp_name, resolved)
@@ -151,6 +176,7 @@ class FileTransactionBuffer:
                     # terminated by the restore, so drop snapshot and count.
                     self._snapshots.pop(resolved, None)
                     self._pending.pop(resolved, None)
+                    self._committed.pop(resolved, None)
                     continue
                 # Scoped rollback: one pending mutation ended here; the
                 # snapshot stays available for any sibling mutation of the
@@ -161,6 +187,7 @@ class FileTransactionBuffer:
                     continue
                 self._pending.pop(resolved, None)
                 self._snapshots.pop(resolved, None)
+                self._committed.pop(resolved, None)
         return restored
 
     @property

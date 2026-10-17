@@ -1715,14 +1715,25 @@ def create_default_command_registry(
         action_map = {"on": True, "off": False, "toggle": not current}
         if tokens[0] not in action_map:
             return CommandResult(message="Usage: /voice [show|on|off|toggle|keyterms TEXT]")
-        enabled = toggle_voice_mode(action_map[tokens[0]])
+        requested = action_map[tokens[0]]
+        enabled = toggle_voice_mode(requested)
         if context.app_state is not None:
             context.app_state.set(
                 voice_enabled=enabled,
                 voice_available=diagnostics.available,
                 voice_reason=diagnostics.reason,
             )
-        return CommandResult(message=f"Voice mode {'enabled' if enabled else 'disabled'}.")
+        # ``voice_enabled`` is a persisted preference, independent of whether a
+        # streaming STT backend exists in this build (``voice_available``).
+        # Never claim a working mode though: say the toggle was recorded and
+        # name why it cannot be used yet.
+        suffix = ""
+        if enabled and not diagnostics.available:
+            suffix = (
+                " Preference recorded, but voice input is unavailable in this build: "
+                f"{diagnostics.reason or 'no streaming STT backend'}."
+            )
+        return CommandResult(message=f"Voice mode {'enabled' if enabled else 'disabled'}.{suffix}")
 
     async def _doctor_handler(_: str, context: CommandContext) -> CommandResult:
         settings = load_settings()

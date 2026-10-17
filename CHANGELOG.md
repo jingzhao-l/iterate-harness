@@ -4,6 +4,28 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`iterate/invariant_state.py`：收敛契约那个"没人看过就别装成看过"的字段，终于有了唯一
+  合法的来源（场景④的前半）。** 内核的 `RoundState.invariant_state` 取
+  `pass|fail|error|unmeasured`，而规则把差别全押在这个档位上：闸门没跑过就不能当跑过。此前
+  harness 里没有任何地方能给出这个值——不变量检查只在 code mode 的 `DefensiveKernel` 里跑
+  （`engine/query.py:262` 的 `_new_defensive_kernel` 在非 code mode 直接返回 None），而
+  `DEFENSIVE_KERNEL_KEY` 其实早已被 `engine/query.py:1464` 放进 exec metadata，工具层拿得到，
+  缺的只是那一次映射。本批把这一步做成一个模块：`checks_run<=0` 一律 `unmeasured`、
+  `kind=="refused"` 记 `error`（那是检查自己跑不起来，不是项目违例）、否则按 `passed` 给
+  `pass`/`fail`；**没有报告就返回 None**，调用方把键整个省掉——填 `pass` 是让没测过的跑凭一个
+  没人生产的结论收敛，填 `unmeasured` 也是一种主张。
+  第一版就藏着一个假绿，是探针抓出来的：`InvariantReport()` 的 dataclass 默认 `passed=True`，
+  旧映射在 `checks_run=0` 时穿过 `violations` 判空落回 `pass`——即"空报告"读成"闸是绿的"。
+  现在这条被写成用例钉住（`test_an_untouched_report_is_unmeasured_not_pass`）。读侧同理只收
+  四个合法值，拼错的字符串按缺席处理（`test_the_loop_state_never_invents_a_value`）。
+  `AggregateSnapshot.invariant_state` + `iterate_tools` 聚合发布各加一处，值缺席时不写键。
+  新 7 条用例；`test_iterate_tools`/循环策略/内核三套共 158 条全绿，ruff 干净。
+  **本批没做完、点名的**：聚合工具那行发布没有端到端用例（工具测试里没有 code-mode 的 kernel
+  实例），要等④翻转那批一起补；`breaker_level` 与 `evidence_complete` 两个入参仍无来源；
+  判定权仍归 `loop_policy` 自己——没改任何收敛行为。
+
 ### Fixed
 
 - **`scripts/install.py::_installed_version()` 在 Python 3.10 上不再报假版本。** 包里
@@ -209,6 +231,152 @@ All notable changes to iterate-harness should be recorded in this file.
   tarball 查（split 仓的 CI 用）。
 - **更正 2.5.0 那条 `dimension_context` 的描述**：写的是"注入给评审与协调链路"，实测
   该模块除自身与其测试外无任何 import，生产链路里没有它。接线是后续条目，不是既成事实。
+
+## [2.7.0] - 2026-10-17
+
+整轮「代码审查 → 修复 → UX 评审 → 缺口补齐」的结果：约 40 处修复横跨权限 / 引擎 / hooks /
+防御 / 任务 / 工具 / CLI / Web / cron / 配置十个面，另有若干「按钮/旗标说了但没做」的真实缺口。
+
+### Fixed
+
+- **`send_message` 发给刚完成的 agent 会被静默吞掉**（`tasks/manager.py`）：进程在
+  「存活检查 → `stdin.drain()`」窗口内退出时，写入落进将死的管道——工具返回成功、消息却
+  从未被读到（实测 10 次复现 2 次，慢机可达 50%）。现写入后既做同步退出复核，又启动
+  **投递监视器**：进程在窗口内退出且**没有产生任何新输出**即视为未消费，重启任务并重投递；
+  有新输出则说明已消费，不重复投递。停止/换代/驱逐会取消监视器，`killed` 任务永不复活。
+- **任务 watcher 被孙进程持有的 stdout 永久挂住**：`nohup server &` 之类会让 `_copy_output`
+  等不到 EOF，记录永远 `running`、完成监听器不触发。现 drain 限时 2s，超时取消后按退出码
+  定终态。
+- **`bash` 超时后仍可能挂数小时**：残留孙进程持续吐字节时，旧的「每次读 2s」超时会被每个
+  chunk 重置。现改为整段 drain 一个总预算（2s），到点即停。
+- **权限硬边界可被 `bash` 绕开**（`permissions/checker.py` + `engine/query.py`）：`bash`
+  没有 `file_path` 字段，`cat ~/.ssh/id_rsa` 在 `allowed_tools: [bash]` / `full_auto` 下
+  一路放行。现从命令串提取路径 token（`~`/绝对/相对路径，`shlex` 分词 + 环境变量展开），
+  与文件工具一样过敏感路径 / deny 规则 / 风险区三道边界；`glob` 的 `pattern` 字段也进入
+  路径提取（此前 `glob /home/u/.ssh/*` 完全绕过）。
+- **`denied_commands` 只是「首命令」边界**：`cd /tmp && rm -rf build`、`true; rm -rf /`、
+  `bash -c 'rm -rf /'`、行尾注释都能绕过 `rm -rf *`。现按 shell 分隔符（`&&`/`||`/`;`/`|`/
+  换行）切分并对每段匹配（含递归解包 `bash -c`/`sh -c`），同时移除注释。
+- **`path_rules` 的 `allow: true` 是死配置**：解析后从未参与决策（默认模式仍弹确认）。
+  现作为显式路径允许（排在敏感/deny/风险区/denied_commands 之后，绝不放宽硬边界）。
+- **notification hook 的 `permission_prompt` matcher 永远不命中**：payload 同时带
+  `tool_name`，旧的 subject 优先取工具名。现对 notification 事件优先取
+  `notification_type`；回归用例改用生产 payload 形状。
+- **command hook 超时只杀 shell**：hook 子进程未独立进程组，`curl`/watcher 等孙进程超时后
+  继续跑；取消时甚至完全不杀。现 `start_new_session=True` + `killpg`，并补
+  `CancelledError` 清理。
+- **取消 / provider 异常后历史里留下未配对 `tool_use`**：Esc 打断工具轮后
+  `query_engine` 只处理 `MaxTurnsExceeded`，下一条消息被 provider 以
+  “tool_use ids found without tool_result” 拒绝，会话卡死。现对 `Exception`/
+  `CancelledError` 同步并为未完成的调用补 error `tool_result`（`GeneratorExit` 不处理，
+  避免持久化撕裂状态）。
+- **STOP hook 的 `blocked` 被丢弃**：其他事件都会尊重聚合结果，唯独 STOP 只执行不看。
+  现按 reason 追加一条 user 消息继续循环，最多 3 次（防死循环）。
+- **被钩子拒绝的 prompt 仍写入 task focus**：`USER_PROMPT_SUBMIT` blocked 之前就
+  `remember_user_goal` 并消费了 `_suppress_next_user_goal`。现只对接受的 prompt 记录。
+- **防御内核不变量检查抛异常时不回滚**：`after_mutation` 只守 `CancelledError`，检查器
+  （EMFILE/OSError 等）异常会让编辑留在磁盘、快照泄漏，同时工具被告知失败。现异常路径
+  回滚并返回明确错误。
+- **同一文件的两个并发编辑：兄弟回滚会撤销已提交的编辑**：A commit 后 B rollback 恢复到
+  共享的原始快照，A 的成功结果被静默回滚。现每次 commit 记录「最后接受内容」，兄弟回滚
+  恢复到该内容；首个未提交的回滚仍恢复原始快照（新增两个回归用例）。
+- **空不变量清单 = 假通过**：`invariants: {commands: {core: []}}` 会跑 0 个检查却
+  `passed=True`，每次编辑都绿灯。现解析时过滤空清单，且 `checks_run == 0` 一律 fail-closed
+  回滚。
+- **`grep` 不校验沙箱边界、`file_glob` 可用 `..` 逃逸**；**`glob` 的 `..` pattern 可走出
+  root**。现 grep 与 glob/file 工具同一边界校验，两者都拒绝 `..` 段。
+- **docker 沙箱丢弃 `start_new_session`**：bash 超时只杀 docker 客户端所在的 harness 进程组，
+  容器内命令继续跑。现把 `start_new_session` 透传到 `docker exec` 子进程。
+- **cron 作业泄漏**：超时只 `process.kill()` 直接子进程、关闭时取消任务但不杀进程组；
+  `communicate()` 还把全部输出读进内存。现独立进程组 + `killpg` + 取消时清理，输出改为
+  有界 drain（256 KiB，保留尾部 2000 字符）。
+- **`iterate report` 在没有报告时以 0 退出**：`--fail-on`（默认 `high`）形同虚设，review
+  崩溃没写报告也能让 CI 变绿。现缺失报告 + 有 gate → exit 2（新增回归用例）。
+- **`ITERATE_BASE_URL` / `ITERATE_API_FORMAT` / `ITERATE_PROVIDER` 被 profile 覆盖**：
+  `materialize_active_profile()` 在应用环境变量之后又把 profile 的值投影回来，自建/ollama
+  端点静默变成 Anthropic 客户端。现记录环境覆盖的字段并在投影时保留（新增回归用例）。
+- **无效 `settings.json` 静默回落默认值，下一次保存覆盖用户配置**：一次笔误 + `ih auth login`
+  会把 profiles/hooks/iterate 配置全部冲掉。现回落前将原文件保存为 `<name>.invalid-<ts>`；
+  同时补 `OSError`/`UnicodeDecodeError` 兜底。
+- **`GEMINI_API_KEY` 不被 auth 解析识别**；**非 UTF-8 `credentials.json` 让每次鉴权崩溃**；
+  **插件 `.mcp.json` 的未知 transport 让插件加载崩溃**。三者均改为按项降级并告警。
+- **聚合报告 `dimensions: []`**：`iterate_review aggregate` 不传维度，meta-review 把每条
+  finding 判成 `DIMENSION_UNKNOWN`，凡有 finding 的报告都 “needs_revision”。现从 effective
+  config 注入 `dimensions` 与 `goal`。
+- **`converged` 不看 invariants**：不变量失败时仍以 “converged” 停止（CI 绿）。现
+  `invariant_state == "fail"` 单独停止；未测量（None）保持原行为（新增用例）。
+- **stall 硬停被标成 converged**：0 新 findings 且禁用 stall 暂停时，reason 以
+  “converged” 开头，UI/report/CI 都当成功。现改为 `stalled: …`（新增用例）。
+- **worktree 合并失败被吞掉**：`finalize` 只 log.warning，worktree 连同未合并的修复被删、
+  运行却报正常停止。现返回成功与否，引擎在合并失败时明确报 FAILED。
+- **worktree 清理可能 `rmtree` 任意目录**：`team.json` 里陈旧/手改的路径如果不是真 worktree
+  （缺 `.git` 文件）会被递归删除。现拒绝并要求 `.git` 文件标记。
+- **重复 subprocess agent id 静默顶掉前一个**：两次普通 `agent` 调用都是 `agent@default`，
+  `send_message` 只能到后者。现拒绝重复的活跃 id 并说明如何区分。
+- **`fix_scope` 不统计未跟踪文件**：新建 500 行模块也算 0 行，原子性检查形同虚设。现把
+  `git ls-files --others --exclude-standard` 的行数计入。
+- **Anthropic 客户端忽略 `timeout`/`ITERATE_TIMEOUT`**：只有 OpenAI 分支传了超时，
+  挂死请求按 SDK 默认等待。现两分支都透传。
+- **compact 附件路径正则把字母 `n` 当换行**：`[^)\n]` 在字符类里意为「非反斜杠/非 n」，
+  `src/main.py` 被截成 `src/mai` 并被持久化重注入。现改为 `[^\n)]`（新增用例）。
+- **CLI `-p/--print` 丢弃 `--permission-mode`**（关键）：`run_print_mode` 没把
+  `permission_mode` 传给 `build_runtime`，`ih iterate run` 实际以 DEFAULT 运行，所有写操作
+  被无人值守拒绝；错误提示还让人用那个不起作用的旗标。现透传（`--dangerously-skip-permissions`
+  同样恢复作用）。
+- **交互会话被普通错误打死**：`handle_line` 无论 `propagate_errors` 都重新抛出、`/命令`
+  handler 异常（如 `/provider nosuch`）与后端请求循环都只捕 `CancelledError`。现命令异常
+  转为错误行、backend 兜底为 `Session error … still healthy`，仅非交互契约才上抛。
+- **`-p` 与 `--continue/--resume` 组合时静默丢弃 prompt**：现在直接报错退出，不再在 CI 里
+  打开全屏 TUI。
+- **print 模式向管道写 ANSI 清屏码**；**`--serve` 不带 `--html` 时静默无操作**；
+  **`--allowed-tools "Read,Bash"` 不拆分**（Click 不拆 list，白名单静默失效）；
+  **`--branch` 成功后不切回**（说 “for this run” 但其实留在目标分支）。均已修正/接线。
+- **损坏的 `keybindings.json` 让启动崩溃**：现告警并回退默认键位。
+- **`/voice on` 对不可用后端仍报 “enabled”**：保留偏好语义（`voice_enabled` 与
+  `voice_available` 本就分离），但消息明确说明本构建无流式 STT。
+- **`/output-style` 是死功能**：样式内容从不被消费。现把选中样式的正文注入 system prompt
+  （`default` 不注入）。
+- **WebUI `--project` 下所有只读路由 403**：非 chat 路由缺省回落到服务器 CWD 而不是启动
+  项目，且前端把 403 误判为「令牌失效」。现统一回落到 `app.state.project_root`；
+  SSE 401 判定仍只认 401。
+- **重启后聊天记录为空**：`_chat_dir` 仅在首次 start 时设置。`/chat/history` 现接受
+  `project_root` 并在无活跃运行时直接读该项目的 `web-chat.jsonl`。
+- **用户答复晚于其触发的引擎活动落盘**：`set_result` 先唤醒引擎、再写聊天记录，重连回放
+  永久固化错误顺序。现在解析 future 之前落盘/广播。
+- **resume/stop 后残留旧 prompt 状态**：浅合并让决策按钮继续显示（点击变成把
+  “resume” 当督促注入）且停止后仍显示「需要你的输入」。现 run-state 转出等待态即清空
+  options/question/permission，按钮按 `waiting_for === "user_select"` 门控（新增前端用例）。
+- **运行中/启动中的控制缺口**：`starting`/`pausing` 无停止按钮（后端本就支持）；现补齐。
+- **权限姿态从不显示**：`permission_mode` 上线但没渲染，`full_auto` 与 `plan` 在界面上
+  无法区分；现显示在运行卡片上，schema 默认值改回真实的 `default`。
+- **失败横幅压过当前状态**：陈旧的 `chatStatus.error` 永远不清理，控制台接管后仍显示
+  「运行失败」；现按「最近发生」排序。
+- **SSE 缺口帧没有前端消费者**；**hub 的 resume 完整性用共享 id 计数器误判**（status 帧
+  占号即误报不可续传）。现前端处理 `sse-gap` 并全量 REST 重同步，hub 以「最后一次被淘汰的
+  hub 事件 id」判定完整性。
+- **`FindingsResponse` 类型与后端漂移**（多出 `page`、缺 `returned/offset`）；**密钥列显示
+  伪造的 18 字符长度**；**检查点“恢复”对话框承诺了不存在的重新武装**。均已对齐真实契约。
+- **mypy 在 main 上红 gate**：`kernel_decision_record._refuse` 未标注 `NoReturn`，导致 10 处
+  `object` 取值错误。
+- **慢机竞态加固**：`send_message` 集成测试轮询窗口按 2.6.0 惯例 150×0.05s → 200×0.1s，
+  `_wait_for_terminal_task` 2s → 5s。
+
+### Changed
+
+- 投递语义：给已完成的 agent 发消息会**重启并重投递**；进程在写入窗口内退出且无新输出时
+  自动补投（见上）。
+- `iterate report` 在缺失报告且启用 gate 时退出码由 0 改为 2（“未测量 ≠ 通过”）。
+- 权限检查对 `bash` 命令串做路径提取与分段 deny 匹配——这是行为收紧，可能拒绝此前被放行的
+  链式危险命令。
+- 不变量失败现在会阻止 “converged” 停止；未配置/未测量不变量时行为不变。
+
+### Added
+
+- `web/roots.py`：所有只读路由共享的项目根解析（显式参数 > 启动项目 > CWD）。
+- 回归测试：投递竞态（集成流程原用例转稳）、bash 分段 deny、命令路径提取 / 敏感路径 /
+  deny 规则 / 风险区、notification matcher 生产形状、兄弟回滚新语义、空不变量 fail-closed、
+  环境变量优先级、CI 无报告 fail-closed、stall≠converged、不变量失败阻断 converged、
+  compact 路径正则、前端 stale-prompt 清理。
 
 ## [2.6.0] - 2026-10-15
 

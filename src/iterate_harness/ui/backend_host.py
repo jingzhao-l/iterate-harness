@@ -252,6 +252,23 @@ class ReactBackendHost:
             await self._emit(BackendEvent.tasks_snapshot(get_task_manager().list_tasks()))
             await self._emit(BackendEvent(type="line_complete"))
             return True
+        except Exception as exc:  # noqa: BLE001 - keep the interactive session alive
+            # Last line of defence: a handler/runtime bug must surface as an
+            # error row, not tear down the backend process (the TUI would go
+            # dark and the operator would lose the session).
+            log.exception("backend request failed")
+            await self._emit(
+                BackendEvent(
+                    type="transcript_item",
+                    item=TranscriptItem(
+                        role="system",
+                        text=f"Session error: {type(exc).__name__}: {exc}\nThe session is still healthy.",
+                    ),
+                )
+            )
+            await self._emit(self._status_snapshot())
+            await self._emit(BackendEvent(type="line_complete"))
+            return True
         finally:
             if self._active_request_task is task:
                 self._active_request_task = None

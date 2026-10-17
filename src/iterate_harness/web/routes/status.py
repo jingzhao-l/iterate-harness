@@ -18,7 +18,7 @@ from ...iterate.config_loader import load_effective_config
 from ...iterate.decision_log import DecisionLogEntry, read_entries
 from ...iterate.last_state import summarize_last_run
 from .._coerce import as_finite, as_float, as_int, as_list
-from ..security import allowed_roots, read_audit_entries, root_is_allowed
+from ..security import allowed_roots, read_audit_entries, root_is_allowed, default_root
 from ..schemas import StatusResponse
 
 router = APIRouter(tags=["status"])
@@ -141,7 +141,7 @@ def _report_files(project_root: Path) -> list[dict[str, Any]]:
 @router.get("/status", response_model=StatusResponse)
 def get_status(project_root: str = "") -> StatusResponse:
     """Aggregate dashboard payload for the current project."""
-    root = Path(project_root) if project_root else Path.cwd()
+    root = Path(project_root) if project_root else (default_root() or Path.cwd())
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     # ``project_root`` is caller-controlled, so containment inside the root is
@@ -175,7 +175,7 @@ def get_status(project_root: str = "") -> StatusResponse:
 @router.get("/health", response_model=dict[str, object])
 def get_health(project_root: str = "") -> dict[str, object]:
     """Lightweight liveness probe (no heavy reads)."""
-    root = Path(project_root) if project_root else Path.cwd()
+    root = Path(project_root) if project_root else (default_root() or Path.cwd())
     return {
         "status": "ok",
         "project_root": str(root.resolve()) if root.is_dir() else str(root),

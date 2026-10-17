@@ -36,6 +36,14 @@ class GlobTool(BaseTool[GlobToolInput]):
 
     async def execute(self, arguments: GlobToolInput, context: ToolExecutionContext) -> ToolResult:
         root, pattern = _resolve_glob_request(context.cwd, arguments.root, arguments.pattern)
+        if any(part == ".." for part in Path(pattern).parts):
+            # `Path.glob("../*")` walks out of the search root: a pattern must
+            # not be able to escape the directory it is resolved against (the
+            # permission layer only sees ``root``, not the resolved matches).
+            return ToolResult(
+                output=f"(error: glob pattern may not contain '..' segments: {pattern})",
+                is_error=True,
+            )
         matches = await _glob(root, pattern, limit=arguments.limit, project_root=context.cwd)
         if not matches:
             return ToolResult(output="(no matches)")

@@ -119,7 +119,8 @@ def test_load_merges_user_overrides(tmp_path: Path):
     assert resolved["ctrl+t"] == "tasks"
 
 
-def test_load_raises_on_invalid_file(tmp_path: Path):
+def test_load_falls_back_on_invalid_file(tmp_path: Path):
+    """A hand-edited keybindings.json must not crash runtime construction."""
     (tmp_path / "keybindings.json").write_text("[broken", encoding="utf-8")
-    with pytest.raises(json.JSONDecodeError):
-        load_keybindings()
+    resolved = load_keybindings()
+    assert resolved  # resolved defaults, no exception

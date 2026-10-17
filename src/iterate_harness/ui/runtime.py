@@ -141,7 +141,29 @@ class RuntimeBundle:
         extra = (self.append_system_prompt or "").strip()
         if extra:
             prompt = f"{prompt}\n\n{extra}"
+        style = self._output_style_instruction()
+        if style:
+            prompt = f"{prompt}\n\n{style}"
         return prompt
+
+    def _output_style_instruction(self) -> str:
+        """Return the selected output style as a system-prompt directive.
+
+        ``/output-style`` used to persist a name and say "set", while nothing
+        ever read the style's content: a user creating
+        ``~/.iterate-harness/output_styles/verbose.md`` and selecting it saw
+        zero change. The style text is now appended to the system prompt on
+        every rebuild (``default`` adds nothing).
+        """
+        name = (self.current_settings().output_style or "").strip()
+        if not name or name == "default":
+            return ""
+        from iterate_harness.output_styles.loader import load_output_styles
+
+        for style in load_output_styles():
+            if style.name == name and style.content.strip():
+                return f"# Output style: {style.name}\n{style.content.strip()}"
+        return ""
 
     def current_plugins(self) -> list[LoadedPlugin]:
         """Return currently visible plugins for the working tree."""
@@ -210,6 +232,7 @@ def _resolve_api_client_from_settings(settings: Settings) -> SupportsStreamingMe
     return AnthropicApiClient(
         api_key=auth.value,
         base_url=settings.base_url,
+        timeout=settings.timeout,
     )
 
 
@@ -670,10 +693,19 @@ async def handle_line(
                 # remote caller must never mutate local credentials/config.
                 await print_system(refusal_detail)
                 return True
-        result = await command.handler(
-            args,
-            command_context,
-        )
+        try:
+            result = await command.handler(
+                args,
+                command_context,
+            )
+        except Exception as exc:  # noqa: BLE001 - a bad /command must not kill the TUI
+            # Handlers raise on ordinary user error (unknown provider profile,
+            # bad task id, …). An escape here used to propagate out of the
+            # backend request loop (which only catches cancellation) and kill
+            # the whole interactive session — one typo ended the process.
+            log.exception("slash command %r failed", parsed[0])
+            await print_system(f"Command failed: {type(exc).__name__}: {exc}")
+            return True
         if result.refresh_runtime:
             refresh_runtime_client(bundle)
         await _render_command_result(result, print_system, clear_output, render_event)
@@ -781,7 +813,7 @@ async def handle_line(
     except Exception:
         log.exception("snapshot save failed (session continues)")
     sync_app_state(bundle)
-    if failure is not None:
+    if failure is not None and propagate_errors:
         raise failure
     return True
 

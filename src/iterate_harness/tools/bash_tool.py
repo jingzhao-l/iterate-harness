@@ -180,11 +180,21 @@ def _signal_process(process: asyncio.subprocess.Process, sig: int) -> None:
 async def _read_remaining_output(process: asyncio.subprocess.Process) -> bytearray:
     output_buffer = bytearray()
     if process.stdout is not None:
+        # ONE deadline for the whole drain, not a per-read timeout: a
+        # backgrounded grandchild that inherited stdout can trickle bytes
+        # forever after the direct shell exited, and the old per-read timeout
+        # restarted on every chunk — the tool could hang for hours after its
+        # own timeout had fired.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _READ_REMAINING_OUTPUT_BUDGET_SECONDS
         try:
             while len(output_buffer) < _BASH_OUTPUT_MAX_BYTES:
+                remaining_budget = deadline - loop.time()
+                if remaining_budget <= 0:
+                    break
                 remaining = await asyncio.wait_for(
                     process.stdout.read(_BASH_OUTPUT_MAX_BYTES),
-                    timeout=_READ_REMAINING_OUTPUT_TIMEOUT_SECONDS,
+                    timeout=min(_READ_REMAINING_OUTPUT_TIMEOUT_SECONDS, remaining_budget),
                 )
                 if not remaining:
                     break
@@ -192,6 +202,12 @@ async def _read_remaining_output(process: asyncio.subprocess.Process) -> bytearr
         except asyncio.TimeoutError:
             pass
     return output_buffer
+
+
+#: Total time allowed for draining already-buffered output after the shell
+#: exited. Buffered data arrives immediately; this only needs to cover a slow
+#: consumer, not an open-ended stream from a daemonized grandchild.
+_READ_REMAINING_OUTPUT_BUDGET_SECONDS = 2.0
 
 
 #: How long to keep retrying to capture partial output when a read window comes

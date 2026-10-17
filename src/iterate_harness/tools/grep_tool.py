@@ -48,6 +48,29 @@ class GrepTool(BaseTool[GrepToolInput]):
 
     async def execute(self, arguments: GrepToolInput, context: ToolExecutionContext) -> ToolResult:
         root = _resolve_path(context.cwd, arguments.root) if arguments.root else context.cwd
+        if any(part == ".." for part in Path(arguments.file_glob).parts):
+            # The Python fallback feeds ``file_glob`` straight to
+            # ``root.glob(...)``; a ``..`` segment would read files outside the
+            # validated search root (the permission layer only sees ``root``).
+            return ToolResult(
+                output=f"(error: file_glob may not contain '..' segments: {arguments.file_glob})",
+                is_error=True,
+            )
+        from iterate_harness.sandbox.session import is_docker_sandbox_active
+
+        if is_docker_sandbox_active():
+            # Same execution-time boundary as glob/file tools: every read must
+            # stay inside the workspace the sandbox was opened for. Grep
+            # previously skipped this check and could read host files that
+            # `glob` would refuse.
+            from iterate_harness.sandbox.path_validator import validate_sandbox_path
+
+            allowed, reason = validate_sandbox_path(root, context.cwd)
+            if not allowed:
+                return ToolResult(
+                    output=f"(error: search root '{root}' is outside the sandbox boundary: {reason})",
+                    is_error=True,
+                )
         if not root.exists():
             # Say so instead of reporting "(no matches)": a typo'd root must
             # never look like "the code isn't there", and the rg path would

@@ -236,7 +236,10 @@ class ChatRunStatus(BaseModel):
     #: manager but never surfaced, so an operator could not tell that a run they
     #: launched from the WebUI was in ``full_auto`` — i.e. that the auxiliary
     #: channel had silently granted the loop write access without asking.
-    permission_mode: str = "full_auto"
+    #: Default matches the run manager's real default (``"default"``); claiming
+    #: ``full_auto`` for a status built without an explicit value would mislabel
+    #: a run that actually asks before every mutation.
+    permission_mode: str = "default"
     #: Set when *another* process (typically the console) holds this project's
     #: run lease. The WebUI used to report ``idle`` in that case and offer to
     #: start a competing loop; this tells the operator who actually owns it.

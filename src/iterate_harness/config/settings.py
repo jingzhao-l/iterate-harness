@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -64,8 +65,9 @@ class PermissionSettings(BaseModel):
     denied_tools: list[str] = Field(default_factory=list)
     path_rules: list[PathRuleConfig] = Field(default_factory=list)
     denied_commands: list[str] = Field(default_factory=list)
-    # Exact-match (after trim) command allowlist evaluated BEFORE
-    # denied_commands; only bash-like tools carry a command payload.
+    # Exact-match (after trim) command allowlist evaluated AFTER
+    # denied_commands (a deny pattern is a hard boundary and always wins);
+    # only bash-like tools carry a command payload.
     allowed_commands: list[str] = Field(default_factory=list)
 
 
@@ -569,6 +571,11 @@ class Settings(BaseModel):
     # avoid persisting a secret that only ever came from the environment.
     _env_api_key: str = PrivateAttr(default="")
     _file_api_key: str | None = PrivateAttr(default=None)
+    #: Flat fields explicitly overridden by the environment. ``materialize_
+    #: active_profile`` must not overwrite these from the profile: the profile
+    #: layer used to undo ``ITERATE_BASE_URL`` / ``ITERATE_API_FORMAT`` /
+    #: ``ITERATE_PROVIDER`` a few lines after they were applied.
+    _env_overridden: set[str] = PrivateAttr(default_factory=set)
 
     def merged_profiles(self) -> dict[str, ProviderProfile]:
         """Return the saved profiles merged over the built-in catalog."""
@@ -601,23 +608,27 @@ class Settings(BaseModel):
         """Project the active profile back onto legacy flat settings fields."""
         profile_name, profile = self.resolve_profile()
         configured_model = (profile.last_model or "").strip() or profile.default_model
-        return self.model_copy(
-            update={
-                "active_profile": profile_name,
-                "profiles": self.merged_profiles(),
-                "provider": profile.provider,
-                "api_format": profile.api_format,
-                "base_url": profile.base_url,
-                "context_window_tokens": profile.context_window_tokens,
-                "auto_compact_threshold_tokens": profile.auto_compact_threshold_tokens,
-                "model": resolve_model_setting(
-                    configured_model,
-                    profile.provider,
-                    default_model=profile.default_model,
-                    permission_mode=self.permission.mode.value,
-                ),
-            }
-        )
+        updates: dict[str, Any] = {
+            "active_profile": profile_name,
+            "profiles": self.merged_profiles(),
+            "provider": profile.provider,
+            "api_format": profile.api_format,
+            "base_url": profile.base_url,
+            "context_window_tokens": profile.context_window_tokens,
+            "auto_compact_threshold_tokens": profile.auto_compact_threshold_tokens,
+            "model": resolve_model_setting(
+                configured_model,
+                profile.provider,
+                default_model=profile.default_model,
+                permission_mode=self.permission.mode.value,
+            ),
+        }
+        # Environment wins over the profile (that is the documented precedence):
+        # keep the flat field the environment stamped instead of projecting the
+        # profile's value over it.
+        for key in self._env_overridden:
+            updates.pop(key, None)
+        return self.model_copy(update=updates)
 
     def sync_active_profile_from_flat_fields(self) -> Settings:
         """Fold legacy flat provider fields back into the active profile.
@@ -746,6 +757,7 @@ class Settings(BaseModel):
         env_var = {
             "anthropic_api_key": "ANTHROPIC_API_KEY",
             "openai_api_key": "OPENAI_API_KEY",
+            "gemini_api_key": "GEMINI_API_KEY",
             "deepseek_api_key": "DEEPSEEK_API_KEY",
             "dashscope_api_key": "DASHSCOPE_API_KEY",
             "moonshot_api_key": "MOONSHOT_API_KEY",
@@ -986,12 +998,32 @@ def _apply_env_overrides(settings: Settings) -> Settings:
         result = settings.model_copy(update=updates)
     result._env_api_key = api_key or ""
     result._file_api_key = file_api_key
+    result._env_overridden = set(settings._env_overridden) | set(updates)
     return result
 
 
 def _parse_bool_env(value: str) -> bool:
     """Parse a boolean environment override."""
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _quarantine_invalid_settings(config_path: Path, exc: Exception) -> None:
+    """Preserve an unparseable settings file before falling back to defaults.
+
+    Falling back to defaults without a copy was silent data loss: the next
+    ``save_settings`` (e.g. ``ih auth login``) rewrote the file with defaults,
+    permanently erasing the user's profiles/hooks/iterate config. A timestamped
+    sibling keeps the original recoverable.
+    """
+    log.warning("Invalid settings in %s: %s — using defaults", config_path, exc)
+    try:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = config_path.with_name(f"{config_path.name}.invalid-{stamp}")
+        if not backup.exists():
+            backup.write_bytes(config_path.read_bytes())
+            log.warning("Invalid settings preserved at %s", backup)
+    except OSError as backup_exc:  # pragma: no cover - best-effort preservation
+        log.warning("Could not preserve invalid settings file %s: %s", config_path, backup_exc)
 
 
 def load_settings(config_path: Path | None = None) -> Settings:
@@ -1016,10 +1048,12 @@ def load_settings(config_path: Path | None = None) -> Settings:
             # ``ValidationError`` subclasses ValueError, so it must be caught
             # first: a syntactically valid file with the wrong value types
             # used to escape this handler and crash the CLI on startup.
-            log.warning("Invalid settings in %s: %s — using defaults", config_path, exc)
+            _quarantine_invalid_settings(config_path, exc)
             return _apply_env_overrides(Settings().materialize_active_profile())
-        except (json.JSONDecodeError, ValueError, TypeError) as exc:
-            log.warning("Invalid settings in %s: %s — using defaults", config_path, exc)
+        except (json.JSONDecodeError, ValueError, TypeError, OSError, UnicodeDecodeError) as exc:
+            # OSError/UnicodeDecodeError included: an unreadable or non-UTF-8
+            # file must degrade like a malformed one instead of crashing.
+            _quarantine_invalid_settings(config_path, exc)
             return _apply_env_overrides(Settings().materialize_active_profile())
         if "profiles" not in raw or "active_profile" not in raw:
             profile_name, profile = _profile_from_flat_settings(settings)

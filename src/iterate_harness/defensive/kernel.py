@@ -103,8 +103,19 @@ class DefensiveKernel:
             raw_override.get("invariants"), dict
         )
         invariants = effective.config.invariants
-        if invariants is not None and (invariants.commands or invariants.ensure):
-            self._commands = dict(invariants.commands)
+        # A module entry with an empty command list is not a check: treating
+        # ``{"core": []}`` as "configured" made every edit pass a guard that
+        # measured nothing. Filter empties first, so a placeholder config
+        # degrades to the explicit-empty rule below instead of a false pass.
+        resolved_commands: dict[str, list[str]] = {}
+        if invariants is not None:
+            resolved_commands = {
+                module: list(commands)
+                for module, commands in invariants.commands.items()
+                if commands
+            }
+        if invariants is not None and (resolved_commands or invariants.ensure):
+            self._commands = resolved_commands
             self._ensure = list(invariants.ensure)
             self._configured_invariants = True
         elif invariants is not None and has_invariants:
@@ -205,9 +216,23 @@ class DefensiveKernel:
             self.commit(path)
             return None
         report = await self.check_invariants()
-        if report.passed:
+        if report.passed and report.checks_run > 0:
             self.commit(path)
             return None
+        if report.checks_run == 0:
+            # Configured but zero checks actually ran: a green light from
+            # nothing measured is not a pass, and committing here would let
+            # every edit through under an empty/placeholder invariant set.
+            restored = self.rollback(path)
+            reason = (
+                f"[defensive] invariant configuration produced zero runnable checks "
+                f"after {tool_name} on {path}; an unmeasured guard cannot pass — "
+                "the edit was rolled back"
+            )
+            if restored:
+                reason += f" (rolled back {len(restored)} pending edit(s))"
+            log.warning("defensive invariant guard ran zero checks: %s", reason)
+            return reason
         restored = self.rollback(path)
         violations = "; ".join(
             f"{v.kind}:{v.label} ({v.detail})" for v in report.violations[:4]

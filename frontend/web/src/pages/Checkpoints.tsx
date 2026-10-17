@@ -158,8 +158,8 @@ export default function Checkpoints(): React.JSX.Element {
           <section className="panel">
             <h2>操作</h2>
             <p className="muted" style={{ marginTop: 0 }}>
-              恢复会将检查点重新武装以供 <code>/iterate resume</code> 使用；清除会丢弃中断的
-              检查点。两者均写入审计日志。
+              「恢复」只重新确认当前检查点并写入审计日志（供下一次 <code>/iterate resume</code>
+              参考），不会修改检查点文件；「清除」会丢弃中断的检查点。两者均写入审计日志。
             </p>
             <div style={{ display: "flex", gap: 10 }}>
               <button

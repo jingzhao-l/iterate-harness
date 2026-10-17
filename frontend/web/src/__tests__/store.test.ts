@@ -57,6 +57,30 @@ describe("applyRunStateEvent", () => {
     expect(applyRunStateEvent({ message: "hi" })).toEqual({ message: "hi" });
     expect(applyRunStateEvent({})).toEqual({});
   });
+
+  it("clears stale prompt state when no longer waiting (resume/stop frames)", () => {
+    // The backend's resume frame is just {state: "running", waitingFor: "none"}.
+    // A shallow merge used to leave the old options/permission on screen, so
+    // the decision buttons stayed live and sent a bare nudge instead of an
+    // answer, and a stopped run kept a permanent "需要你的输入" badge.
+    const resumed = applyRunStateEvent({ state: "running", waitingFor: "none" });
+    expect(resumed.question).toBeNull();
+    expect(resumed.options).toBeNull();
+    expect(resumed.permission).toBeNull();
+
+    const stopped = applyRunStateEvent({ state: "stopped", message: "已停止" });
+    expect(stopped.question).toBeNull();
+    expect(stopped.options).toBeNull();
+    expect(stopped.permission).toBeNull();
+
+    // An explicit prompt in the same frame still wins.
+    const prompt = applyRunStateEvent({
+      state: "paused",
+      waitingFor: "user_select",
+      options: [{ value: "ok", label: "继续" }],
+    });
+    expect(prompt.options).toEqual([{ value: "ok", label: "继续" }]);
+  });
 });
 
 describe("applyProgressEvent", () => {

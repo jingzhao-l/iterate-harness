@@ -635,3 +635,17 @@ def test_should_autocompact_uses_custom_context_window():
         AutoCompactState(),
         context_window_tokens=4000,
     ) is True
+
+
+def test_extract_attachment_paths_keeps_letters_after_n() -> None:
+    from iterate_harness.engine.messages import ConversationMessage, TextBlock
+    from iterate_harness.services.compact import _extract_attachment_paths
+
+    message = ConversationMessage.from_user_text(
+        "[attachment: screens/hits.png] path: src/main.py\n"
+        "path: notes/a.png\n"
+    )
+    found = _extract_attachment_paths([message])
+    assert "src/main.py" in found
+    assert "notes/a.png" in found
+    assert "screens/hits.png" in found

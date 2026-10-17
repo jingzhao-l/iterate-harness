@@ -1017,3 +1017,22 @@ class TestInvalidSettingsFile:
 
         assert loaded.max_tokens == Settings().max_tokens
         assert any("Invalid settings" in record.getMessage() for record in caplog.records)
+
+
+def test_env_provider_overrides_survive_profile_materialization(tmp_path: Path, monkeypatch) -> None:
+    """Environment beats the profile, and materializing must not undo it.
+
+    ``ITERATE_BASE_URL`` / ``ITERATE_API_FORMAT`` / ``ITERATE_PROVIDER`` used to
+    be stamped on the flat fields and then overwritten a few lines later when
+    the active profile was projected back — a self-hosted/ollama setup silently
+    built an Anthropic client with the profile's base URL.
+    """
+    monkeypatch.setenv("ITERATE_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("ITERATE_API_FORMAT", "openai")
+    monkeypatch.setenv("ITERATE_PROVIDER", "ollama")
+
+    loaded = load_settings(tmp_path / "settings.json").materialize_active_profile()
+
+    assert loaded.base_url == "http://localhost:11434/v1"
+    assert loaded.api_format == "openai"
+    assert loaded.provider == "ollama"

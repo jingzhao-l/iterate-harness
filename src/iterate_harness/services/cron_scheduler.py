@@ -258,6 +258,43 @@ def stop_scheduler() -> bool:
 # Job execution
 # ---------------------------------------------------------------------------
 
+#: Upper bound on buffered job output. The history entry keeps only the last
+#: 2000 characters, so a job that dumps a huge build log must be drained (to
+#: avoid back-pressure) but not accumulated: reading the whole thing into
+#: memory is how one chatty job OOMs the scheduler.
+_MAX_JOB_OUTPUT_BYTES = 256 * 1024
+
+
+def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+    """SIGKILL a job's whole process group (fallback: the direct child)."""
+    pid = process.pid
+    if pid is not None:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    try:
+        process.kill()
+    except (ProcessLookupError, OSError):
+        pass
+
+
+async def _read_bounded(
+    stream: asyncio.StreamReader | None, cap: int
+) -> bytes:
+    """Drain ``stream`` to EOF, keeping at most ``cap`` bytes."""
+    if stream is None:
+        return b""
+    buffer = bytearray()
+    while True:
+        chunk = await stream.read(8192)
+        if not chunk:
+            return bytes(buffer)
+        if len(buffer) < cap:
+            buffer.extend(chunk[: cap - len(buffer)])
+
+
 async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
     """Run a single cron job and return a history entry."""
     name = job["name"]
@@ -267,21 +304,49 @@ async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
 
     logger.info("Executing cron job %r: %s", name, command)
     timeout = _job_timeout(job)
+    process: asyncio.subprocess.Process | None = None
+    stdout = stderr = b""
+    stdout_task: asyncio.Task[bytes] | None = None
+    stderr_task: asyncio.Task[bytes] | None = None
     try:
         process = await create_shell_subprocess(
             command,
             cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # Own process group: a timeout or shutdown must kill the job's
+            # whole tree (npm/node children, watchers), not just the shell.
+            start_new_session=True,
         )
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=timeout,
-        )
+        # Bounded readers instead of ``communicate()``: drain both pipes to
+        # avoid back-pressure, keep at most ``_MAX_JOB_OUTPUT_BYTES`` in RAM.
+        stdout_task = asyncio.create_task(_read_bounded(process.stdout, _MAX_JOB_OUTPUT_BYTES))
+        stderr_task = asyncio.create_task(_read_bounded(process.stderr, _MAX_JOB_OUTPUT_BYTES))
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            _kill_process_group(process)
+            for reader in (stdout_task, stderr_task):
+                if reader is not None and not reader.done():
+                    reader.cancel()
+            raise
+        stdout = await stdout_task
+        stderr = await stderr_task
+    except asyncio.CancelledError:
+        # Scheduler shutdown cancelled this job: never leave its children
+        # running unattended (the module docstring promises reaping).
+        if process is not None and process.returncode is None:
+            _kill_process_group(process)
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+        raise
     except asyncio.TimeoutError:
         try:
-            process.kill()
-            await process.wait()
+            if process is not None and process.returncode is None:
+                _kill_process_group(process)
+                await process.wait()
         except Exception as exc:  # noqa: BLE001 - best-effort process cleanup
             logger.debug("Could not kill timed-out job process %r: %s", name, exc)
         entry = {

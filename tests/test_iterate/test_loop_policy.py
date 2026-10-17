@@ -526,6 +526,42 @@ class TestStallPause:
         )
         assert decision.stop_reason is not None
         assert "0 new findings" in decision.stop_reason
+        # Stalling is not convergence: the reviewer never claimed it, and the
+        # report/CI consumers read the reason string as success.
+        assert not decision.stop_reason.startswith("converged")
+
+    def test_failed_invariant_gate_blocks_converged(self):
+        policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=0)
+        decision = policy.on_turn_end(
+            {
+                ITERATE_STATE_KEY: state(
+                    rounds_seen=3,
+                    findings_by_round=[2, 1, 0],
+                    converged=True,
+                    invariant_state="fail",
+                )
+            },
+            UsageSnapshot(),
+            "m",
+        )
+        assert decision.stop_reason is not None
+        assert decision.stop_reason != "converged"
+        assert "invariant" in decision.stop_reason
+
+    def test_unmeasured_invariant_state_still_allows_converged(self):
+        policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=0)
+        decision = policy.on_turn_end(
+            {
+                ITERATE_STATE_KEY: state(
+                    rounds_seen=3,
+                    findings_by_round=[2, 1, 0],
+                    converged=True,
+                )
+            },
+            UsageSnapshot(),
+            "m",
+        )
+        assert decision.stop_reason == "converged"
 
     def test_stall_pause_preserves_queued_nudge(self):
         policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=1)

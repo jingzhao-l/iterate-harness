@@ -58,6 +58,28 @@ def git_diff_numstat(project_root: str | Path) -> tuple[int, int] | None:
         return None
     added = 0
     removed = 0
+    # ``git diff HEAD`` only sees tracked changes: a fixer that creates a new
+    # module leaves it untracked, so a 500-line new file counted as 0 added
+    # lines and sailed through the atomic-scope check.
+    try:
+        untracked = subprocess.run(
+            ["git", "-C", str(project_root), "ls-files", "--others", "--exclude-standard"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        untracked = None
+    if untracked is not None and untracked.returncode == 0:
+        for line in untracked.stdout.splitlines():
+            candidate = Path(project_root) / line
+            try:
+                data = candidate.read_bytes()
+            except OSError:
+                continue
+            if b"\x00" in data[:8192]:
+                continue  # binary: contributes no line count
+            added += data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
     for line in result.stdout.splitlines():
         parts = line.split("\t")
         if len(parts) < 2:

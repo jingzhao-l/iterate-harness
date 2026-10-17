@@ -110,6 +110,24 @@ class SubprocessBackend:
                 argv = [teammate_cmd, "--task-worker"] + flags
 
         manager = get_task_manager()
+        # Reject a duplicate agent id instead of silently overwriting the
+        # routing entry: two plain `agent` calls both resolve to
+        # ``agent@default``, and the second used to orphan the first (still
+        # running, no longer addressable by send_message/shutdown).
+        previous_task_id = self._agent_tasks.get(agent_id)
+        if previous_task_id is not None:
+            previous = manager.get_task(previous_task_id)
+            if previous is not None and previous.status not in {"completed", "failed", "killed"}:
+                return SpawnResult(
+                    task_id="",
+                    agent_id=agent_id,
+                    backend_type=self.type,
+                    success=False,
+                    error=(
+                        f"agent id {agent_id!r} is already running (task {previous_task_id}); "
+                        "choose a distinct subagent_type/team or stop it first"
+                    ),
+                )
         try:
             record = await manager.create_agent_task(
                 prompt=config.prompt,

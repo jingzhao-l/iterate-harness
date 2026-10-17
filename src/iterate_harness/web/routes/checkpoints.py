@@ -18,7 +18,7 @@ from ...iterate.checkpoint import load_checkpoint
 from ...iterate.ci_report import latest_report_entry
 from ...iterate.decision_log import read_entries
 from ...iterate.last_state import summarize_last_run
-from ..security import AuditLog, allowed_roots, root_is_allowed
+from ..security import AuditLog, allowed_roots, root_is_allowed, default_root
 from .._coerce import as_int
 from ..schemas import CheckpointView, OperationResult
 
@@ -26,7 +26,7 @@ router = APIRouter(tags=["checkpoints"])
 
 
 def _resolve_project(project_root: str) -> Path:
-    root = Path(project_root) if project_root else Path.cwd()
+    root = Path(project_root) if project_root else (default_root() or Path.cwd())
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     # ``project_root`` is caller-controlled, so containment inside the root is

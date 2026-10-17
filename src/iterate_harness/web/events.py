@@ -32,7 +32,7 @@ from ..iterate.checkpoint import load_checkpoint
 from ..iterate.decision_log import read_entries
 from ._coerce import as_finite, as_float, as_int
 from .hub import hub
-from .security import allowed_roots, root_is_allowed
+from .security import allowed_roots, root_is_allowed, default_root
 
 router = APIRouter(tags=["events"])
 
@@ -45,7 +45,7 @@ _HUB_WAKEUP = 0.5
 
 
 def _resolve_project(project_root: str) -> Path:
-    root = Path(project_root) if project_root else Path.cwd()
+    root = Path(project_root) if project_root else (default_root() or Path.cwd())
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     # ``project_root`` is caller-controlled, so containment inside the root is

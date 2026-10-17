@@ -145,9 +145,11 @@ class AnthropicApiClient:
         api_key: str | None = None,
         *,
         base_url: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url
+        self._timeout = timeout
         self._client = self._create_client()
 
     def _create_client(self) -> AsyncAnthropic:
@@ -156,6 +158,11 @@ class AnthropicApiClient:
             kwargs["api_key"] = self._api_key
         if self._base_url:
             kwargs["base_url"] = self._base_url
+        if self._timeout is not None and self._timeout > 0:
+            # ``Settings.timeout`` / ``ITERATE_TIMEOUT`` were silently ignored
+            # on the default Anthropic path (only the OpenAI client got them),
+            # so a hung request blocked for the SDK default.
+            kwargs["timeout"] = self._timeout
         return AsyncAnthropic(**kwargs)
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:

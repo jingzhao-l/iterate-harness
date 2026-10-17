@@ -108,6 +108,12 @@ class ChatHub:
         #: Bounded ring of recently published events for SSE reconnect
         #: resume (``Last-Event-ID``). Trimmed on append — see :data:`_REPLAY_BUFFER`.
         self._recent: deque[HubEvent] = deque()
+        #: Highest hub-event id ever evicted from the replay ring. Resume
+        #: completeness is judged against THIS, not the oldest buffered id:
+        #: the id counter is shared with locally generated SSE frames
+        #: (status/sse-gap), so "oldest buffered - 1" falsely reported an
+        #: unresumable gap whenever a status frame had consumed an id.
+        self._last_evicted: int = 0
 
     def next_event_id(self) -> int:
         """Allocate and return the next hub-global event id.
@@ -152,13 +158,12 @@ class ChatHub:
             ),
             key=lambda event: event.id,
         )
-        oldest_buffered = (
-            min(event.id for event in self._recent) if self._recent else current + 1
-        )
-        # Ids are contiguous integers, so everything after ``event_id`` is
-        # still buffered exactly when the oldest buffered id is at most
-        # ``event_id + 1``.
-        complete = event_id >= oldest_buffered - 1
+        # Complete exactly when the client has already seen everything that was
+        # ever evicted (``_last_evicted``). Comparing against the oldest
+        # buffered id is wrong: ids are drawn from a counter shared with
+        # locally generated frames, so a status frame can push the oldest
+        # buffered id past ``last_event_id + 1`` with zero hub events lost.
+        complete = event_id >= self._last_evicted
         return missed, complete
 
     async def subscribe(self, project_root: str | None = None) -> asyncio.Queue[HubEvent]:
@@ -246,7 +251,9 @@ class ChatHub:
             # above it — and a ring above the cap makes ``resume_after``
             # report complete replays it cannot actually deliver.
             while len(self._recent) > _REPLAY_BUFFER:
-                self._recent.popleft()
+                evicted = self._recent.popleft()
+                if evicted.id > self._last_evicted:
+                    self._last_evicted = evicted.id
             subscribers = [
                 queue
                 for queue, sub in self._subscribers.items()

@@ -282,6 +282,11 @@ async def run_print_mode(
         api_format=api_format,
         enforce_max_turns=True,
         api_client=api_client,
+        # Print mode has no TTY, so the posture MUST come from the flag: without
+        # this the run stayed in DEFAULT and every mutating tool was denied by
+        # ``_deny_unattended_permission`` — including `ih iterate run`, which
+        # explicitly asks for full_auto.
+        permission_mode=permission_mode,
         permission_prompt=_deny_unattended_permission,
         ask_user_prompt=_noop_ask,
         config_path=config_path,
@@ -390,11 +395,12 @@ async def run_print_mode(
 
         async def _clear_output() -> None:
             if output_format == "text":
-                # Non-interactive terminal: emit an ANSI clear so a resumed /
-                # screen-clearing command actually clears the terminal instead
-                # of leaving stale output above the fresh transcript.
-                sys.stdout.write("\x1b[2J\x1b[H")
-                sys.stdout.flush()
+                # Only on a real terminal: print mode is routinely piped or
+                # captured by CI, and injecting escape codes into the captured
+                # artifact corrupts it. A pipe gets a no-op instead.
+                if sys.stdout.isatty():
+                    sys.stdout.write("\x1b[2J\x1b[H")
+                    sys.stdout.flush()
             elif output_format == "stream-json":
                 obj: dict[str, object] = {"type": "clear_screen"}
                 print(json.dumps(obj), flush=True)

@@ -275,11 +275,15 @@ class DockerSandboxSession:
         stdout: int | None = None,
         stderr: int | None = None,
         env: dict[str, str] | None = None,
+        start_new_session: bool = False,
     ) -> asyncio.subprocess.Process:
         """Execute a command inside the sandbox container.
 
         Returns an ``asyncio.subprocess.Process`` with the same interface as
-        ``asyncio.create_subprocess_exec``.
+        ``asyncio.create_subprocess_exec``. ``start_new_session`` puts the
+        *docker CLI client* in its own process group: a caller that times out
+        and signals the group then kills the client (closing the exec stream)
+        instead of leaking it in the harness's own group.
         """
         if not self._running:
             raise SandboxUnavailableError("Docker sandbox session is not running")
@@ -300,4 +304,5 @@ class DockerSandboxSession:
             stdin=stdin,
             stdout=stdout,
             stderr=stderr,
+            start_new_session=start_new_session,
         )

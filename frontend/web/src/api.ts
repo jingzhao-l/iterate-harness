@@ -219,11 +219,15 @@ export const api = {
       { method: "POST", body: JSON.stringify(body) },
     ),
 
-  chatStatus: (): Promise<ChatRunStatus> =>
-    request<ChatRunStatus>(`/chat/status`),
+  // Chat reads are project-scoped like every other endpoint: the run manager
+  // is a process singleton, so without the root the panel could show another
+  // project's run while the console is pointed elsewhere, and a restarted
+  // server could not read this project's persisted transcript.
+  chatStatus: (projectRoot?: string): Promise<ChatRunStatus> =>
+    request<ChatRunStatus>(`/chat/status${buildQuery(projectRoot)}`),
 
-  chatHistory: (): Promise<ChatMessage[]> =>
-    request<ChatMessage[]>(`/chat/history`),
+  chatHistory: (projectRoot?: string): Promise<ChatMessage[]> =>
+    request<ChatMessage[]>(`/chat/history${buildQuery(projectRoot)}`),
 
   chatSend: (
     content: string,

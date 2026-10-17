@@ -91,7 +91,19 @@ export default function Dashboard(): React.JSX.Element {
 
   const { budget, config } = status;
   const lastRun = status.last_run;
-  const runActive = chatStatus?.state === "running" || chatStatus?.state === "starting" || chatStatus?.state === "paused";
+  // The run manager is a process singleton, so a live run may belong to a
+  // DIFFERENT project than the one selected in the sidebar. Only treat it as
+  // "this project is running" when the roots agree; otherwise the banner says
+  // which project the panel is bound to (see below) and the start button is
+  // not disabled with a claim about *this* project that is false.
+  const panelRoot = chatStatus?.project_root || "";
+  const selectedRoot = status.project_root || "";
+  const panelOnThisProject =
+    !panelRoot || !selectedRoot || panelRoot === selectedRoot;
+  const runState = chatStatus?.state;
+  const runActive =
+    panelOnThisProject &&
+    (runState === "running" || runState === "starting" || runState === "paused");
   // Another process owns this project's loop (the console, typically). We must
   // not offer to start a competing run, and we must say who is driving rather
   // than showing a misleading "空闲".
@@ -111,19 +123,13 @@ export default function Dashboard(): React.JSX.Element {
     chatStatus?.waiting_for === "permission" ||
     chatStatus?.waiting_for === "user_select" ||
     chatStatus?.waiting_for === "user_prompt";
+  // Precedence is by RECENCY, not by severity: a stale ``error`` from a run
+  // that already ended must not mask a live driver or a run the operator just
+  // started (it is only cleared by the next start/reset, so it could
+  // otherwise read "运行失败" forever).
   let bannerLabel = "空闲 · 等待启动";
   let bannerKind = "idle";
-  if (chatStatus?.error) {
-    bannerLabel = "运行失败";
-    bannerKind = "failed";
-  } else if (driver && !runActive) {
-    bannerLabel =
-      driver.role === "console" ? "控制台迭代中" : `另一通道运行中（${driver.role}）`;
-    bannerKind = "running";
-  } else if (liveConverged) {
-    bannerLabel = "已收敛";
-    bannerKind = "converged";
-  } else if (chatState === "running" || chatState === "starting") {
+  if (chatState === "running" || chatState === "starting") {
     bannerLabel = chatState === "starting" ? "启动中" : "运行中";
     bannerKind = chatState === "starting" ? "starting" : "running";
   } else if (chatState === "paused") {
@@ -135,6 +141,16 @@ export default function Dashboard(): React.JSX.Element {
   } else if (chatState === "stopping") {
     bannerLabel = "停止中…";
     bannerKind = "stopped";
+  } else if (driver && !runActive) {
+    bannerLabel =
+      driver.role === "console" ? "控制台迭代中" : `另一通道运行中（${driver.role}）`;
+    bannerKind = "running";
+  } else if (liveConverged) {
+    bannerLabel = "已收敛";
+    bannerKind = "converged";
+  } else if (chatStatus?.error) {
+    bannerLabel = "上次运行失败";
+    bannerKind = "failed";
   } else if (chatState === "stopped") {
     bannerLabel = "已停止";
     bannerKind = "stopped";
@@ -206,6 +222,7 @@ export default function Dashboard(): React.JSX.Element {
             </button>
           )}
           {(chatState === "running" ||
+            chatState === "starting" ||
             chatState === "paused" ||
             chatState === "pausing" ||
             chatState === "stopping") && (

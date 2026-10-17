@@ -2,7 +2,17 @@
 // (design §18.4). The harness center is the run, not the conversation, so this
 // card sits above the message stream and always shows the current state.
 
-import type { ChatRunStatus, ChatRunState } from "../types";
+import type { ChatRunStatus, ChatRunState, PermissionMode } from "../types";
+
+// Human labels for the permission posture. `full_auto` writes without asking,
+// so it must be visible on the run card — the field existed on the wire but
+// was never rendered, leaving a full-auto run indistinguishable from a
+// plan/default one.
+const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
+  full_auto: "全自动（不再确认）",
+  plan: "计划（只读）",
+  default: "默认（改动前确认）",
+};
 
 // `pausing` / `stopping` are the *pending-transition* states: a pause only
 // takes effect at the next round boundary and a stop is still cancelling, so
@@ -116,6 +126,21 @@ export default function RunStatusCard({
           <span className="k">成本</span>
           <span className="v small">{formatUsd(status.cost_usd)}</span>
         </div>
+        {status.permission_mode && (
+          <div className="metric">
+            <span className="k">权限姿态</span>
+            <span
+              className={`v small${status.permission_mode === "full_auto" ? " warn" : ""}`}
+              title={
+                status.permission_mode === "full_auto"
+                  ? "本次运行会自动执行工具，不逐次请求确认"
+                  : "本次运行在需要时会请求确认"
+              }
+            >
+              {PERMISSION_MODE_LABELS[status.permission_mode] ?? status.permission_mode}
+            </span>
+          </div>
+        )}
       </div>
 
       {status.run_id && (
@@ -136,7 +161,10 @@ export default function RunStatusCard({
             继续
           </button>
         )}
-        {(status.state === "running" || status.state === "paused") && (
+        {(status.state === "running" ||
+          status.state === "starting" ||
+          status.state === "paused" ||
+          status.state === "pausing") && (
           <button className="btn danger" onClick={() => onControl("stop")} disabled={busy}>
             停止
           </button>

@@ -82,10 +82,12 @@ export interface Finding {
 
 export interface FindingsResponse {
   findings: Finding[];
-  /** Total findings on disk *before* pagination/filtering. */
+  /** Total findings matching the filters, before offset/limit are applied. */
   total: number;
-  /** Number of findings actually returned in this page (not a page number). */
-  page: number;
+  /** Number of findings actually returned in this page. */
+  returned: number;
+  /** Offset this page starts at. */
+  offset: number;
   /** True when `total` exceeds the rows returned, so rows are missing. */
   truncated: boolean;
 }

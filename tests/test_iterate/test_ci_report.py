@@ -301,11 +301,16 @@ class TestIterateReportCli:
         result = CliRunner().invoke(cli.app, ["iterate", "report", "--fail-on", "none"])
         assert result.exit_code == 0
 
-    def test_missing_report_degrades_to_empty(self, tmp_path, monkeypatch):
+    def test_missing_report_fails_closed(self, tmp_path, monkeypatch):
+        """No report + a gate is "not measured", not "passed"."""
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(cli.app, ["iterate", "report"])
-        assert result.exit_code == 0
+        assert result.exit_code == 2
         assert "No report entry" in result.output
+
+        # --fail-on none opts out of the gate: an empty log is then fine.
+        result = CliRunner().invoke(cli.app, ["iterate", "report", "--fail-on", "none"])
+        assert result.exit_code == 0
 
     def test_invalid_fail_on_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

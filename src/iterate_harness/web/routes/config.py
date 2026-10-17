@@ -22,7 +22,7 @@ from ...iterate.config_loader import (
     load_effective_config,
     validate_config,
 )
-from ..security import AuditLog, REDACTION_PREFIX, redact_mapping, allowed_roots, root_is_allowed
+from ..security import AuditLog, REDACTION_PREFIX, redact_mapping, allowed_roots, root_is_allowed, default_root
 from ..schemas import ConfigView, OperationResult
 
 router = APIRouter(tags=["config"])
@@ -106,7 +106,7 @@ def _restore_redacted(
 
 
 def _resolve_project(project_root: str) -> Path:
-    root = Path(project_root) if project_root else Path.cwd()
+    root = Path(project_root) if project_root else (default_root() or Path.cwd())
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     # ``project_root`` is caller-controlled, so containment inside the root is

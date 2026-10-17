@@ -357,7 +357,9 @@ def truncate_head_for_ptl_retry(
 def _extract_attachment_paths(messages: list[ConversationMessage]) -> list[str]:
     found: list[str] = []
     seen: set[str] = set()
-    path_pattern = re.compile(r"path:\s*([^)\\n]+)")
+    # ``[^\\n]`` inside a character class means "not backslash or n" — the
+    # old pattern truncated every path containing the letter n (`src/mai`).
+    path_pattern = re.compile(r"path:\s*([^\n)]+)")
     attachment_pattern = re.compile(r"\[attachment:\s*([^\]]+)\]")
     for message in messages:
         for block in message.content:

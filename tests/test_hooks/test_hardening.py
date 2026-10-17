@@ -129,12 +129,25 @@ def test_bounded_hook_output_short_text_untouched() -> None:
 
 def test_notification_matcher_matches_notification_type() -> None:
     hook = CommandHookDefinition(command="true", matcher="permission_prompt")
-    payload = {"event": "notification", "notification_type": "permission_prompt", "prompt": ""}
+    # The exact payload shape the engine sends for a permission prompt
+    # (engine/query.py): it carries ``tool_name``, which must not shadow the
+    # ``notification_type`` the matcher is keyed on.
+    payload = {
+        "event": "notification",
+        "notification_type": "permission_prompt",
+        "tool_name": "bash",
+        "reason": "requires confirmation",
+    }
 
     assert _matches_hook(hook, payload) is True
 
     other = {"event": "notification", "notification_type": "iterate_pause"}
     assert _matches_hook(hook, other) is False
+
+    # A tool matcher still matches on tool_name for non-notification events.
+    tool_hook = CommandHookDefinition(command="true", matcher="bash")
+    assert _matches_hook(tool_hook, {"event": "pre_tool_use", "tool_name": "bash"}) is True
+    assert _matches_hook(tool_hook, {"event": "pre_tool_use", "tool_name": "glob"}) is False
 
 
 def test_loader_warns_on_unknown_event_and_drops_it(caplog: pytest.LogCaptureFixture) -> None:

@@ -366,10 +366,16 @@ class RunManager:
                 if not future.done() and any(
                     candidate is future for candidate in self._request_registry.values()
                 ):
+                    # Persist + broadcast the answer BEFORE waking the engine:
+                    # ``set_result`` resumes the run task immediately, whose
+                    # status/tool messages would otherwise land in the
+                    # transcript (and on the SSE stream) BEFORE the human line
+                    # that triggered them — reconnect-replay would bake that
+                    # wrong order in permanently.
+                    await self._publish_chat("user", content, kind=kind)
                     future.set_result(result)
                 else:
                     raise RunManagerError("该请求已超时或已失效，请重新操作")
-            await self._publish_chat("user", content, kind=kind)
             if waiting == "permission":
                 # A permission decision is a human intervention and must be
                 # auditable — not just a chat line that scrolls away.
@@ -463,9 +469,18 @@ class RunManager:
                 )
         return self.status(driver=driver)
 
-    def history(self) -> list[dict[str, Any]]:
-        """Return the persisted human-interaction transcript (oldest first)."""
+    def history(self, project_root: str | None = None) -> list[dict[str, Any]]:
+        """Return the persisted human-interaction transcript (oldest first).
+
+        ``project_root`` lets a freshly restarted server read a project's
+        persisted transcript before any run has started in this process
+        (``_chat_dir`` is only populated by ``_reset(project_root)``). Without
+        it the panel showed "no history" for every project until the first run
+        of the process — exactly backwards from why the transcript is on disk.
+        """
         path = self._chat_path
+        if path is None and project_root:
+            path = Path(project_root) / ".iterate" / "web-chat.jsonl"
         if path is None or not path.exists():
             return []
         entries: list[dict[str, Any]] = []
@@ -827,7 +842,10 @@ class RunManager:
                 await self._publish_chat(
                     "system",
                     f"问题超时未答复（{_QUESTION_TIMEOUT:.0f}s），已按空答复继续。",
-                    kind="status",
+                    # Answering FOR the operator is an intervention, not a
+                    # benign status line: style it like the permission timeout
+                    # so it draws the eye instead of scrolling past.
+                    kind="error",
                 )
                 return ""
         finally:
@@ -893,7 +911,9 @@ class RunManager:
                         f"选择超时未答复（{_QUESTION_TIMEOUT:.0f}s），"
                         f"已按默认「{fallback}」继续。"
                     )
-                    kind = "status"
+                    # The harness answered on the operator's behalf; surface it
+                    # with the same salience as a permission timeout.
+                    kind = "error"
                 log.warning(
                     "user select %s timed out after %.0fs; applying fallback %r"
                     " (operator_paused=%s)",

@@ -794,6 +794,16 @@ async def _destroy_worktree(worktree_path: str) -> None:
         except (subprocess.SubprocessError, OSError, ValueError) as exc:
             logger.debug("git worktree remove failed for %s: %s", worktree_path, exc)
 
+    # Recursive deletion is only safe for a PROVEN linked worktree checkout
+    # (worktrees carry a `.git` FILE; a normal clone has a `.git` directory).
+    # team.json entries are mutable on-disk state: a stale or hand-edited
+    # ``worktree_path`` pointing at a real project must never be wiped.
+    if not (Path(worktree_path) / ".git").is_file():
+        logger.warning(
+            "Refusing to delete %s: not a git worktree checkout (missing .git file)",
+            worktree_path,
+        )
+        return
     try:
         shutil.rmtree(worktree_path, ignore_errors=True)
     except (OSError, ValueError) as exc:

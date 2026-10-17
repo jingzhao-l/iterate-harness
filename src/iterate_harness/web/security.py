@@ -174,6 +174,31 @@ def allowed_roots() -> frozenset[str]:
     return frozenset(_ALLOWED_ROOTS)
 
 
+#: Default project root used when a request omits ``project_root``. Set by
+#: :func:`iterate_harness.web.api.create_app` when the server is launched with
+#: ``--project``; ``None`` means "fall back to the server CWD". Module-level
+#: like :data:`_ALLOWED_ROOTS` — the WebUI is a single-user, single-pinned-root
+#: process.
+_DEFAULT_ROOT: Path | None = None
+
+
+def set_default_root(root: str | Path | None) -> None:
+    """Pin the project root used when a request omits ``project_root``."""
+    global _DEFAULT_ROOT
+    if root is None:
+        _DEFAULT_ROOT = None
+        return
+    try:
+        _DEFAULT_ROOT = Path(root).resolve()
+    except (OSError, RuntimeError):  # pragma: no cover - exotic paths
+        _DEFAULT_ROOT = None
+
+
+def default_root() -> Path | None:
+    """Return the pinned default project root (``None`` = unpinned)."""
+    return _DEFAULT_ROOT
+
+
 def root_is_allowed(root: Path) -> bool:
     """True when ``root`` may be operated on by the WebUI."""
     if not _ALLOWED_ROOTS:

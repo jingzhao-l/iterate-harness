@@ -137,7 +137,7 @@ export const useWebUi = create<WebUiState>((set, get) => ({
   refreshChatStatus: async () => {
     set({ chatLoading: true });
     try {
-      const chatStatus = await api.chatStatus();
+      const chatStatus = await api.chatStatus(get().projectRoot);
       set({ chatStatus, chatLoading: false, chatError: null });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -147,7 +147,7 @@ export const useWebUi = create<WebUiState>((set, get) => ({
 
   loadChatHistory: async () => {
     try {
-      const messages = await api.chatHistory();
+      const messages = await api.chatHistory(get().projectRoot);
       set({ chatMessages: messages });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -175,6 +175,21 @@ export function applyRunStateEvent(payload: RunStateEvent): Partial<ChatRunStatu
     };
   }
   if (payload.message !== undefined) patch.message = payload.message;
+
+  // Stale-prompt guard: resume/terminal frames only carry state/waitingFor/
+  // message, and the store patch is a shallow merge. Leaving the previous
+  // prompt fields in place kept decision buttons on screen after the loop
+  // resumed (clicking one sent a bare "resume" nudge instead of an answer)
+  // and a permanent "需要你的输入" badge on a stopped run.
+  const notWaiting =
+    payload.waitingFor === "none" ||
+    payload.state === "stopped" ||
+    payload.state === "idle";
+  if (notWaiting) {
+    if (payload.question === undefined) patch.question = null;
+    if (payload.options === undefined) patch.options = null;
+    if (payload.tool === undefined && payload.reason === undefined) patch.permission = null;
+  }
   return patch;
 }
 
@@ -413,6 +428,16 @@ export function subscribeToStatus(projectRoot: string): () => void {
           .getState()
           .patchChatStatus(applyProgressEvent(payload as ProgressUpdateEvent));
       }
+    });
+    // Explicit gap notice: the hub evicted events while this client was away,
+    // so the live stream has a hole. Resync every surface from REST and say
+    // so, instead of rendering a silently incomplete stream.
+    source.addEventListener("sse-gap", () => {
+      void useWebUi.getState().loadChatHistory();
+      void useWebUi.getState().refreshChatStatus();
+      void useWebUi.getState().refreshStatus();
+      useWebUi.getState().bumpLogRevision();
+      useWebUi.getState().pushToast("error", "实时事件流出现缺口，已从服务器重新同步状态。");
     });
     source.onopen = (): void => {
       if (closed) return;

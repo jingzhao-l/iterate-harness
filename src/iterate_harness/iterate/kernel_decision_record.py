@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, NoReturn
 
 #: The refusal codes the TypeScript side emits, verbatim. A refusal whose code differs per
 #: language cannot be reported by a shell that serves both ecosystems.
@@ -70,7 +70,7 @@ class KernelDecisionTranscribeError(ValueError):
         self.remedy = remedy
 
 
-def _refuse(code: str, message: str, remedy: str) -> None:
+def _refuse(code: str, message: str, remedy: str) -> NoReturn:
     raise KernelDecisionTranscribeError(code, message, remedy)
 
 

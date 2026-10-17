@@ -233,7 +233,11 @@ def _load_creds_file() -> dict[str, dict[str, str]]:
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as exc:
+        # UnicodeDecodeError is a ValueError, not an OSError/JSONDecodeError:
+        # one corrupt byte in a hand-edited/truncated file used to crash every
+        # auth resolution (startup, /auth status, web config page) instead of
+        # degrading to "no credentials".
         log.warning("Failed to read credentials file: %s", exc)
         return {}
     if not isinstance(raw, dict):

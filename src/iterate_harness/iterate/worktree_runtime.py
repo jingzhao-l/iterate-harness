@@ -165,7 +165,7 @@ async def resume_if_needed(context: object) -> None:
     context.cwd = session.worktree_path  # type: ignore[attr-defined]
 
 
-async def finalize(context: object, *, merged: bool) -> None:
+async def finalize(context: object, *, merged: bool) -> bool:
     """Finish an isolated fix session.
 
     - ``merged=True`` (normal stop): commit the fix batch on the isolated
@@ -175,11 +175,14 @@ async def finalize(context: object, *, merged: bool) -> None:
       merging — the deterministic "失败即弃" path.
 
     Always restores ``context.cwd`` to the main checkout and clears the
-    metadata entry. Never raises (failures are logged).
+    metadata entry. Never raises, but returns whether the requested
+    finalization (commit+merge when ``merged``) actually succeeded: the caller
+    must mark the run failed when a merge is lost, instead of reporting a
+    converged run whose fixes were dropped with the worktree.
     """
     session = active_session(context)
     if session is None:
-        return
+        return True
     try:
         if session.worktree_path.exists():
             # Round-2+ checkpoint / decision-log state was written INSIDE the
@@ -196,8 +199,13 @@ async def finalize(context: object, *, merged: bool) -> None:
                 )
             _sync_project_state(session.worktree_path, session.repo_path)
         await worktree_flow.exit_session(session, merged=merged)
+        return True
     except Exception as exc:  # noqa: BLE001 - finalize must never crash the engine
-        log.warning("iterate worktree finalize failed: %s", exc)
+        # A failed merge means the fixes exist only in a worktree that
+        # ``exit_session`` is about to remove: the caller MUST treat this as a
+        # failed run, not as a normal stop.
+        log.error("iterate worktree finalize failed (fixes may be lost): %s", exc)
+        return False
     finally:
         context.cwd = session.repo_path  # type: ignore[attr-defined]
         tool_metadata = getattr(context, "tool_metadata", None)

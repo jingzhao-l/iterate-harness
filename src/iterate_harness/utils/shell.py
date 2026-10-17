@@ -112,6 +112,7 @@ async def create_shell_subprocess(
                 stdout=stdout,
                 stderr=stderr,
                 env=dict(env) if env is not None else None,
+                start_new_session=start_new_session,
             )
         if resolved_settings.sandbox.fail_if_unavailable:
             from iterate_harness.sandbox import SandboxUnavailableError

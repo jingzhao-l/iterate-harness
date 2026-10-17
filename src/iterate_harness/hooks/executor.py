@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shlex
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -135,6 +136,11 @@ class HookExecutor:
                     "ITERATE_HOOK_EVENT": event.value,
                     "ITERATE_HOOK_PAYLOAD": json.dumps(payload),
                 },
+                # Own process group: a timeout/cancellation must kill the whole
+                # tree, not just the shell. Otherwise a hook that spawned a
+                # watcher/dev server (or `cmd wrapper -- long-running`) keeps
+                # running after the hook was reported dead.
+                start_new_session=True,
             )
         except SandboxUnavailableError as exc:
             return HookResult(
@@ -162,7 +168,7 @@ class HookExecutor:
                 timeout=hook.timeout_seconds,
             )
         except asyncio.TimeoutError:
-            process.kill()
+            _kill_hook_process_tree(process)
             await process.wait()
             return HookResult(
                 hook_type=hook.type,
@@ -170,6 +176,15 @@ class HookExecutor:
                 blocked=hook.block_on_failure,
                 reason=f"command hook timed out after {hook.timeout_seconds}s",
             )
+        except asyncio.CancelledError:
+            # The enclosing query was cancelled (Esc) while the hook ran. The
+            # subprocess (and its group) must not outlive the cancellation.
+            _kill_hook_process_tree(process)
+            try:
+                await process.wait()
+            except asyncio.CancelledError:
+                pass
+            raise
 
         output = "\n".join(
             part for part in (
@@ -290,22 +305,48 @@ class HookExecutor:
         )
 
 
+def _kill_hook_process_tree(process: asyncio.subprocess.Process) -> None:
+    """SIGKILL a hook's whole process group, falling back to the direct child.
+
+    Hooks spawn with ``start_new_session=True``, so the hook shell leads its own
+    process group and ``killpg`` reaches every descendant. If the group is
+    already gone (or the platform refuses), kill the direct child instead.
+    """
+    pid = process.pid
+    if pid is not None:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    try:
+        process.kill()
+    except (ProcessLookupError, OSError):
+        pass
+
+
 def _matches_hook(hook: HookDefinition, payload: dict[str, Any]) -> bool:
     matcher = getattr(hook, "matcher", None)
     if not matcher:
         return True
-    # The matcher subject is the first of: tool name (tool events), prompt
-    # text (prompt events), event name, then — for notifications — the
-    # notification_type (``permission_prompt`` / ``iterate_pause``). Without
-    # the last fallback a matcher of "permission_prompt" could never match,
-    # because the subject resolved to the literal "notification".
-    subject = str(
-        payload.get("tool_name")
-        or payload.get("prompt")
-        or payload.get("notification_type")
-        or payload.get("event")
-        or ""
-    )
+    event = str(payload.get("event") or "")
+    if event == HookEvent.NOTIFICATION.value:
+        # Notifications are identified by their ``notification_type``
+        # (``permission_prompt`` / ``iterate_pause``). ``tool_name`` must NOT
+        # shadow it: the permission-prompt notification carries ``tool_name``
+        # (e.g. "bash"), and a matcher of "permission_prompt" would otherwise
+        # never match — the exact gap the last fallback was written to close.
+        subject = str(payload.get("notification_type") or event or "")
+    else:
+        # Tool events match on tool name, prompt events on prompt text; the
+        # event name is the final fallback for everything else.
+        subject = str(
+            payload.get("tool_name")
+            or payload.get("prompt")
+            or payload.get("notification_type")
+            or event
+            or ""
+        )
     return fnmatch.fnmatch(subject, matcher)
 
 

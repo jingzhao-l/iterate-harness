@@ -705,13 +705,28 @@ class TestTyperDefaultNormalization:
         assert cli._typer_optional_str("x") == "x"
 
     def test_iterate_report_direct_call_with_untouched_defaults(self, tmp_path, monkeypatch):
-        """Calling iterate_report() with no arguments must behave like the CLI
-        (OptionInfo placeholders normalized) instead of crashing on
-        ``fail_on.strip()`` or treating truthy OptionInfo flags as set."""
+        """Calling iterate_report() with no arguments must behave like the CLI.
+
+        ``OptionInfo`` placeholders are normalized instead of crashing on
+        ``fail_on.strip()``. With no report on disk and the default gate
+        (``high``) the command now fails closed (exit 2): "no report" is not
+        "passed" for a CI gate."""
         monkeypatch.chdir(tmp_path)
         with pytest.raises(typer.Exit) as exc_info:
             cli.iterate_report()
-        assert exc_info.value.exit_code == 0
+        assert exc_info.value.exit_code == 2
+
+    def test_iterate_report_with_gate_and_no_report_fails_closed(self, tmp_path, monkeypatch):
+        """A missing report is "not measured" — CI must not go green.
+
+        Previously the command printed a stderr warning and exited 0 even with
+        ``--fail-on high``, so a review that crashed before writing its report
+        produced a passing check.
+        """
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(typer.Exit) as exc_info:
+            cli.iterate_report(fail_on="high")
+        assert exc_info.value.exit_code == 2
 
     def test_iterate_log_direct_call_with_defaults(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

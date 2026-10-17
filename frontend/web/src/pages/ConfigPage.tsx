@@ -17,11 +17,13 @@ function renderValue(value: unknown): string {
 }
 
 // Redacted presentation for provider credentials (backend field: api_key).
-// Never reveals the key body; only reports its length so the operator can
-// tell a filled field from an empty one at a glance.
+// Never reveals the key body. The backend replaces the value with a fixed
+// `<redacted:redacted>` marker, so the string's length here says nothing
+// about the real key — do not print a "character count" that would read as a
+// measurement.
 function renderSecret(value: unknown): string {
   if (typeof value !== "string" || value.length === 0) return "—";
-  return `••••••••（${value.length} 字符，已脱敏）`;
+  return "••••••••（已脱敏）";
 }
 
 export default function ConfigPage(): React.JSX.Element {

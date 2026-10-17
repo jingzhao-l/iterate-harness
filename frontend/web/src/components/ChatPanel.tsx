@@ -48,18 +48,29 @@ export default function ChatPanel(): React.JSX.Element {
   const setChatSending = useWebUi((state) => state.setChatSending);
   const refreshChatStatus = useWebUi((state) => state.refreshChatStatus);
   const loadChatHistory = useWebUi((state) => state.loadChatHistory);
+  const selectedRoot = useWebUi((state) => state.projectRoot);
 
-  // Auto-open when a decision is pending.
+  // The run manager is a process singleton, so the live status (and any
+  // pending prompt) may belong to a DIFFERENT project than the one selected
+  // in the sidebar. Never badge, auto-open, or answer another project's
+  // prompt from this panel — the backend would apply the answer to a run the
+  // operator is not looking at.
+  const panelOnThisProject =
+    !chatStatus?.project_root || !selectedRoot || chatStatus.project_root === selectedRoot;
+  const pendingHere =
+    panelOnThisProject &&
+    !!chatStatus &&
+    (chatStatus.waiting_for === "permission" ||
+      chatStatus.waiting_for === "user_select" ||
+      chatStatus.waiting_for === "user_prompt");
+  const boundTo = !panelOnThisProject ? chatStatus?.project_root || "" : "";
+
+  // Auto-open when a decision is pending for THIS project.
   useEffect(() => {
-    if (
-      chatStatus &&
-      (chatStatus.waiting_for === "permission" ||
-        chatStatus.waiting_for === "user_select" ||
-        chatStatus.waiting_for === "user_prompt")
-    ) {
+    if (pendingHere) {
       setOpen(true);
     }
-  }, [chatStatus?.waiting_for]);
+  }, [pendingHere]);
 
   // Load history once on mount.
   useEffect(() => {
@@ -165,13 +176,16 @@ export default function ChatPanel(): React.JSX.Element {
       .finally(() => setChatSending(false));
   };
 
-  const hasPending =
-    chatStatus &&
-    (chatStatus.waiting_for === "permission" ||
-      chatStatus.waiting_for === "user_select" ||
-      chatStatus.waiting_for === "user_prompt");
+  const hasPending = pendingHere;
 
-  const decisionOption = chatStatus?.options ?? null;
+  // Only render the quick-action buttons while the backend is actually
+  // waiting on a select menu. A shallow store patch could leave stale options
+  // behind after resume/stop, and clicking one then sent the literal option
+  // value as a *nudge* into the running loop.
+  const decisionOption =
+    panelOnThisProject && chatStatus?.waiting_for === "user_select"
+      ? (chatStatus.options ?? null)
+      : null;
 
   // Fold old messages so a long session never renders hundreds of bubbles.
   const visibleMessages = chatMessages.slice(-MAX_VISIBLE_MESSAGES);
@@ -225,6 +239,12 @@ export default function ChatPanel(): React.JSX.Element {
           </div>
 
           <div className="chat-body">
+            {boundTo && (
+              <p className="muted run-note" role="status">
+                面板正绑定项目 <span className="mono">{boundTo}</span>
+                ，与当前侧栏选择的项目不同；切换侧栏后请刷新运行状态。
+              </p>
+            )}
             <RunStatusCard
               status={chatStatus}
               loading={chatLoading}
@@ -264,7 +284,7 @@ export default function ChatPanel(): React.JSX.Element {
             )}
 
             {/* Permission quick buttons */}
-            {chatStatus?.waiting_for === "permission" && (
+            {panelOnThisProject && chatStatus?.waiting_for === "permission" && (
               <div className="decision-actions">
                 <button
                   className="btn primary"

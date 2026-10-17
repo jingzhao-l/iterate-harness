@@ -29,7 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from . import routes as route_modules
 from . import events as events_module
 from .run_manager import RunManagerError
-from .security import allowed_roots, set_allowed_roots
+from .security import allowed_roots, set_allowed_roots, set_default_root
 from iterate_harness import __version__
 
 log = logging.getLogger(__name__)
@@ -142,6 +142,10 @@ def create_app(
     # embedding/test mode where every request names its own root, so it stays
     # unpinned; ``serve()`` always passes the concrete root.
     set_allowed_roots([resolved_root] if resolved_root else None)
+    # Requests that omit ``project_root`` resolve to the launch project, never
+    # to the server's CWD: ``--project /x`` does not chdir, so CWD may be an
+    # unrelated directory (and is usually not in the pinned root set → 403).
+    set_default_root(resolved_root or None)
     app.state.allowed_roots = sorted(allowed_roots())
     # Empty string means "authentication disabled"; serve() always sets it.
     app.state.webui_token = token or ""

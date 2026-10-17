@@ -6,7 +6,9 @@ import asyncio
 import contextlib
 import difflib
 import logging
+import os
 import re
+import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +60,10 @@ from iterate_harness.tools.base import ToolResult
 AUTO_COMPACT_STATUS_MESSAGE = "Auto-compacting conversation memory to keep things fast and focused."
 REACTIVE_COMPACT_STATUS_MESSAGE = "Prompt too long; compacting conversation memory and retrying."
 MAX_SAFE_COMPLETION_TOKENS = 128_000
+
+#: How many times a blocking STOP hook may veto a stop in one run before the
+#: stop is honored regardless (loop-safety bound).
+_MAX_STOP_HOOK_BLOCKS = 3
 
 log = logging.getLogger(__name__)
 
@@ -912,6 +918,7 @@ async def run_query(
             raise
 
     turn_count = 0
+    stop_hook_blocks = 0
     # Restore an active worktree-isolation session from durable tool
     # metadata (design §11.3.2 finding #7): lets ``continue_pending`` keep
     # writing fixes inside the same isolated workspace across submit
@@ -1058,18 +1065,36 @@ async def run_query(
         yield AssistantTurnComplete(message=final_message, usage=usage), usage
 
         if not final_message.tool_uses:
-            # No tool calls: nothing more to append, so restore the coordinator
-            # context as the trailing message before returning.
-            if coordinator_context_message is not None:
-                messages.append(coordinator_context_message)
+            # No tool calls: the model considers the task done. A blocking
+            # STOP hook may veto that and hand back a reason to keep working;
+            # every other blocking event honors ``blocked`` and STOP must too.
+            # Bounded so a hook that blocks unconditionally cannot spin the
+            # loop forever.
+            stop_result = None
             if context.hook_executor is not None:
-                await context.hook_executor.execute(
+                stop_result = await context.hook_executor.execute(
                     HookEvent.STOP,
                     {
                         "event": HookEvent.STOP.value,
                         "stop_reason": "tool_uses_empty",
                     },
                 )
+            if (
+                stop_result is not None
+                and stop_result.blocked
+                and stop_hook_blocks < _MAX_STOP_HOOK_BLOCKS
+            ):
+                stop_hook_blocks += 1
+                reason = stop_result.reason or "stop hook blocked the stop"
+                log.info("STOP hook blocked the stop (attempt %d): %s", stop_hook_blocks, reason)
+                messages.append(
+                    ConversationMessage.from_user_text(f"[stop hook] {reason}")
+                )
+                continue
+            # Nothing more to append, so restore the coordinator context as the
+            # trailing message before returning.
+            if coordinator_context_message is not None:
+                messages.append(coordinator_context_message)
             return
 
         tool_calls = final_message.tool_uses
@@ -1288,7 +1313,19 @@ async def run_query(
                 # fix batch and merge it back into the main checkout.
                 from iterate_harness.iterate import worktree_runtime
 
-                await worktree_runtime.finalize(context, merged=True)
+                merged_ok = await worktree_runtime.finalize(context, merged=True)
+                if not merged_ok:
+                    # The fix batch never reached the main checkout. Reporting a
+                    # normal "converged" stop here made CI green while every
+                    # fix was discarded with the worktree.
+                    yield StatusEvent(
+                        message=(
+                            "iterate loop FAILED: the isolated worktree could not be "
+                            "merged back; the fixes were not applied to the main "
+                            "checkout. Inspect the worktree branch/log and re-run."
+                        )
+                    ), None
+                    return
                 hint = ""
                 try:
                     from iterate_harness.iterate.checkpoint import load_checkpoint
@@ -1360,6 +1397,7 @@ async def _execute_tool_call(
     # directory-scoped roots such as `glob`/`grep`.
     _file_path = _resolve_permission_file_path(context.cwd, tool_input, parsed_input)
     _command = _extract_permission_command(tool_input, parsed_input)
+    _command_paths = _extract_command_paths(_command, context.cwd) if _command else None
     _is_read_only = tool.is_read_only(parsed_input)
     # Mutating write payloads feed the iterate forbidden_fix_patterns
     # regex boundary; read-only tools never carry a write payload.
@@ -1371,6 +1409,7 @@ async def _execute_tool_call(
         is_read_only=_is_read_only,
         file_path=_file_path,
         command=_command,
+        command_paths=_command_paths,
         content=_content,
         # Session-scoped permission override (enter_plan_mode/exit_plan_mode
         # tools record ``session_permission_mode`` in tool metadata, which the
@@ -1522,6 +1561,26 @@ async def _execute_tool_call(
             except Exception:  # noqa: BLE001 - best-effort rollback on teardown
                 log.exception("defensive rollback failed during cancellation for %s", defensive_path)
             raise
+        except Exception as exc:
+            # The post-mutation invariant check itself failed (the runner could
+            # not spawn a subprocess, temp resources exhausted, …). The edit is
+            # already on disk and the snapshot is still pending; swallowing this
+            # would leave the buffer leaking and report the mutation as failed
+            # while it stayed applied. Roll back so disk matches the reported
+            # failure — the atomic-transaction guarantee is preserved.
+            log.warning(
+                "Defensive invariant check failed for %s; rolling back: %s", defensive_path, exc
+            )
+            try:
+                kernel.rollback(defensive_path)
+            except Exception:  # noqa: BLE001 - best-effort rollback
+                log.exception(
+                    "defensive rollback failed after invariant-check error for %s", defensive_path
+                )
+            defensive_failure = (
+                f"Invariant verification failed ({type(exc).__name__}: {exc}); "
+                "the edit was rolled back."
+            )
         if defensive_failure:
             # Carry the tool's own metadata into the replacement error result
             # so the failure path never silently drops bookkeeping the tool
@@ -1587,7 +1646,11 @@ def _resolve_permission_file_path(
     raw_input: dict[str, object],
     parsed_input: object,
 ) -> str | None:
-    for key in ("file_path", "path", "root"):
+    # ``pattern`` is glob's primary field (and its absolute form can point
+    # anywhere): without it the hidden-boundary checks only saw ``root``, which
+    # is usually omitted, so `glob /home/u/.ssh/*` bypassed the sensitive-path
+    # rule entirely.
+    for key in ("file_path", "path", "root", "pattern"):
         value = raw_input.get(key)
         if isinstance(value, str) and value.strip():
             path = Path(value).expanduser()
@@ -1595,7 +1658,7 @@ def _resolve_permission_file_path(
                 path = cwd / path
             return str(path.resolve())
 
-    for attr in ("file_path", "path", "root"):
+    for attr in ("file_path", "path", "root", "pattern"):
         value = getattr(parsed_input, attr, None)
         if isinstance(value, str) and value.strip():
             path = Path(value).expanduser()
@@ -1619,6 +1682,65 @@ def _extract_permission_command(
         return value
 
     return None
+
+
+def _extract_command_paths(command: str, cwd: Path) -> list[str]:
+    """Best-effort extraction of path arguments from a shell command string.
+
+    Shell tools (``bash``) carry no ``file_path`` field, so an allowlisted
+    bash tool is a potential backdoor past the hard path boundaries
+    (sensitive paths / deny rules / risk areas): ``cat ~/.ssh/id_rsa`` names
+    no path field yet touches a credential file. This derives candidate
+    absolute paths from the command's whitespace-tokenized arguments — enough
+    to catch the common spellings. It is explicitly defence-in-depth, NOT a
+    substitute for real path tracking (obfuscation such as ``$HOME``
+    concatenation or command substitution can still evade it); the mode-based
+    permission prompt remains the backstop for everything it misses.
+    """
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return []
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if not token or token.startswith("-"):
+            continue
+        if not _looks_like_path_token(token):
+            continue
+        if "://" in token:
+            continue
+        expanded = os.path.expandvars(os.path.expanduser(token))
+        if not expanded:
+            continue
+        path = Path(expanded)
+        if not path.is_absolute():
+            path = cwd / path
+        try:
+            resolved_path = str(path.resolve())
+        except OSError:
+            resolved_path = str(path)
+        if resolved_path not in seen:
+            seen.add(resolved_path)
+            resolved.append(resolved_path)
+    return resolved
+
+
+def _looks_like_path_token(token: str) -> bool:
+    """Return whether ``token`` plausibly names a filesystem path argument.
+
+    A path-looking token starts with ``~`` (tilde expansion), or contains a
+    path separator, or is a dot-relative path (``./x`` / ``../x`` / ``.ssh/``).
+    Bare words (``rm``, ``grep``), flags, and env assignments are not paths;
+    they are skipped so legitimate commands are not over-blocked.
+    """
+    if token.startswith("~") or token.startswith("/"):
+        return True
+    if "/" in token:
+        return True
+    if token.startswith(".") and len(token) > 1:
+        return True
+    return False
 
 
 # Mutating write-payload field names recognized by the permission layer.
