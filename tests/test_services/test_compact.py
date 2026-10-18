@@ -638,7 +638,7 @@ def test_should_autocompact_uses_custom_context_window():
 
 
 def test_extract_attachment_paths_keeps_letters_after_n() -> None:
-    from iterate_harness.engine.messages import ConversationMessage, TextBlock
+    from iterate_harness.engine.messages import ConversationMessage
     from iterate_harness.services.compact import _extract_attachment_paths
 
     message = ConversationMessage.from_user_text(
