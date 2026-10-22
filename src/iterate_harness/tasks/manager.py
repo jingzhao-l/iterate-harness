@@ -44,10 +44,17 @@ _MAX_TERMINAL_RECORDS = 200
 #: seconds after the real agent has finished on slow volumes / under load.
 _DELIVERY_MONITOR_SECONDS = 15.0
 
-#: Grace before snapshotting the output baseline, so output that merely lagged
-#: the write through the async copier (``_copy_output``) is not mistaken for a
-#: reply to the payload.
-_DELIVERY_BASELINE_SETTLE = 0.1
+#: How long ``_output_baseline`` polls for the async copier (``_copy_output``)
+#: to drain the pipe before a delivery baseline is snapshotted. A child that
+#: printed right before the write may still have a chunk in flight; sampling
+#: instantly would let that pre-write output look like a reply to the payload,
+#: suppressing a restart that was actually needed.
+_OUTPUT_BASELINE_SETTLE = 0.05
+
+#: Poll interval for ``_output_baseline``. A child that printed one chunk and
+#: went quiet is observed as stable after a single interval, so the write path
+#: only pays the full settle when output is genuinely continuous.
+_OUTPUT_BASELINE_POLL = 0.005
 
 
 def _terminate_signal() -> signal.Signals:
@@ -419,10 +426,26 @@ class BackgroundTaskManager:
            process exits without producing *any new output* — which is the
            signal that it never read the payload. If new output appeared, the
            payload was consumed and nothing is re-sent.
+
+        Both layers key off an output-size baseline captured **before** the
+        write. Measuring it afterwards (behind a settle delay) folds a fast
+        worker's reply into "pre-existing output", so a healthy one-shot agent
+        looked like a swallowed delivery and was restarted mid-flight —
+        duplicating finished work and flipping a terminal record back to
+        "running".
         """
         stdin = process.stdin
         if stdin is None:
             raise ValueError(f"Task {task.id} does not accept input") from None
+        # Baseline BEFORE the write: the monitor's only signal that the child
+        # consumed the payload is output that appeared *after* it. Sampling the
+        # baseline afterwards (behind a settle delay) folds a fast worker's
+        # reply into "pre-existing output", so a healthy one-shot agent looked
+        # like a swallowed delivery and was restarted mid-flight — duplicating
+        # already-finished work and flipping the record back to "running".
+        # The idle wait keeps the snapshot honest about output that merely
+        # lagged the async copier (``_copy_output``).
+        baseline = await self._output_baseline(task)
         stdin.write(payload)
         try:
             await stdin.drain()
@@ -450,13 +473,34 @@ class BackgroundTaskManager:
             await self._redeliver_after_restart(task, payload)
             return
         # Layer 2: background monitor for the slower exit.
-        await self._arm_delivery_monitor(task, process, payload)
+        await self._arm_delivery_monitor(task, process, payload, baseline)
+
+    async def _output_baseline(self, task: TaskRecord) -> int:
+        """Snapshot the output size while the async copier has gone quiet.
+
+        ``_copy_output`` copies in 4 KiB chunks, so a child that flushed right
+        before the write may still have bytes in flight. Waiting for one quiet
+        poll interval makes the snapshot reflect what the child had already
+        emitted, instead of crediting that lagging output as a reply to the
+        payload. Bounded, so a chatty child can never wedge the write path.
+        """
+        deadline = asyncio.get_running_loop().time() + _OUTPUT_BASELINE_SETTLE
+        previous = -1
+        while True:
+            size = _safe_output_size(task.output_file)
+            if size == previous:
+                return size
+            previous = size
+            if asyncio.get_running_loop().time() >= deadline:
+                return size
+            await asyncio.sleep(_OUTPUT_BASELINE_POLL)
 
     async def _arm_delivery_monitor(
         self,
         task: TaskRecord,
         process: asyncio.subprocess.Process,
         payload: bytes,
+        baseline: int,
     ) -> None:
         """Replace any prior delivery monitor for ``task`` with a fresh one.
 
@@ -467,7 +511,7 @@ class BackgroundTaskManager:
         if monitor is not None and not monitor.done():
             monitor.cancel()
         new_monitor = asyncio.create_task(
-            self._delivery_monitor(task, process, payload),
+            self._delivery_monitor(task, process, payload, baseline),
             name=f"delivery-monitor-{task.id}",
         )
         self._delivery_monitors[task.id] = new_monitor
@@ -482,6 +526,7 @@ class BackgroundTaskManager:
         task: TaskRecord,
         process: asyncio.subprocess.Process,
         payload: bytes,
+        baseline: int,
     ) -> None:
         """Resume an agent task whose exit swallowed a just-written payload.
 
@@ -492,12 +537,12 @@ class BackgroundTaskManager:
         re-delivered — a follow-up message can never evaporate. New output
         means the payload WAS read (e.g. a one-shot worker that acts and
         exits), and nothing is re-sent.
+
+        ``baseline`` is the output size captured before the write, so a fast
+        worker's reply counts as new output instead of being folded into
+        "pre-existing output" and misread as a swallowed delivery.
         """
         try:
-            # Let the async output copier settle so output that merely lagged
-            # the write does not count as a "reply" to the payload.
-            await asyncio.sleep(_DELIVERY_BASELINE_SETTLE)
-            base_size = _safe_output_size(task.output_file)
             try:
                 await asyncio.wait_for(
                     asyncio.shield(process.wait()), timeout=_DELIVERY_MONITOR_SECONDS
@@ -506,12 +551,12 @@ class BackgroundTaskManager:
                 # Still genuinely running: the payload is in the pipe and the
                 # agent will read it on its next turn.
                 return
-            if _safe_output_size(task.output_file) > base_size:
+            if _safe_output_size(task.output_file) > baseline:
                 # The process produced output after the write — it consumed
                 # the payload and then exited on its own. Nothing to resume.
                 return
-            if base_size == 0:
-                # No output existed at write time, so this is NOT the
+            if baseline == 0:
+                # No output existed before the write, so this is NOT the
                 # dying-agent case (which has already printed its last line).
                 # A silent worker that runs and then exits must never be
                 # resurrected: that would restart completed work forever.

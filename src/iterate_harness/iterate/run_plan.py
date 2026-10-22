@@ -27,7 +27,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from .decision_log import LOG_DIR
+
 RUN_PLAN_SCHEMA_VERSION = "iterate.run-plan/0.1"
+
+#: The one home of the plan file. ``LOG_DIR`` is reused rather than restated: the ledger
+#: and the plan live in the same ``.iterate`` directory this harness owns, and a second
+#: ``".iterate"`` literal here would be a second opinion about where that directory is.
+RUN_PLAN_FILENAME = "run-plan.json"
 
 #: Same limits as the kernel's dimension contract. Restated as *numbers* rather
 #: imported from YAML, because the contract's owner is the kernel and the fixture
@@ -297,3 +304,20 @@ def label_within_limit(label: str) -> str:
             "shorten the label",
         )
     return label
+
+
+def plan_path(project_root: str | Path) -> Path:
+    """Resolve the run-plan file path, creating the directory if needed.
+
+    The single home of the plan the other harness reads through ``GLASSPANE_RUN_PLAN``,
+    mirroring ``decision_log.log_path`` in spirit and in its one subtlety: a directory
+    this function creates is chmod'd to ``0700`` explicitly, because ``mkdir``'s mode
+    argument is masked by the process umask, and an existing directory keeps whatever
+    mode its first writer (possibly the ledger) gave it.
+    """
+    directory = Path(project_root) / LOG_DIR
+    fresh = not directory.exists()
+    directory.mkdir(parents=True, exist_ok=True)
+    if fresh:
+        os.chmod(directory, 0o700)
+    return directory / RUN_PLAN_FILENAME

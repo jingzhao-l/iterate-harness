@@ -29,10 +29,25 @@ from iterate_harness.engine.messages import (
 )
 from iterate_harness.engine.stream_events import CompactProgressEvent
 from iterate_harness.hooks import HookEvent, HookExecutor
+from iterate_harness.iterate.config_loader import load_effective_config
+from iterate_harness.iterate.dimension_ledger import (
+    operation_dimension_map,
+    project_dimension_context,
+)
+from iterate_harness.iterate.invariant_report import OPERATION_ID_PATTERN
 from iterate_harness.services.tool_outputs import is_microcompactable_tool_result
 from iterate_harness.services.token_estimation import estimate_tokens
 
 log = logging.getLogger(__name__)
+
+#: The ledger's operation ids reach a tool result as free text inside its payload, so the
+#: anchored pattern the invariant report owns has to be searched rather than matched. The
+#: search form is *that* pattern with its anchors replaced by word boundaries: the grammar
+#: stays the imported one, and a boundary is what keeps a 27-character run from yielding a
+#: shorter accidental hit.
+_OPERATION_ID_SEARCH = re.compile(
+    r"\b" + OPERATION_ID_PATTERN.pattern.lstrip("^").rstrip("$") + r"\b"
+)
 
 # ---------------------------------------------------------------------------
 # Constants (from Claude Code microCompact.ts / autoCompact.ts)
@@ -722,7 +737,20 @@ def create_iterate_review_attachment_if_needed(
     rounds = iterate_state.get("rounds_seen", 0)
     total = iterate_state.get("total_findings", 0)
     converged = bool(iterate_state.get("converged", False))
-    lines.append(f"- mode={mode} rounds={rounds} totalFindings={total} converged={converged}")
+    # Named as the reviewer's claim, and shown next to the gates the loop actually measured: since
+    # the convergence decision moved to the kernel, a report can claim convergence while the loop
+    # keeps running (no invariant verdict, no evidence attestation). Telling the model a bare
+    # "converged=True" there would be relaying a verdict the harness does not believe.
+    gates = [
+        f"{key}={iterate_state[key]}"
+        for key in ("invariant_state", "evidence_complete")
+        if key in iterate_state
+    ]
+    lines.append(
+        f"- mode={mode} rounds={rounds} totalFindings={total} "
+        f"reviewerClaimedConverged={converged}"
+        + (" " + " ".join(gates) if gates else " gates=none-measured")
+    )
     by_round = iterate_state.get("findings_by_round")
     if isinstance(by_round, list) and by_round:
         lines.append(f"- findingsByRound={by_round}")
@@ -730,6 +758,13 @@ def create_iterate_review_attachment_if_needed(
     if isinstance(by_dim, dict) and by_dim:
         dim_summary = ", ".join(f"{k}={v}" for k, v in sorted(by_dim.items()))
         lines.append(f"- byDimension: {dim_summary}")
+    # The kernel's verdict, alongside — not replacing — the reviewer's private counts:
+    # byDimension says what findings came out of, this says which PLANNED dimensions were
+    # never verified at all. Absent means nobody measured; printing an invented "0/0"
+    # would tell the compacted model a fact the harness does not have.
+    coverage = iterate_state.get("dimension_coverage")
+    if isinstance(coverage, str) and coverage.strip():
+        lines.append(f"- dimensionCoverage: {coverage}")
     return _create_attachment(
         "iterate_review",
         "Iterate review state",
@@ -815,8 +850,21 @@ def _build_passthrough_compaction_result(
 # Microcompact — clear old tool results to reduce tokens cheaply
 # ---------------------------------------------------------------------------
 
-def _collect_compactable_tool_ids(messages: list[ConversationMessage]) -> list[str]:
-    """Walk messages and collect tool_use IDs whose results are compactable."""
+def _collect_compactable_tool_ids(
+    messages: list[ConversationMessage],
+    *,
+    project_root: str | Path | None = None,
+) -> list[str]:
+    """Tool_use IDs whose results are compactable, oldest first.
+
+    With no *project_root* this is the age order it has always produced. Given one, the same
+    set is *reordered* by the kernel's ``dimensionContext`` verdict over that project's
+    ledger: results whose text names an operation attributed to a verified dimension move
+    toward the front (the end the clearer works from), results naming an unverified
+    dimension move toward the back, and everything unattributed keeps its exact position.
+    Nothing is added or removed — the budget downstream still clears the same number of
+    blocks, it just gets to choose them in the order the kernel implies.
+    """
     ordered_ids: list[str] = []
     tool_names: dict[str, str] = {}
     result_content: dict[str, str] = {}
@@ -827,7 +875,7 @@ def _collect_compactable_tool_ids(messages: list[ConversationMessage]) -> list[s
                 tool_names[block.id] = block.name
             elif isinstance(block, ToolResultBlock):
                 result_content[block.tool_use_id] = block.content
-    return [
+    candidates = [
         tool_id
         for tool_id in ordered_ids
         if tool_names.get(tool_id, "") in COMPACTABLE_TOOLS
@@ -836,23 +884,129 @@ def _collect_compactable_tool_ids(messages: list[ConversationMessage]) -> list[s
             result_content.get(tool_id, ""),
         )
     ]
+    if project_root is None:
+        return candidates
+    attribution = _dimension_attribution(candidates, result_content, project_root)
+    if not attribution:
+        return candidates
+    return _order_by_dimension_verdict(candidates, attribution)
+
+
+def _fallback_dimensions(project_root: str | Path) -> list[str]:
+    """The configured dimensions, used only when no run plan was ever published.
+
+    Same rule the coverage line states: the published plan is the contract, and the
+    effective config is the fallback for a run that reviewed without planning. A compaction
+    that cannot read either gets an empty list, which makes the verdict unmeasurable and the
+    order unchanged — clearing on a guess is the failure mode this whole seam avoids.
+    """
+    try:
+        return [str(item) for item in load_effective_config(project_root).config.dimensions]
+    except Exception:  # noqa: BLE001 - compaction must not fail over an unreadable config
+        return []
+
+
+def _dimension_attribution(
+    candidates: list[str],
+    result_content: dict[str, str],
+    project_root: str | Path,
+) -> dict[str, str]:
+    """Candidate tool_use ids → ``"verified"`` / ``"unverified"``, attributed ids only.
+
+    A block is attributed when its own result text names an operation id the ledger
+    attributes to a dimension; whether that dimension is *verified* is the kernel's answer
+    from ``dimension_context``, never a count compared here. Blocks that come back
+    unattributed are simply absent from the result — absence reads as absence, and the
+    caller keeps their position rather than treating a missing attribution as a licence to
+    move them.
+
+    An empty dict means "nothing here can order anything": no ledger, no plan, no
+    attributed operation, or a verdict that could not be built. Every one of those falls
+    back to today's age order.
+    """
+    try:
+        operations = operation_dimension_map(project_root)
+    except Exception:  # noqa: BLE001 - ordering is an optimisation, not a reason to skip compaction
+        return {}
+    if not operations:
+        return {}
+    context = project_dimension_context(project_root, fallback=_fallback_dimensions(project_root))
+    if context is None:
+        return {}
+    # Only a planned entry the kernel calls ``verified`` counts as verified. The kernel's own
+    # rule 1 (one recorded decision verifies a planned dimension) means an attributed block
+    # whose dimension was planned is verified by construction, so the only non-verified
+    # attribution that can reach here is an id the plan never declared -- and that is exactly
+    # the history that must not go: the run checked something it did not say it would, which
+    # is a fact to report, not evidence that its results are spent.
+    statuses = {entry.id: entry.status for entry in context.planned}
+    attributed: dict[str, str] = {}
+    for tool_id in candidates:
+        text = result_content.get(tool_id, "")
+        if not text or text == TIME_BASED_MC_CLEARED_MESSAGE:
+            continue
+        dimensions = {
+            operations[operation]
+            for operation in _OPERATION_ID_SEARCH.findall(text)
+            if operation in operations
+        }
+        if not dimensions:
+            continue
+        # A block naming operations of more than one dimension belongs to the least-verified
+        # one named: clearing is irreversible, so an open claim outranks a closed one rather
+        # than the block being allowed to carry another dimension's evidence out with it.
+        attributed[tool_id] = (
+            "verified"
+            if all(statuses.get(dimension) == "verified" for dimension in dimensions)
+            else "unverified"
+        )
+    return attributed
+
+
+def _order_by_dimension_verdict(
+    candidates: list[str], attribution: dict[str, str]
+) -> list[str]:
+    """Reorder the age list so verified-dimension results clear first, unverified last.
+
+    The rule, stated so it can be tested: a block with no attribution keeps the exact index
+    it holds today. The indices the attributed blocks vacate are refilled in ascending age
+    order with the verified blocks first, then the unverified ones. So the cleared set (the
+    front of the list, since ``keep_recent`` protects the tail) is the same size and same
+    age-ordered shape as before — only which blocks land in it changes.
+
+    Membership and length are preserved by construction: the refilled slots are exactly the
+    ones the moved blocks left, and ``moving`` is exactly the blocks that left them.
+    """
+    moving = [tool_id for tool_id in candidates if attribution.get(tool_id) == "verified"]
+    moving += [tool_id for tool_id in candidates if attribution.get(tool_id) == "unverified"]
+    free_slots = [index for index, tool_id in enumerate(candidates) if tool_id in attribution]
+    ordered = list(candidates)
+    for slot, tool_id in zip(free_slots, moving):
+        ordered[slot] = tool_id
+    return ordered
 
 
 def microcompact_messages(
     messages: list[ConversationMessage],
     *,
     keep_recent: int = DEFAULT_KEEP_RECENT,
+    project_root: str | Path | None = None,
 ) -> tuple[list[ConversationMessage], int]:
     """Clear old compactable tool results, keeping the most recent *keep_recent*.
 
     This is the cheap first pass — no LLM call required. Tool result content
     is replaced with :data:`TIME_BASED_MC_CLEARED_MESSAGE`.
 
+    *project_root* is the project whose ledger orders the candidates (see
+    :func:`_collect_compactable_tool_ids`). It changes which results are cleared first, not
+    how many: ``keep_recent`` keeps exactly its current meaning, and leaving it ``None``
+    reproduces the age order this function has always used.
+
     Returns:
         (messages, tokens_saved) — messages are mutated in place for efficiency.
     """
     keep_recent = max(1, keep_recent)  # never clear ALL results
-    all_ids = _collect_compactable_tool_ids(messages)
+    all_ids = _collect_compactable_tool_ids(messages, project_root=project_root)
 
     if len(all_ids) <= keep_recent:
         return messages, 0
@@ -1139,6 +1293,7 @@ async def compact_conversation(
     emit_hooks_start: bool = True,
     hook_executor: HookExecutor | None = None,
     carryover_metadata: dict[str, Any] | None = None,
+    project_root: str | Path | None = None,
 ) -> CompactionResult:
     """Compact messages by calling the LLM to produce a summary.
 
@@ -1155,6 +1310,9 @@ async def compact_conversation(
         preserve_recent: Number of recent messages to keep verbatim.
         custom_instructions: Optional extra instructions for the summary prompt.
         suppress_follow_up: If True, instruct the model not to ask follow-ups.
+        project_root: Optional project whose ledger orders the microcompact candidates.
+            ``None`` keeps the age order — the caller that does not know the project does
+            not get a different clearing order for reasons it cannot see.
 
     Returns:
         Structured compaction result that can be rebuilt into post-compact messages.
@@ -1170,7 +1328,9 @@ async def compact_conversation(
         )
 
     # Step 1: microcompact to reduce tokens cheaply
-    messages, tokens_freed = microcompact_messages(messages, keep_recent=DEFAULT_KEEP_RECENT)
+    messages, tokens_freed = microcompact_messages(
+        messages, keep_recent=DEFAULT_KEEP_RECENT, project_root=project_root
+    )
 
     pre_compact_tokens = estimate_message_tokens(messages)
     log.info("Compacting conversation: %d messages, ~%d tokens", len(messages), pre_compact_tokens)
@@ -1503,10 +1663,14 @@ async def auto_compact_if_needed(
     carryover_metadata: dict[str, Any] | None = None,
     context_window_tokens: int | None = None,
     auto_compact_threshold_tokens: int | None = None,
+    project_root: str | Path | None = None,
 ) -> tuple[list[ConversationMessage], bool]:
     """Check if auto-compact should fire, and if so, compact.
 
     Call this at the start of each query loop turn.
+
+    *project_root* is passed down to microcompact so the kernel's dimension verdict can
+    order the clearing; ``None`` (the default) leaves the order exactly as it was.
 
     Returns:
         (messages, was_compacted) — if compacted, messages is the new list.
@@ -1531,7 +1695,7 @@ async def auto_compact_if_needed(
     )
 
     # Try microcompact first — may be enough
-    messages, tokens_freed = microcompact_messages(messages)
+    messages, tokens_freed = microcompact_messages(messages, project_root=project_root)
     _record_compact_checkpoint(
         carryover_metadata,
         checkpoint="query_microcompact_end",
@@ -1644,6 +1808,7 @@ async def auto_compact_if_needed(
             progress_callback=progress_callback,
             hook_executor=hook_executor,
             carryover_metadata=carryover_metadata,
+            project_root=project_root,
         )
         state.compacted = True
         state.turn_counter += 1

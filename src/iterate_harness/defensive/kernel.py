@@ -37,6 +37,14 @@ from iterate_harness.defensive.invariants import (
 )
 from iterate_harness.defensive.transaction import FileTransactionBuffer
 from iterate_harness.iterate.config_loader import EffectiveConfig
+from iterate_harness.iterate.decision_log import (
+    # A decision that cannot enter the ledger is a refusal with a code and a remedy, not an
+    # ``OSError``: since the write side became canonical, an unverifiable history or an
+    # interleaved legacy line stops the append instead of being written over. These best-effort
+    # boundaries must name that class too, or a declared assumption would break the edit loop
+    # it exists to inform.
+    DECISION_LOG_REFUSALS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +92,33 @@ class DefensiveKernel:
     def last_report(self) -> InvariantReport | None:
         """Return the most recent invariant run (None before the first check)."""
         return self._last_report
+
+    @property
+    def last_invariant_report(self) -> InvariantReport | None:
+        """The same run, under the name the loop's sanctioned reader asks for.
+
+        ``iterate/invariant_state.read_invariant_state`` reads exactly this attribute out of the
+        kernel it finds in tool metadata; without it the invariant gate could never be measured
+        on a real kernel instance (only on a stub), and a verdict the loop cannot read is a
+        verdict that cannot trigger anything downstream.
+        """
+        return self._last_report
+
+    @property
+    def invariant_ensure(self) -> list[str]:
+        """The file assertions this kernel runs, in configured order.
+
+        Published because a re-verification request cites its report by digest, and the digest
+        is a claim about *every* configured check: only the runner that executed them can say
+        which ones those were. Guessing them from the config at the call site would re-resolve
+        the fallback rule and digest a report that is not the one that ran.
+        """
+        return list(self._ensure)
+
+    @property
+    def invariant_commands(self) -> dict[str, list[str]]:
+        """The per-module invariant commands this kernel runs (same reason as above)."""
+        return {module: list(commands) for module, commands in self._commands.items()}
 
     @property
     def invariants_configured(self) -> bool:
@@ -158,8 +193,8 @@ class DefensiveKernel:
             return
         try:
             record_assumption(self._project_root, statement, status, detail)
-        except OSError as exc:
-            log.warning("defensive assumption record failed: %s", exc)
+        except (OSError, *DECISION_LOG_REFUSALS) as exc:
+            log.warning("defensive assumption record failed: %s (%s)", exc, getattr(exc, "code", "OSError"))
 
     def record_assumption_checked(self, statement: str, holds: bool, detail: str = "") -> None:
         """Record the verification result of a declared assumption."""
@@ -167,8 +202,8 @@ class DefensiveKernel:
             return
         try:
             record_assumption_checked(self._project_root, statement, holds, detail)
-        except OSError as exc:
-            log.warning("defensive assumption record failed: %s", exc)
+        except (OSError, *DECISION_LOG_REFUSALS) as exc:
+            log.warning("defensive assumption record failed: %s (%s)", exc, getattr(exc, "code", "OSError"))
 
     async def check_invariants(self) -> InvariantReport:
         """Run the project invariants (never blocks the event loop)."""

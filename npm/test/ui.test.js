@@ -58,35 +58,86 @@ test("CancelledError is exported and is an Error", () => {
   assert.equal(err.message, "skipped");
 });
 
-test("interactiveSession reports a boolean", () => {
-  assert.equal(typeof interactiveSession(), "boolean");
+test("interactiveSession reports true only when both stdin and stderr are TTYs", () => {
+  // Not a tautology: the function is `Boolean(stdin.isTTY && stderr.isTTY)`,
+  // so the interesting claim is the AND — one side being a TTY is not enough.
+  assert.equal(interactiveSession({ stdin: { isTTY: true }, stderr: { isTTY: false } }), false,
+    "stdin TTY alone must not count");
+  assert.equal(interactiveSession({ stdin: { isTTY: true }, stderr: { isTTY: true } }), true,
+    "both TTYs means interactive");
+  assert.equal(interactiveSession({ stdin: { isTTY: false }, stderr: { isTTY: true } }), false,
+    "one side gone stops being interactive");
+  assert.equal(interactiveSession({ stdin: {}, stderr: {} }), false,
+    "undefined isTTY counts as not a TTY");
 });
 
-test("askYesNo resolves the default on EOF (unattended stdin)", async () => {
+test("askYesNo resolves NO on EOF when the prompt states No as default", async () => {
+  // The prompt renders "[y/N]" for defaultNo=true, so an EOF'd stdin must
+  // answer No. Resolving `defaultNo` verbatim inverted this: it displayed
+  // "[y/N]" while auto-confirming an unattended download.
   const input = new PassThrough();
   const output = new PassThrough();
   const promise = ui.askYesNo("Install?", true, { input, output, timeoutMs: 0 });
   input.end();
+  assert.equal(await promise, false);
+});
+
+test("askYesNo resolves YES on EOF when the prompt states Yes as default", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const promise = ui.askYesNo("Continue?", false, { input, output, timeoutMs: 0 });
+  input.end();
   assert.equal(await promise, true);
 });
 
-test("askYesNo resolves the default on timeout", async () => {
+test("askYesNo resolves the stated default on timeout", async () => {
   const input = new PassThrough();
   const output = new PassThrough();
-  const value = await ui.askYesNo("Install?", false, {
+  const value = await ui.askYesNo("Install?", true, {
     input,
     output,
     timeoutMs: 20,
   });
   assert.equal(value, false);
+  input.destroy();
+});
+
+test("askYesNo reports which default it fell back to", async () => {
+  const input = new PassThrough();
+  const chunks = [];
+  const output = new PassThrough({
+    write(chunk, _enc, cb) {
+      chunks.push(String(chunk));
+      cb();
+    },
+  });
+  await ui.askYesNo("Install?", true, { input, output, timeoutMs: 20 });
+  input.destroy();
+  assert.match(chunks.join(""), /no response after \ds; using default \(no\)/);
+});
+
+test("askYesNo resolves the stated default on an unrecognised reply", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const promise = ui.askYesNo("Install?", true, { input, output, timeoutMs: 1000 });
+  input.write("maybe\n");
+  assert.equal(await promise, false);
 });
 
 test("askYesNo parses an explicit yes", async () => {
   const input = new PassThrough();
   const output = new PassThrough();
-  const promise = ui.askYesNo("Install?", false, { input, output, timeoutMs: 1000 });
+  const promise = ui.askYesNo("Install?", true, { input, output, timeoutMs: 1000 });
   input.write("y\n");
   assert.equal(await promise, true);
+});
+
+test("askYesNo parses an explicit no", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const promise = ui.askYesNo("Install?", false, { input, output, timeoutMs: 1000 });
+  input.write("n\n");
+  assert.equal(await promise, false);
 });
 
 test("DEFAULT_PROMPT_TIMEOUT_MS is a positive number", () => {

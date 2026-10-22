@@ -6,6 +6,7 @@ import logging
 
 from iterate_harness.engine.messages import ConversationMessage
 from iterate_harness.personalization.extractor import (
+    _collect_message_text,
     extract_facts_from_text,
     facts_to_rules_markdown,
 )
@@ -30,18 +31,10 @@ def update_rules_from_session(messages: list[ConversationMessage]) -> int:
     Returns:
         Number of new facts found and persisted.
     """
-    # Collect all text from messages
-    all_text = []
-    for msg in messages:
-        for block in msg.content:
-            text = getattr(block, "text", None) or getattr(block, "content", None) or ""
-            if isinstance(text, str) and text:
-                all_text.append(text)
-
-    if not all_text:
+    combined = _collect_message_text(messages)
+    if not combined:
         return 0
 
-    combined = "\n".join(all_text)
     new_facts = extract_facts_from_text(combined)
     if not new_facts:
         return 0

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from iterate_harness.iterate.decision_log import read_entries
 from iterate_harness.tools.base import ToolExecutionContext
 from iterate_harness.tools.iterate_tools import (
     IterateAssumptionInput,
@@ -54,8 +55,11 @@ async def test_record_holds_and_falsified(tmp_path: Path) -> None:
     assert json.loads(holds.output)["status"] == "holds"
     assert json.loads(falsified.output)["status"] == "falsified"
     content = log_content(tmp_path)
-    assert '"status": "holds"' in content
-    assert '"status": "falsified"' in content
+    # Canonical JSON, not `json.dumps` defaults: the ledger hashes the stored bytes, so a
+    # space after the colon would make the line on disk differ from the line that was hashed.
+    assert '"status":"holds"' in content
+    assert '"status":"falsified"' in content
+    assert [entry.data.get("status") for entry in read_entries(tmp_path)] == ["holds", "falsified"]
 
 
 @pytest.mark.asyncio

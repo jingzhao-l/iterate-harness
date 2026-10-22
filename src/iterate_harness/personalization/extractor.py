@@ -30,8 +30,11 @@ _FACT_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("env_var", "Environment variable", re.compile(
         r"export\s+([A-Z][A-Z0-9_]+)(?:=\S+)?"
     )),
+    # Repository path after the host. The trailing segment deliberately allows
+    # no dots: otherwise a greedy match swallows the ``.git`` suffix and the
+    # captured value becomes ``owner/repo.git``.
     ("git_remote", "Git remote", re.compile(
-        r"(?:github|gitlab)\.com[:/](\S+?)(?:\.git)?"
+        r"(?:github|gitlab)\.com[:/]((?:[\w-]+(?:\.[\w-]+)*/)+[\w-]+)"
     )),
     ("ray_cluster", "Ray cluster", re.compile(
         r"ray\s+(?:start|init|submit)\b.*?(--address\s+\S+|\d+\.\d+\.\d+\.\d+:\d+)",
@@ -79,23 +82,51 @@ def extract_local_rules(session_messages: list[dict[str, object]]) -> list[dict[
     """Extract environment facts from a list of session messages.
 
     Args:
-        session_messages: List of message dicts with 'role' and 'content' keys.
+        session_messages: Message history. Either dicts with a ``content`` key
+            (the on-the-wire shape) or objects exposing ``.content`` as a list
+            of blocks (``ConversationMessage``). ``content`` may itself be a
+            plain string or a list of block dicts carrying a ``text`` key.
 
     Returns:
         List of fact dicts with key, type, label, value, confidence.
     """
+    return extract_facts_from_text(_collect_message_text(session_messages))
+
+
+def _collect_message_text(session_messages: object) -> str:
+    """Flatten a conversation into one text blob, tolerating malformed entries.
+
+    A persisted history is read back from disk, so a truncated or hand-edited
+    record must not take down the extractor: non-dict entries, non-block items,
+    and blocks whose text field is not a string are skipped instead of raising.
+
+    Accepts both the wire shape (``{"content": ...}`` dicts) and in-memory
+    ``ConversationMessage`` objects, and reads either a block's ``text`` or
+    ``content`` field, so the session hook and the public helper share one
+    collector instead of drifting apart.
+    """
+    if not isinstance(session_messages, list):
+        return ""
+
     all_text: list[str] = []
     for msg in session_messages:
-        content = msg.get("content", "")
+        if isinstance(msg, dict):
+            content = msg.get("content", "")
+        else:
+            content = getattr(msg, "content", None)
+
         if isinstance(content, str):
             all_text.append(content)
         elif isinstance(content, list):
             for block in content:
-                if isinstance(block, dict) and "text" in block:
-                    all_text.append(block["text"])
+                if isinstance(block, dict):
+                    text = block.get("text") or block.get("content")
+                else:
+                    text = getattr(block, "text", None) or getattr(block, "content", None)
+                if isinstance(text, str) and text:
+                    all_text.append(text)
 
-    combined = "\n".join(all_text)
-    return extract_facts_from_text(combined)
+    return "\n".join(all_text)
 
 
 def facts_to_rules_markdown(facts: list[dict[str, object]]) -> str:

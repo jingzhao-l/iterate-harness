@@ -135,7 +135,9 @@ class RoundState:
     invariant_state: InvariantState
     open_findings: int
     evidence_complete: bool
-    breaker_level: int
+    #: None means "this run has no circuit-breaker channel", which is NOT the same claim as
+    #: 0 (an existing breaker reporting untripped). Rule 1 is skipped when absent.
+    breaker_level: int | None = None
     schema_version: str | None = None
 
     def __post_init__(self) -> None:
@@ -148,12 +150,14 @@ class RoundState:
             maximum=None,
         )
         # The breaker's ceiling doubles as its trip level, so one range covers both.
-        _require_integer(
-            "breaker_level",
-            self.breaker_level,
-            minimum=MIN_BREAKER_LEVEL,
-            maximum=MAX_BREAKER_LEVEL,
-        )
+        # Absence is legitimate (no breaker channel) and is validated by rule 1 skipping.
+        if self.breaker_level is not None:
+            _require_integer(
+                "breaker_level",
+                self.breaker_level,
+                minimum=MIN_BREAKER_LEVEL,
+                maximum=MAX_BREAKER_LEVEL,
+            )
         if self.invariant_state not in INVARIANT_STATES:
             _refuse(
                 "invariant_state",
@@ -209,7 +213,9 @@ def convergence_decision(state: RoundState) -> ConvergenceDecision:
     even though each branch looks like the last one.
     """
     # 1. The breaker halts before anything is counted (level 3 is the policy limit).
-    if state.breaker_level >= BREAKER_TRIPPED_LEVEL:
+    # An absent breaker is "no channel in this run", not a measured 0 — skipping the rule
+    # and halting are different outcomes, so the check is explicit about the difference.
+    if state.breaker_level is not None and state.breaker_level >= BREAKER_TRIPPED_LEVEL:
         return _decide(state, "halt", "circuit-breaker-tripped")
     # 2. Budget before work: a run cannot buy another round by re-reporting findings it
     #    already had, so `round >= max_rounds` ends it whatever else the round claims.

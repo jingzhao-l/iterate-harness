@@ -17,6 +17,8 @@ from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.config.settings import PathRuleConfig, PermissionSettings, Settings
 from iterate_harness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
 from iterate_harness.engine.query_engine import QueryEngine
+from iterate_harness.defensive.invariants import InvariantReport
+from iterate_harness.defensive.kernel import DEFENSIVE_KERNEL_KEY
 from iterate_harness.engine.stream_events import (
     AssistantTurnComplete,
     ReviewProgressEvent,
@@ -96,7 +98,14 @@ def aggregate_call(rounds, call_id="toolu_agg"):
 
 
 @pytest.mark.asyncio
-async def test_engine_emits_progress_and_stops_on_convergence(tmp_path):
+async def test_engine_keeps_running_on_a_bare_convergence_claim(tmp_path):
+    """Engine-level proof of the flip: the reviewer's flag alone does not stop the loop.
+
+    The aggregate says converged, but no invariant gate ran (this run is not in code mode) and
+    the findings anchor a file that does not exist, so the attestation reads incomplete. The kernel
+    is therefore unconsultable and the loop must take another round instead of halting green —
+    the second API response below is reachable on purpose.
+    """
     engine = QueryEngine(
         api_client=FakeApiClient([
             _FakeResponse(
@@ -109,7 +118,7 @@ async def test_engine_emits_progress_and_stops_on_convergence(tmp_path):
                 ),
                 usage=UsageSnapshot(input_tokens=100, output_tokens=50),
             ),
-            _FakeResponse(  # would run if the loop (wrongly) continued
+            _FakeResponse(  # reached because the loop correctly did NOT stop
                 message=ConversationMessage(role="assistant", content=[TextBlock(text="unreachable")]),
                 usage=UsageSnapshot(input_tokens=1, output_tokens=1),
             ),
@@ -131,9 +140,66 @@ async def test_engine_emits_progress_and_stops_on_convergence(tmp_path):
     assert progress[0].round == 2
     assert progress[0].new_findings == 0  # duplicate collapsed deterministically
     assert progress[0].total_findings == 1
-    assert progress[0].converged is True
+    assert progress[0].converged is False, "a claim the kernel cannot verify is not a verdict"
     assert progress[0].cost_usd > 0  # 100 in + 50 out on a priced model
 
+    assert not any(
+        isinstance(e, StatusEvent) and "iterate loop stopped: converged" in e.message for e in events
+    )
+    assert any(
+        isinstance(e, AssistantTurnComplete) and "unreachable" in e.message.text for e in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_engine_converges_when_the_kernel_can_be_consulted(tmp_path):
+    """The other side of the same rule: gates measured ⇒ the kernel says converged ⇒ stop.
+
+    The invariant verdict comes from a defensive kernel sitting in the run's tool metadata
+    (what code mode wires in `query.py`), and the findings are anchored to a file that exists
+    so the evidence attestation the aggregate publishes is a real one.
+    """
+
+    class _Kernel:
+        last_invariant_report = InvariantReport(passed=True, checks_run=2)
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("\n".join(f"line{i}" for i in range(1, 6)), encoding="utf-8")
+
+    engine = QueryEngine(
+        api_client=FakeApiClient([
+            _FakeResponse(
+                message=ConversationMessage(
+                    role="assistant",
+                    content=[
+                        TextBlock(text="Aggregating."),
+                        aggregate_call(AGGREGATE_ROUNDS_CONVERGED),
+                    ],
+                ),
+                usage=UsageSnapshot(input_tokens=100, output_tokens=50),
+            ),
+            _FakeResponse(  # must NOT run: the loop stops on the kernel's verdict
+                message=ConversationMessage(role="assistant", content=[TextBlock(text="unreachable")]),
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+            ),
+        ]),
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(
+            PermissionSettings(mode=PermissionMode.FULL_AUTO)
+        ),
+        cwd=tmp_path,
+        model="claude-sonnet-4-6",
+        system_prompt="system",
+        tool_metadata={DEFENSIVE_KERNEL_KEY: _Kernel()},
+        iterate_policy=IterateLoopPolicy(max_review_rounds=3),
+    )
+
+    events = [event async for event in engine.submit_message("run dry-run")]
+
+    progress = [e for e in events if isinstance(e, ReviewProgressEvent)]
+    assert len(progress) == 1
+    assert progress[0].converged is True
     stops = [e for e in events if isinstance(e, StatusEvent) and "iterate loop stopped" in e.message]
     assert stops and "converged" in stops[0].message
     assert not any(

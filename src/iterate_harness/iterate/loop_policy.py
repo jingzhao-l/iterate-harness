@@ -10,10 +10,16 @@ appended:
   ``tool_metadata["iterate_state"]`` (same mechanism as the kernel's
   ``task_focus_state``).
 - :meth:`IterateLoopPolicy.on_turn_end` diffs that state against the last
-  observed one. When a NEW aggregate batch arrives it emits a
-  :class:`~iterate_harness.engine.stream_events.ReviewProgressEvent`, then
-  decides: converged / round-cap reached → STOP; otherwise → inject the
-  canonical next-round instruction.
+  observed one. When a NEW aggregate batch arrives it counts the round into the
+  run's breaker level, feeds the round to
+  :func:`~iterate_harness.iterate.convergence_policy.convergence_decision` and
+  emits a :class:`~iterate_harness.engine.stream_events.ReviewProgressEvent`.
+  STOP happens on the kernel's ``halt``/``converged``, on the breaker tripping,
+  or on the round cap; anything else injects the canonical next-round
+  instruction. The reviewer's own ``converged`` flag is a report, not a verdict:
+  when a gate was never measured the kernel is not consulted and the loop does
+  not claim convergence (owner decision 2026-10-13 — see
+  :meth:`IterateLoopPolicy._kernel_decision` for the accepted consequence).
 - Usage snapshots are billed into :class:`~iterate_harness.iterate.cost.CostMeter`
   so every progress event carries the running USD cost.
 
@@ -24,9 +30,19 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import cast
 
 from ..api.usage import UsageSnapshot
 from . import prompts
+from .convergence_policy import (
+    BREAKER_TRIPPED_LEVEL,
+    ConvergenceDecision,
+    ConvergencePolicyError,
+    InvariantState,
+    MIN_ROUND,
+    RoundState,
+    convergence_decision,
+)
 from .cost import CostMeter
 
 ITERATE_STATE_KEY = "iterate_state"
@@ -66,6 +82,9 @@ class AggregateSnapshot:
     rounds_seen: int = 0
     total_findings: int = 0
     findings_by_round: list[int] = field(default_factory=list)
+    #: The review report's own claim. Relayed to the UI as what the reviewer said; it is NOT the
+    #: stop condition — that is ``_kernel_decision``, which refuses to answer without a measured
+    #: invariant verdict and a measured evidence attestation.
     converged: bool = False
     by_dimension: dict[str, int] = field(default_factory=dict)
     mode: str = "dry-run"
@@ -76,7 +95,16 @@ class AggregateSnapshot:
     # The convergence contract's invariant verdict, or None when nothing measured
     # it. Never defaulted: see iterate/invariant_state.py for why absent beats
     # "unmeasured" beats "pass" here.
-    invariant_state: str | None = None
+    #
+    # Typed as the contract's literal union, not `str`: `_read_invariant_state`
+    # is the only producer and it rejects anything outside those four values, so
+    # a plain `str` here would promise more than the snapshot can actually hold.
+    invariant_state: InvariantState | None = None
+    # The convergence contract's evidence attestation, or None when the project declares no
+    # evidence gate. Absent means the kernel cannot be consulted at all: the contract has no
+    # "unknown" slot for this field, so inventing either bool would be a verdict nobody
+    # measured (see iterate/loop_gates.py).
+    evidence_complete: bool | None = None
     # Reviewer-reported cumulative token totals per dimension (v1.2-c).
     # Subagent usage bills outside the main API stream, so these are reported
     # figures the policy relays into the CostMeter (monotonic running totals).
@@ -84,6 +112,11 @@ class AggregateSnapshot:
     # Optional per-dimension input/output split (v1.26): billed at exact
     # prices instead of the blended average.
     dimension_usage_io: dict[str, dict[str, int]] = field(default_factory=dict)
+    # The kernel dimensionContext verdict line (scenario ②): published by the aggregate
+    # tool when both halves measured something — the published plan's dimensions and the
+    # ledger's per-dimension decision counts. ``None`` means nobody could produce the
+    # verdict, and the compaction attachment prints nothing rather than an invented 0/0.
+    dimension_coverage: str | None = None
 
 
 def read_state(tool_metadata: dict[str, object] | None) -> AggregateSnapshot | None:
@@ -126,6 +159,7 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
     )
     usage_io_raw = state.get("dimension_usage_io")
     usage_io = _clean_usage_io(usage_io_raw)
+    coverage_raw = state.get("dimension_coverage")
     return AggregateSnapshot(
         rounds_seen=int(state.get("rounds_seen", 0) or 0),
         total_findings=int(state.get("total_findings", 0) or 0),
@@ -134,14 +168,18 @@ def _read_state_unsafe(tool_metadata: dict[str, object] | None) -> AggregateSnap
         by_dimension=by_dim,
         mode=str(state.get("mode", "dry-run")),
         invariant_state=_read_invariant_state(state.get("invariant_state")),
+        evidence_complete=_read_evidence_complete(state.get("evidence_complete")),
         exhausted_dimensions=exhausted,
         all_dimensions_exhausted=bool(state.get("all_dimensions_exhausted", False)),
         dimension_usage=usage,
         dimension_usage_io=usage_io,
+        # Non-string or blank values are treated as absent: the attachment must not
+        # render a verdict a producer did not actually measure.
+        dimension_coverage=coverage_raw if isinstance(coverage_raw, str) and coverage_raw.strip() else None,
     )
 
 
-def _read_invariant_state(raw: object) -> str | None:
+def _read_invariant_state(raw: object) -> InvariantState | None:
     """Accept only the four contract verdicts; anything else stays absent.
 
     A producer that misspells the value must not silently upgrade "nobody looked"
@@ -149,7 +187,23 @@ def _read_invariant_state(raw: object) -> str | None:
     """
     from .invariant_state import INVARIANT_STATE_VALUES
 
-    return raw if isinstance(raw, str) and raw in INVARIANT_STATE_VALUES else None
+    if not isinstance(raw, str) or raw not in INVARIANT_STATE_VALUES:
+        return None
+    # The membership test above is the guard; the cast only says what that guard
+    # already proves at runtime. mypy cannot narrow `str` through `in` against a
+    # tuple of literals, so the type must be stated for it explicitly.
+    return cast(InvariantState, raw)
+
+
+def _read_evidence_complete(raw: object) -> bool | None:
+    """Accept only a real bool; anything else leaves the attestation absent.
+
+    ``bool`` is a subclass of ``int``, so a producer that wrote ``1`` would otherwise read as
+    "complete", and ``bool("false")`` is True — both are verdicts nobody measured. Absent here
+    means the kernel is not consulted (see ``IterateLoopPolicy._kernel_decision``), not that the
+    round failed to evidence something.
+    """
+    return raw if isinstance(raw, bool) else None
 
 
 def _clean_usage_io(raw: object) -> dict[str, dict[str, int]]:
@@ -230,6 +284,11 @@ class IterateLoopPolicy:
     _pending_nudges: list[str] = field(default_factory=list)
     # Stall detection: consecutive rounds with zero new findings (design §18.5).
     _consecutive_zero_rounds: int = 0
+    # The run's circuit-breaker level, fed to the kernel as ``breakerLevel`` (3 trips). Owned by
+    # the loop because it counts the loop's own no-progress rounds — a round cannot measure the
+    # escalation of the run inside it, which is why ``iterate/loop_gates.py`` declines to produce
+    # it. Increments on any round that found nothing new, resets on a round that found something.
+    _breaker_level: int = 0
     # Recent single-round consumption, used for budget-headroom estimation.
     _last_round_tokens: int = 0
     _last_round_cost_usd: float = 0.0
@@ -253,6 +312,11 @@ class IterateLoopPolicy:
     def __post_init__(self) -> None:
         if self._cost_meter is None:
             self._cost_meter = CostMeter(price_overrides=self.price_overrides)
+
+    @property
+    def breaker_level(self) -> int:
+        """How many consecutive rounds this run has watched end with nothing new (max 3)."""
+        return self._breaker_level
 
     def request_pause(self) -> None:
         """Ask the loop to pause at the next round boundary (user pressed Esc)."""
@@ -293,7 +357,9 @@ class IterateLoopPolicy:
             snapshot = read_state(tool_metadata) or AggregateSnapshot(mode=self.mode)
             self._record_dimension_usage(snapshot)
             return self._stop_decision(
-                snapshot, budget_stop, self._build_progress(snapshot, usage, model)
+                snapshot,
+                budget_stop,
+                self._build_progress(snapshot, usage, model, converged=False),
             )
         current = read_state(tool_metadata)
         if current is None or current.rounds_seen <= self._rounds_seen:
@@ -302,8 +368,14 @@ class IterateLoopPolicy:
         self._rounds_seen = current.rounds_seen
         self._emitted_progress += 1
         self._record_dimension_usage(current)
-        progress = self._build_progress(current, usage, model)
-        return self._decide(current, progress)
+        # The breaker reflects this round before anything judges it: the kernel's rule 1 reads
+        # the run's own escalation, so the level must not lag the round it is judging.
+        self._advance_breaker(current)
+        kernel = self._kernel_decision(current)
+        progress = self._build_progress(
+            current, usage, model, converged=kernel is not None and kernel.action == "converged"
+        )
+        return self._decide(current, progress, kernel)
 
     def _record_dimension_usage(self, snapshot: AggregateSnapshot) -> None:
         """Relay reviewer-reported per-dimension token usage into the meter.
@@ -374,7 +446,9 @@ class IterateLoopPolicy:
 
     # -- internals --------------------------------------------------------
 
-    def _build_progress(self, snapshot: AggregateSnapshot, usage: UsageSnapshot, model: str) -> object:
+    def _build_progress(
+        self, snapshot: AggregateSnapshot, usage: UsageSnapshot, model: str, *, converged: bool
+    ) -> object:
         # Imported lazily to avoid a circular import with the engine package.
         from ..engine.stream_events import ReviewProgressEvent
 
@@ -384,7 +458,7 @@ class IterateLoopPolicy:
             new_findings=new_findings,
             total_findings=snapshot.total_findings,
             per_dimension=dict(snapshot.by_dimension),
-            converged=snapshot.converged,
+            converged=converged,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cost_usd=self.cost_meter.total_cost_usd,
@@ -392,23 +466,117 @@ class IterateLoopPolicy:
             dimension_cost_usd=self.cost_meter.dimension_cost_usd(model),
         )
 
-    def _decide(self, snapshot: AggregateSnapshot, progress: object) -> LoopDecision:
+    def _advance_breaker(self, snapshot: AggregateSnapshot) -> None:
+        """Count this round's outcome into the run's breaker level (capped at the trip)."""
         last_new = snapshot.findings_by_round[-1] if snapshot.findings_by_round else 0
-        if snapshot.converged:
-            # A failing invariant is a STOP, never a pass: the reviewer claiming
-            # convergence while the project's own invariant gate failed used to
-            # produce a green "converged" run (and green CI) on broken code.
-            # ``None`` means nobody measured — that keeps the historical
-            # behavior rather than blocking projects without invariant gates.
-            if snapshot.invariant_state == "fail":
-                return self._stop_decision(
-                    snapshot, "invariant gate failed (reported converged)", progress
+        if last_new == 0:
+            self._breaker_level = min(BREAKER_TRIPPED_LEVEL, self._breaker_level + 1)
+        else:
+            self._breaker_level = 0
+
+    def kernel_blockers(self, snapshot: AggregateSnapshot) -> list[str]:
+        """Why the kernel cannot be consulted for this round; empty when it can.
+
+        Surfaced in the round-cap stop reason: a run that used to halt as "converged" now spends
+        its rounds, and the operator is owed the actual cause instead of a bare cap number.
+        """
+        blockers: list[str] = []
+        if snapshot.rounds_seen < MIN_ROUND:
+            blockers.append("no round has been counted yet")
+        if snapshot.invariant_state is None:
+            blockers.append("no invariant verdict was measured")
+        if snapshot.evidence_complete is None:
+            blockers.append("no evidence attestation was made")
+        return blockers
+
+    def _validated_snapshot(self, snapshot: AggregateSnapshot) -> tuple[InvariantState, bool] | None:
+        """``(invariant_state, evidence_complete)`` when both gates were measured.
+
+        The exact opposite of :meth:`kernel_blockers`: that method returns the
+        reasons for declining, this one returns the narrowed values that make
+        asking the kernel safe. The two answers must agree for the same snapshot,
+        and :meth:`kernel_blockers` is what the operator sees when they do not.
+
+        The round-cap check is part of the condition here too, so "the cap was
+        reached" and "every gate was measured" stay a single test -- the values
+        are only useful once a full round has been counted.
+
+        Each field is read into its own local before the ``None`` check. Mypy
+        narrows locals from that; narrowing a dataclass attribute across a
+        ``return None`` branch is what the two ``arg-type`` errors were about.
+        The tuple is therefore annotated without ``None``, which is how the
+        kernel arguments get their exact contract types with no cast and no
+        assert standing in for a guard that was already present.
+        """
+        if snapshot.rounds_seen < MIN_ROUND:
+            return None
+        invariant_state = snapshot.invariant_state
+        if invariant_state is None:
+            return None
+        evidence_complete = snapshot.evidence_complete
+        if evidence_complete is None:
+            return None
+        return invariant_state, evidence_complete
+
+    def _kernel_decision(self, snapshot: AggregateSnapshot) -> ConvergenceDecision | None:
+        """Ask the kernel what this round decides, or decline when a gate was never measured.
+
+        Every input has to exist as a measurement — see :meth:`kernel_blockers`. The contract also
+        refuses a `None` at construction, so declining here is not what keeps a fabricated verdict
+        out; it is what keeps the *reason* the loop kept running honest and nameable.
+        """
+        validated = self._validated_snapshot(snapshot)
+        if validated is None:
+            return None
+        invariant_state, evidence_complete = validated
+        last_new = snapshot.findings_by_round[-1] if snapshot.findings_by_round else 0
+        try:
+            return convergence_decision(
+                RoundState(
+                    round=snapshot.rounds_seen,
+                    max_rounds=self.max_review_rounds,
+                    invariant_state=invariant_state,
+                    open_findings=last_new,
+                    evidence_complete=evidence_complete,
+                    breaker_level=self._breaker_level,
                 )
-            return self._stop_decision(snapshot, "converged", progress)
-        if snapshot.rounds_seen >= self.max_review_rounds:
-            return self._stop_decision(
-                snapshot, f"round cap reached ({self.max_review_rounds})", progress
             )
+        except ConvergencePolicyError:
+            # A state the contract refuses is a state the loop may not call converged either.
+            return None
+
+    @staticmethod
+    def _stop_reason_for(kernel: ConvergenceDecision) -> str:
+        """Map a kernel halt onto the reason strings reports and CI already parse."""
+        if kernel.reason == "all-gates-green":
+            return "converged"
+        if kernel.reason == "round-budget-exhausted":
+            return f"round cap reached ({kernel.max_rounds})"
+        if kernel.reason == "circuit-breaker-tripped":
+            return "circuit breaker tripped (level 3)"
+        if kernel.reason == "invariant-check-errored":
+            return "invariant check errored (the gate did not run to a verdict)"
+        return f"convergence halted ({kernel.reason})"
+
+    def _decide(
+        self, snapshot: AggregateSnapshot, progress: object, kernel: ConvergenceDecision | None
+    ) -> LoopDecision:
+        last_new = snapshot.findings_by_round[-1] if snapshot.findings_by_round else 0
+        # The breaker is the loop's own limit, so it holds whether or not the kernel could be
+        # consulted — the spinning, gateless run is exactly the one that cannot feed the contract.
+        if self._breaker_level >= BREAKER_TRIPPED_LEVEL:
+            return self._stop_decision(snapshot, "circuit breaker tripped (level 3)", progress)
+        # Convergence is the kernel's call now, never the reviewer's self-report: an action of
+        # fix/verify means "keep working", and an unconsultable state means nobody may claim a
+        # green stop at all.
+        if kernel is not None and kernel.action in ("halt", "converged"):
+            return self._stop_decision(snapshot, self._stop_reason_for(kernel), progress)
+        if snapshot.rounds_seen >= self.max_review_rounds:
+            reason = f"round cap reached ({self.max_review_rounds})"
+            blockers = self.kernel_blockers(snapshot)
+            if blockers:
+                reason += " — kernel not consulted: " + "; ".join(blockers)
+            return self._stop_decision(snapshot, reason, progress)
         if snapshot.all_dimensions_exhausted and snapshot.exhausted_dimensions:
             return self._stop_decision(
                 snapshot,

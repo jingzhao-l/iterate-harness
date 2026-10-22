@@ -1666,7 +1666,11 @@ def iterate_report(
     if github:
         print(ci_report.render_github(summary))
     if pr:
-        body = pr_comment.render_markdown(summary, gate)
+        # ``--fail-on none`` reaches here with no report entry at all, and used to post
+        # "No findings recorded." — an unmeasured run reading as a clean one. Handing the
+        # renderer the log it rendered from lets the registered report-render provider
+        # refuse that instead (it declares ``requires: ["decision-log"]``).
+        body = pr_comment.render_markdown(summary, gate, decision_log=entries)
         result = pr_comment.post_pr_comment(body, str(Path.cwd()))
         print(f"PR comment: {result}", file=sys.stderr)
     if not github and not pr:

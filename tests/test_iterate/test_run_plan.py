@@ -17,9 +17,11 @@ from typing import Any
 import pytest
 
 from iterate_harness.iterate.run_plan import (
+    RUN_PLAN_FILENAME,
     RUN_PLAN_SCHEMA_VERSION,
     RunPlanError,
     build_run_plan,
+    plan_path,
     run_plan_digest,
     write_run_plan,
 
@@ -205,3 +207,30 @@ def test_a_plan_that_cannot_be_digest_is_never_written(tmp_path: Path) -> None:
         write_run_plan({"dimensions": [{"id": "x"}], "extra": {1, 2}}, target)
     assert caught.value.code == "RUN_PLAN_E_VALUE"
     assert not target.exists()
+
+
+def test_plan_path_is_the_single_home_and_creates_the_dir_owner_only(tmp_path: Path) -> None:
+    """The one place a plan file lives, with the ledger directory's 0700 rule."""
+    target = plan_path(tmp_path)
+    assert target.is_absolute()
+    assert target == tmp_path / ".iterate" / RUN_PLAN_FILENAME
+    assert _mode(target.parent) == 0o700
+
+    plan = build_run_plan({"dimensions": ["correctness", "security"]})
+    written = write_run_plan(plan, target)
+    assert written.path == target
+    assert run_plan_digest(json.loads(target.read_text(encoding="utf-8"))) == written.digest
+
+
+def test_plan_path_does_not_touch_the_mode_of_a_directory_it_did_not_create(tmp_path: Path) -> None:
+    """Chmod only when we just created it: the ledger may have owned that dir first.
+
+    Silently rewriting an existing directory's mode would make this module a second
+    authority over a directory it did not create — the same nuance log_path carries.
+    """
+    existing = tmp_path / ".iterate"
+    existing.mkdir()
+    existing.chmod(0o750)
+    target = plan_path(tmp_path)
+    assert _mode(existing) == 0o750
+    assert target == existing / RUN_PLAN_FILENAME

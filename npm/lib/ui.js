@@ -81,8 +81,8 @@ function frameSection(title, lines) {
 }
 
 // Safety net for unattended runs: if stdin is closed (EOF) or the user never
-// answers, fall back to the default instead of hanging forever. Override per
-// call with `options.timeoutMs` (0 disables the timeout entirely).
+// answers, fall back to the *stated* default instead of hanging forever.
+// Override per call with `options.timeoutMs` (0 disables the timeout entirely).
 const DEFAULT_PROMPT_TIMEOUT_MS = 120000;
 
 function askYesNo(question, defaultNo = false, options = {}) {
@@ -94,6 +94,13 @@ function askYesNo(question, defaultNo = false, options = {}) {
     let settled = false;
     let timer = null;
     const rl = readline.createInterface({ input, output });
+    // The default the prompt DISPLAYS is the answer that must be taken when
+    // nobody answers: `defaultNo=true` renders "[y/N]", so Enter, an EOF'd
+    // stdin, an unrecognised reply, and a timeout all mean "No". Resolving
+    // `defaultNo` verbatim here inverted that — it rendered "[y/N]" while
+    // auto-answering "yes", so an unattended first run confirmed a download
+    // of hundreds of megabytes that the user never agreed to.
+    const fallback = !defaultNo;
     const finish = (value) => {
       if (settled) return;
       settled = true;
@@ -102,13 +109,20 @@ function askYesNo(question, defaultNo = false, options = {}) {
       resolve(value);
     };
     // readline emits "close" on EOF (piped/`< /dev/null` stdin) — never hang.
-    rl.on("close", () => finish(defaultNo));
+    rl.on("close", () => finish(fallback));
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
-        process.stderr.write(
-          `\x1b[2m   no response after ${Math.round(timeoutMs / 1000)}s; using default\x1b[0m\n`
-        );
-        finish(defaultNo);
+        // A failing stderr write inside this timer would surface as an uncaught
+        // exception rather than settling the prompt, so swallow it.
+        try {
+          output.write(
+            `\x1b[2m   no response after ${Math.round(timeoutMs / 1000)}s; ` +
+              `using default ${defaultNo ? "(no)" : "(yes)"}\x1b[0m\n`
+          );
+        } catch {
+          /* best-effort: the prompt still settles on the default */
+        }
+        finish(fallback);
       }, timeoutMs);
       // Only unref the timer when the real terminal is in play. A TTY or
       // piped stdin keeps the event loop alive through its OS file descriptor,
@@ -131,7 +145,7 @@ function askYesNo(question, defaultNo = false, options = {}) {
       const a = String(answer).trim().toLowerCase();
       if (a === "y" || a === "yes") finish(true);
       else if (a === "n" || a === "no") finish(false);
-      else finish(defaultNo);
+      else finish(fallback);
     });
   });
 }

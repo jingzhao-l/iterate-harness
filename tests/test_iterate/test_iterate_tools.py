@@ -149,6 +149,64 @@ class TestIterateReviewTool:
         assert context.metadata[ITERATE_STATE_KEY]["rounds_seen"] == 2
         assert context.metadata[ITERATE_STATE_KEY]["total_findings"] == 1
 
+    async def _aggregate_state(self, tmp_path, rounds):
+        """Run one aggregate and hand back the loop state the tool published."""
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        context = make_context(tmp_path)
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(operation="aggregate", rounds=rounds, max_review_rounds=2),
+            context,
+        )
+        assert result.is_error is False
+        return context, context.metadata[ITERATE_STATE_KEY]
+
+    async def test_aggregate_publishes_evidence_complete_for_real_anchors(self, tmp_path):
+        """End-to-end on the publish line: the tool wrote the gate it measured, not a default."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.py").write_text("\n".join(f"line{i}" for i in range(1, 12)), encoding="utf-8")
+        _, state = await self._aggregate_state(tmp_path, [{"round": 1, "findings": [FINDING]}])
+        assert state["evidence_complete"] is True
+
+    async def test_aggregate_publishes_false_for_a_fabricated_anchor(self, tmp_path):
+        # FINDING anchors src/a.py:10; this project has no such file.
+        _, state = await self._aggregate_state(tmp_path, [{"round": 1, "findings": [FINDING]}])
+        assert state["evidence_complete"] is False
+
+    async def test_aggregate_omits_evidence_complete_when_the_channel_is_off(self, tmp_path):
+        write_config(tmp_path, "reviewer:\n  evidence_validation: false\n")
+        _, state = await self._aggregate_state(tmp_path, [{"round": 1, "findings": [FINDING]}])
+        assert "evidence_complete" not in state, "an unmeasured gate must be absent, not defaulted"
+
+    async def test_aggregate_publishes_invariant_state_from_a_kernel_in_metadata(self, tmp_path):
+        """The end-to-end line `8664b0e` named as missing: a real kernel instance reaches the state."""
+        from iterate_harness.defensive.invariants import InvariantReport
+        from iterate_harness.defensive.kernel import DEFENSIVE_KERNEL_KEY
+
+        class _Kernel:
+            last_invariant_report = InvariantReport(passed=True, checks_run=2)
+
+        context = make_context(tmp_path)
+        context.metadata[DEFENSIVE_KERNEL_KEY] = _Kernel()
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(
+                operation="aggregate", rounds=[{"round": 1, "findings": [FINDING]}], max_review_rounds=2
+            ),
+            context,
+        )
+        assert context.metadata[ITERATE_STATE_KEY]["invariant_state"] == "pass"
+
+    async def test_aggregate_omits_invariant_state_without_a_kernel(self, tmp_path):
+        _, state = await self._aggregate_state(tmp_path, [{"round": 1, "findings": [FINDING]}])
+        assert "invariant_state" not in state
+
     async def test_aggregate_rejects_malformed_findings(self, tmp_path):
         from iterate_harness.tools.iterate_tools import IterateReviewInput
 
@@ -405,6 +463,170 @@ class TestIterateReviewTool:
         payload = json.loads(result.output)
         assert "thresholdGate" not in payload["finalReport"]
 
+    async def test_plan_publishes_the_run_plan_and_cites_its_digest(self, tmp_path):
+        """Scenario ② (producing half): the digest in the payload is the disk file's digest.
+
+        That equality is the only one the GlassPane side can re-check without trusting
+        this process — so it is the one asserted here.
+        """
+        from iterate_harness.iterate import run_plan as run_plan_mod
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        write_config(tmp_path, "dimensions:\n  - security\n  - correctness\n")
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(operation="plan", mode="dry-run", max_review_rounds=2),
+            make_context(tmp_path),
+        )
+        assert result.is_error is False
+        run_plan_info = json.loads(result.output)["runPlan"]
+        assert "error" not in run_plan_info
+        assert Path(run_plan_info["path"]) == tmp_path / ".iterate" / "run-plan.json"
+        assert run_plan_info["dimensions"] == ["security", "correctness"]
+        on_disk = json.loads(Path(run_plan_info["path"]).read_text(encoding="utf-8"))
+        assert run_plan_info["digest"] == run_plan_mod.run_plan_digest(on_disk)
+
+    async def test_plan_records_the_published_digest_in_the_ledger(self, tmp_path):
+        """The digest must stay checkable after a compaction drops the tool output."""
+        from iterate_harness.iterate import decision_log
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        write_config(tmp_path, "dimensions:\n  - security\n")
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(operation="plan", mode="dry-run", max_review_rounds=2),
+            make_context(tmp_path),
+        )
+        run_plan_info = json.loads(result.output)["runPlan"]
+        assert "ledgerError" not in run_plan_info
+        entries = decision_log.read_entries(tmp_path)
+        matched = [
+            entry
+            for entry in entries
+            if isinstance(entry.data, dict) and entry.data.get("kind") == "run-plan"
+        ]
+        assert matched, "no run-plan decision reached the audit chain"
+        assert matched[-1].type == "decision"
+        assert matched[-1].data["runPlanDigest"] == run_plan_info["digest"]
+        assert matched[-1].data["dimensions"] == ["security"]
+
+    async def test_plan_without_a_config_refuses_the_run_plan_loudly_and_keeps_the_review_plan(
+        self, tmp_path
+    ):
+        """A guard that cannot report is not delivered: None config → named refusal, plan intact."""
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(operation="plan", mode="dry-run", max_review_rounds=2),
+            make_context(tmp_path),
+        )
+        assert result.is_error is False
+        payload = json.loads(result.output)
+        assert "plan" in payload  # the review plan is still returned
+        assert "runPlan" in payload  # and the failure is stated, never omitted
+        assert payload["runPlan"]["error"].startswith("RUN_PLAN_E_NO_CONFIG:")
+        assert "remedy" in payload["runPlan"]
+
+    async def test_plan_with_a_dimensionless_config_reports_the_run_plan_error_not_an_omission(
+        self, tmp_path
+    ):
+        """(d) RunPlanError on a readable-but-unplannable config: still a review plan + a code."""
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        write_config(tmp_path, "goal: g\n")  # a mapping, but no dimensions to plan from
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(operation="plan", mode="dry-run", max_review_rounds=2),
+            make_context(tmp_path),
+        )
+        assert result.is_error is False
+        payload = json.loads(result.output)
+        assert payload["plan"]["dimensions"]
+        assert payload["runPlan"]["error"].startswith("RUN_PLAN_E_NO_DIMENSIONS:")
+        assert payload["runPlan"]["remedy"]
+
+    async def _aggregate_once(self, tmp_path, context=None):
+        from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        ctx = context or make_context(tmp_path)
+        result = await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(
+                operation="aggregate",
+                rounds=[{"round": 1, "findings": [FINDING]}],
+                max_review_rounds=2,
+            ),
+            ctx,
+        )
+        assert result.is_error is False
+        return ctx.metadata[ITERATE_STATE_KEY]
+
+    async def test_aggregate_coverage_with_a_dimensionless_ledger_verifies_nothing(self, tmp_path):
+        """(b) Decisions that name no dimension belong to no dimension: 0/N, never a guess."""
+        from iterate_harness.iterate import decision_log
+        from iterate_harness.iterate.dimension_context import dimension_context, format_dimension_context
+
+        write_config(tmp_path, "dimensions:\n  - security\n  - correctness\n")
+        for kind in ("intervention", "assumption-check"):
+            decision_log.append_entry(
+                tmp_path,
+                decision_log.make_entry(
+                    entry_type="decision",
+                    round_number=1,
+                    data={"kind": kind, "detail": "the run recorded this, but never a dimension"},
+                ),
+            )
+        state = await self._aggregate_once(tmp_path)
+        expected = format_dimension_context(
+            dimension_context(["security", "correctness"], {})
+        )
+        assert state["dimension_coverage"] == expected
+        assert expected.startswith("0/2 dimensions verified")
+        assert "2 unverified (security, correctness)" in expected
+
+    async def test_aggregate_coverage_counts_only_valid_dimensioned_entries(self, tmp_path):
+        """One dimensioned ledger decision flips exactly one plan dimension to verified."""
+        from iterate_harness.iterate import decision_log
+        from iterate_harness.iterate.dimension_context import dimension_context, format_dimension_context
+
+        write_config(tmp_path, "dimensions:\n  - security\n  - correctness\n")
+        decision_log.append_entry(
+            tmp_path,
+            decision_log.make_entry(
+                entry_type="decision",
+                round_number=1,
+                data={"dimension": "security", "kind": "review-note"},
+            ),
+        )
+        decision_log.append_entry(
+            tmp_path,
+            decision_log.make_entry(
+                entry_type="decision", round_number=1, data={"dimension": "Not-A-Kebab-Id"}
+            ),
+        )
+        state = await self._aggregate_once(tmp_path)
+        assert state["dimension_coverage"] == format_dimension_context(
+            dimension_context(["security", "correctness"], {"security": {"decisions": 1}})
+        )
+
+    async def test_aggregate_coverage_reads_the_published_plan_before_the_config(self, tmp_path):
+        """The plan file wins over the config: the two CAN differ, and the difference is the point."""
+        from iterate_harness.tools.iterate_tools import IterateReviewInput
+
+        write_config(tmp_path, "dimensions:\n  - security\n  - correctness\n")
+        await run_tool(
+            IterateReviewTool(),
+            IterateReviewInput(operation="plan", mode="dry-run", max_review_rounds=2),
+            make_context(tmp_path),
+        )
+        # Config edited after publication: the published contract stays the contract.
+        write_config(tmp_path, "dimensions:\n  - ui-ux\n")
+        state = await self._aggregate_once(tmp_path)
+        assert "ui-ux" not in state["dimension_coverage"]
+        assert "unverified (security, correctness)" in state["dimension_coverage"]
+
 
 class TestIterateDecisionLogTool:
     async def test_append_and_read_roundtrip(self, tmp_path):
@@ -427,16 +649,26 @@ class TestIterateDecisionLogTool:
         assert payload["entryCount"] == 1
         assert payload["entries"][0]["type"] == "round_start"
 
-    async def test_append_rejects_bad_type_and_missing_round(self, tmp_path):
+    async def test_append_refuses_a_kind_the_kernel_cannot_carry(self, tmp_path):
+        """The gate is the kernel's shape rule, not this shell's list.
+
+        It used to be a ``frozenset`` of eight names, and the TypeScript plugin's list had ten
+        — so the same decision was legal in one shell and rejected in the other. That was the
+        divergence, so the test now states both directions: a kind that cannot be *compared*
+        is refused, and a kind nobody has ever listed is recorded.
+        """
         from iterate_harness.tools.iterate_tools import IterateDecisionLogInput
 
         context = make_context(tmp_path)
         result = await run_tool(
             IterateDecisionLogTool(),
-            IterateDecisionLogInput(operation="append", type="nonsense", round=1),
+            IterateDecisionLogInput(operation="append", type="Round Failed!", round=1),
             context,
         )
-        assert json.loads(result.output)["error"]
+        payload = json.loads(result.output)
+        assert payload["error"], payload
+        assert payload["code"] == "KERNEL_E_DECISION_KIND"
+        assert "snake_case" in payload["remedy"]
 
         result = await run_tool(
             IterateDecisionLogTool(),
@@ -444,6 +676,21 @@ class TestIterateDecisionLogTool:
             context,
         )
         assert json.loads(result.output)["error"]
+
+        result = await run_tool(
+            IterateDecisionLogTool(),
+            IterateDecisionLogInput(operation="append", type="resume", round=2, data={"why": "user"}),
+            context,
+        )
+        appended = json.loads(result.output)
+        assert appended.get("success") is True, appended
+        lines = [
+            json.loads(line)
+            for line in (tmp_path / ".iterate" / "decision-log.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert [entry["kind"] for entry in lines] == ["resume"], "a kind outside the old list must reach the ledger"
+        assert lines[0]["payload"] == {"why": "user"}
 
 
 class TestIterateContextTool:

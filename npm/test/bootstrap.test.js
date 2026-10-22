@@ -29,11 +29,15 @@ const {
   installCandidates,
   installHarness,
   installRemoteArtifact,
+  interactiveSession,
   isRemoteHttpUrl,
   isSupportedPython,
+  isUnknownVersion,
   needsBootstrap,
+  packageVersion,
   parseChecksum,
   parsePythonVersion,
+  parseStamp,
   pipInstallArgs,
   pypiInstallSpec,
   pythonCandidates,
@@ -41,6 +45,10 @@ const {
   resolveRedirectUrl,
   runStep,
   sha256File,
+  runtimeInputs,
+  formatStamp,
+  splitHarnessArgs,
+  UNKNOWN_VERSION,
   venvExecutablePaths,
   verifyDownloadedArtifact,
   wheelAssetName,
@@ -191,13 +199,125 @@ test("artifactExtensionFor maps whl and tar.gz, defaulting otherwise", () => {
   assert.equal(artifactExtensionFor(""), DEFAULT_ARTIFACT_EXT);
 });
 
-test("needsBootstrap ignores surrounding whitespace and requires exact match", () => {
-  assert.equal(needsBootstrap("1.6.0\n", "1.6.0"), false);
-  assert.equal(needsBootstrap(" 1.6.0 ", "1.6.0"), false);
-  assert.equal(needsBootstrap("1.5.0\n", "1.6.0"), true);
+test("needsBootstrap compares versions with surrounding whitespace trimmed", () => {
+  // The trim matters for the JSON stamps this wrapper writes; both sides must
+  // be normalised or a newline in the file would demand a reinstall every run.
+  assert.equal(needsBootstrap(formatStamp({ version: "1.6.0", pythonEnv: "", source: "" }) + "\n", "1.6.0"), false);
+  assert.equal(needsBootstrap(formatStamp({ version: "1.6.0", pythonEnv: "", source: "" }), " 1.6.0 "), false);
+  assert.equal(needsBootstrap(formatStamp({ version: "1.5.0", pythonEnv: "", source: "" }), "1.6.0"), true);
   assert.equal(needsBootstrap("", "1.6.0"), true);
   assert.equal(needsBootstrap(undefined, "1.6.0"), true);
 });
+
+test("needsBootstrap rebuilds once for a legacy bare-version stamp", () => {
+  // Older wrappers wrote a bare version, which cannot prove which interpreter
+  // or install source built the runtime. Rebuild once so the stamp is
+  // rewritten with inputs; a version bump already reinstalled this runtime,
+  // so this costs nothing extra.
+  assert.equal(needsBootstrap("2.7.0", "2.7.0"), true);
+  assert.equal(needsBootstrap("2.7.0\n", "2.7.0"), true);
+  assert.equal(parseStamp("2.7.0").legacy, true);
+  assert.equal(parseStamp(formatStamp(runtimeInputs("2.7.0", {}))).legacy, false);
+});
+
+test("needsBootstrap reuses a stamp whose inputs still match", () => {
+  const env = {};
+  const inputs = runtimeInputs("2.7.0", env);
+  const stamp = formatStamp(inputs);
+  assert.equal(needsBootstrap(stamp, "2.7.0", inputs), false, "same inputs must reuse");
+  assert.equal(needsBootstrap(stamp, "2.7.0"), false, "no inputs given means version-only check");
+});
+
+test("needsBootstrap rebuilds when the interpreter override changes", () => {
+  const stamp = formatStamp(runtimeInputs("2.7.0", {}));
+  const other = {
+    version: "2.7.0",
+    pythonEnv: "/opt/other/bin/python3.12",
+    source: "iterate-harness==2.7.0",
+  };
+  assert.equal(needsBootstrap(stamp, "2.7.0", other), true, "changed override must rebuild");
+});
+
+test("needsBootstrap rebuilds when the install source changes", () => {
+  const stamp = formatStamp(runtimeInputs("2.7.0", {}));
+  const mirror = {
+    version: "2.7.0",
+    pythonEnv: "",
+    source: "https://mirror.example/iterate-harness-2.7.0.tar.gz",
+  };
+  assert.equal(needsBootstrap(stamp, "2.7.0", mirror), true);
+});
+
+test("runtimeInputs pins the env-derived build inputs", () => {
+  const inputs = runtimeInputs("2.7.0", {
+    [PYTHON_ENV_VAR]: "/opt/x/bin/python3",
+    [INSTALL_URL_ENV_VAR]: "https://mirror.example/pkg.tar.gz",
+  });
+  assert.equal(inputs.version, "2.7.0");
+  assert.equal(inputs.pythonEnv, "/opt/x/bin/python3");
+  assert.equal(inputs.source, "https://mirror.example/pkg.tar.gz");
+  // No override: the PyPI pin is the recorded source.
+  assert.equal(runtimeInputs("2.7.0", {}).source, pypiInstallSpec("2.7.0"));
+});
+
+test("parseStamp round-trips formatStamp and tolerates garbage", () => {
+  const inputs = runtimeInputs("2.7.0", {});
+  assert.deepEqual(parseStamp(formatStamp(inputs)), {
+    version: "2.7.0",
+    pythonEnv: "",
+    source: inputs.source,
+    legacy: false,
+  });
+  assert.equal(parseStamp(""), null);
+  assert.equal(parseStamp(undefined), null);
+  assert.equal(parseStamp("not json at all").version, "not json at all");
+  assert.equal(parseStamp("{ broken json").legacy, true);
+  // Non-string input fields are coerced so a hand-edited stamp cannot break
+  // the comparison.
+  assert.deepEqual(parseStamp('{"version":"2.7.0","pythonEnv":1,"source":null}'), {
+    version: "2.7.0",
+    pythonEnv: "1",
+    source: "",
+    legacy: false,
+  });
+});
+
+test("splitHarnessArgs only treats wrapper flags as the wrapper's before `--`", () => {
+  // A `--` separator hands the rest of the argv to the child untouched.
+  assert.deepEqual(splitHarnessArgs(["sub", "--", "--no-verify"]), {
+    forwardedArgs: ["sub", "--", "--no-verify"],
+    noVerify: false,
+    allowHttp: false,
+  });
+  assert.deepEqual(splitHarnessArgs(["--no-verify", "sub"]), {
+    forwardedArgs: ["sub"],
+    noVerify: true,
+    allowHttp: false,
+  });
+  assert.deepEqual(splitHarnessArgs(["--allow-http", "--no-verify", "--", "cmd"]), {
+    forwardedArgs: ["--", "cmd"],
+    noVerify: true,
+    allowHttp: true,
+  });
+  assert.deepEqual(splitHarnessArgs(), {
+    forwardedArgs: [],
+    noVerify: false,
+    allowHttp: false,
+  });
+  assert.deepEqual(splitHarnessArgs(undefined), {
+    forwardedArgs: [],
+    noVerify: false,
+    allowHttp: false,
+  });
+});
+
+test("isUnknownVersion and UNKNOWN_VERSION are exported for the guard", () => {
+  assert.equal(UNKNOWN_VERSION, "0.0.0-unknown");
+  assert.equal(isUnknownVersion(UNKNOWN_VERSION), true);
+  assert.equal(isUnknownVersion("2.7.0"), false);
+  assert.equal(isUnknownVersion(""), false);
+});
+
 
 test("HOME_ENV_VAR name is stable (documented in README)", () => {
   assert.equal(HOME_ENV_VAR, "ITERATE_HARNESS_NPM_HOME");

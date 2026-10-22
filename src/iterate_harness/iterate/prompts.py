@@ -104,8 +104,10 @@ Canonical loop — reproduce this structure exactly (adjust dims via the plan):
 3. Call `iterate_review(operation="aggregate", mode="dry-run", rounds=[...])`
    with ALL rounds so far. It deterministically dedupes, filters
    known_intentional, sorts by severity, and computes convergence.
-4. If the aggregate reports 0 NEW findings in the last round → converged, stop.
-   Otherwise next round. Stop at maxReviewRounds regardless.
+4. Stopping is the loop's call, not the aggregate's: a round converges only when it
+   reported 0 NEW findings, the invariant gate produced a verdict of `pass`, and the
+   evidence attestation came back complete. Any of those missing means another round,
+   not a stop; maxReviewRounds ends the loop regardless.
 5. Call `iterate_review(operation="meta-review", report=...)` to audit the
    final report (counts, severity buckets, dimension sums, sort order,
    convergence math). `verdict` is `approved` only if every check passes.

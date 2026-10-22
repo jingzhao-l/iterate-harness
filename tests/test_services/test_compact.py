@@ -23,6 +23,7 @@ from iterate_harness.services.compact import (
     AutoCompactState,
     _is_prompt_too_long_error,
     auto_compact_if_needed,
+    create_iterate_review_attachment_if_needed,
     estimate_message_tokens as estimate_compact_message_tokens,
     get_autocompact_threshold,
     microcompact_messages,
@@ -649,3 +650,87 @@ def test_extract_attachment_paths_keeps_letters_after_n() -> None:
     assert "src/main.py" in found
     assert "notes/a.png" in found
     assert "screens/hits.png" in found
+
+
+def test_iterate_attachment_names_the_claim_and_the_absent_gates() -> None:
+    """Since the kernel decides convergence, the carried-over line must not imply the claim won.
+
+    A bare `converged=True` here would tell the model, across a compaction boundary, that the run
+    had stopped on verdicts that were never measured.
+    """
+    attachment = create_iterate_review_attachment_if_needed(
+        {
+            "mode": "code",
+            "rounds_seen": 2,
+            "total_findings": 3,
+            "converged": True,
+            "findings_by_round": [3, 0],
+        }
+    )
+    assert attachment is not None
+    stats = attachment.body.splitlines()[1]
+    assert "reviewerClaimedConverged=True" in stats
+    assert "gates=none-measured" in stats
+    assert " converged=True" not in stats
+
+
+def test_iterate_attachment_shows_the_gates_the_kernel_would_have_read() -> None:
+    attachment = create_iterate_review_attachment_if_needed(
+        {
+            "mode": "code",
+            "rounds_seen": 2,
+            "total_findings": 0,
+            "converged": True,
+            "invariant_state": "pass",
+            "evidence_complete": True,
+        }
+    )
+    assert attachment is not None
+    stats = attachment.body.splitlines()[1]
+    assert "invariant_state=pass" in stats
+    assert "evidence_complete=True" in stats
+
+
+def test_iterate_attachment_prints_the_kernel_coverage_line_verbatim() -> None:
+    """Scenario ②: the carried-over line must be byte-identical to format_dimension_context.
+
+    Both harnesses compute this sentence from the same kernel rules; a rewording on the
+    way through the attachment would break exactly the cross-check that makes the line
+    worth carrying.
+    """
+    from iterate_harness.iterate.dimension_context import dimension_context, format_dimension_context
+
+    verdict = format_dimension_context(
+        dimension_context(["security", "correctness"], {"security": {"decisions": 2}})
+    )
+    attachment = create_iterate_review_attachment_if_needed(
+        {
+            "mode": "code",
+            "rounds_seen": 2,
+            "total_findings": 3,
+            "converged": False,
+            "by_dimension": {"security": 3},
+            "dimension_coverage": verdict,
+        }
+    )
+    assert attachment is not None
+    body_lines = attachment.body.splitlines()
+    assert f"- dimensionCoverage: {verdict}" in body_lines
+    # Next to — not replacing — the reviewer's private per-dimension counts.
+    assert any(line.startswith("- byDimension: security=3") for line in body_lines)
+
+
+def test_iterate_attachment_prints_no_coverage_line_when_nothing_measured() -> None:
+    """No coverage value means nobody measured; printing an invented 0/0 would be a verdict."""
+    attachment = create_iterate_review_attachment_if_needed(
+        {
+            "mode": "code",
+            "rounds_seen": 1,
+            "total_findings": 0,
+            "converged": False,
+            "by_dimension": {"security": 1},
+        }
+    )
+    assert attachment is not None
+    assert "dimensions verified" not in attachment.body
+    assert "0/0" not in attachment.body

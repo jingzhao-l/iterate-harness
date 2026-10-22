@@ -26,11 +26,14 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
-from ..iterate import config_loader, decision_log, evidence, meta_review, personalization, review, review_scope, trend_store
+from ..iterate import config_loader, decision_log, dimension_ledger, evidence, meta_review, personalization, review, review_scope, run_plan, trend_store
 from ..iterate import types as itypes
 from ..iterate import validate as validate_mod
+from ..iterate.dimension_context import format_dimension_context
 from ..iterate.loop_policy import ITERATE_STATE_KEY
-from ..iterate.invariant_state import read_invariant_state
+from ..iterate.loop_gates import measured_gates
+from ..iterate.glasspane_host_transport import bind_host_transport
+from ..iterate.reverify_trigger import REVERIFICATION_STATE_KEY, trigger_reverification_async
 from .base import BaseTool, ToolExecutionContext, ToolResult
 
 log = logging.getLogger(__name__)
@@ -68,6 +71,58 @@ def _load_known_intentional(context: ToolExecutionContext) -> list[itypes.KnownI
             )
     known.extend(personalization.known_intentional_of(None, context.cwd))
     return known
+
+
+# --- the kernel's coverage line, shared by the two tools that publish it -----
+
+
+def _dimension_coverage_line(
+    context: ToolExecutionContext, effective: config_loader.EffectiveConfig
+) -> str | None:
+    """The run's ``dimensionContext`` verdict as one line, or ``None`` when unmeasurable.
+
+    The withheld-attribution note rides on the same line and only when there is something to
+    say: a coverage figure that quietly dropped a contested attribution would be a smaller
+    number the model cannot ask about, and "the shell's echo disagreed" is the one fact that
+    makes the drop legible. It never adds a verification.
+    """
+    built, contested = dimension_ledger.dimension_context_with_contested(
+        context.cwd, fallback=[str(d) for d in effective.config.dimensions]
+    )
+    if built is None:
+        return None
+    line = format_dimension_context(built)
+    if contested:
+        line += (
+            f" — {len(contested)} attribution(s) withheld: the dimension declared for the call "
+            "disagrees with what the shell echoed for it, so the run reports that evidence as "
+            "unverified instead of choosing which side to believe"
+        )
+    return line
+
+
+def _refresh_dimension_coverage(context: ToolExecutionContext) -> str | None:
+    """Re-publish the coverage line on the state channel the compaction seam reads.
+
+    Called after a decision that names a dimension lands, because the line is a fact about
+    the ledger and the ledger just changed: leaving the stale one in place would tell a
+    compacted model that a dimension the run has since evidenced is still unverified.
+
+    Two deliberate limits. It refreshes an *existing* snapshot only — this tool does not own
+    ``iterate_state``, and publishing a half-populated one would hand the loop policy a round
+    count and a mode nobody measured, which is a verdict made of nothing. And an
+    unmeasurable verdict stays absent rather than becoming an invented ``0/0``.
+    """
+    state = context.metadata.get(ITERATE_STATE_KEY)
+    if not isinstance(state, dict):
+        return None
+    coverage = _dimension_coverage_line(
+        context, config_loader.load_effective_config(context.cwd)
+    )
+    if coverage is None:
+        return None
+    state["dimension_coverage"] = coverage
+    return coverage
 
 
 # --- iterate_config ---------------------------------------------------------
@@ -281,7 +336,7 @@ class IterateReviewTool(BaseTool[BaseModel]):
             if arguments.operation == "plan":
                 return self._plan(arguments, context)
             if arguments.operation == "aggregate":
-                return self._aggregate(arguments, context)
+                return await self._aggregate(arguments, context)
             return self._meta_review(arguments, context)
         except ValueError as exc:
             return _json_output({"error": str(exc)}, error=True)
@@ -304,9 +359,83 @@ class IterateReviewTool(BaseTool[BaseModel]):
             scope_files=scope_files,
             raw_attachments=args.attachments,
         )
-        return _json_output({"plan": review.plan_to_dict(plan)})
+        # Scenario ②'s producing half: the same call that hands the reviewer its plan
+        # publishes the kernel run plan the GlassPane side reads through
+        # GLASSPANE_RUN_PLAN. A failure there is REPORTED in the payload next to a
+        # perfectly usable review plan — a silent omission would leave the other
+        # harness compacting against a stale contract with nobody noticing.
+        return _json_output({
+            "plan": review.plan_to_dict(plan),
+            "runPlan": self._publish_run_plan(context),
+        })
 
-    def _aggregate(self, args: IterateReviewInput, context: ToolExecutionContext) -> ToolResult:
+    def _publish_run_plan(self, context: ToolExecutionContext) -> dict[str, Any]:
+        """Build + write the kernel run plan, and cite where and what digest.
+
+        Built from the project's RAW config mapping (``load_config``), never from the
+        effective config: the published contract must be the dimensions a human wrote,
+        not the built-in defaults this harness would otherwise invent for a project
+        that declared none. ``load_config`` returns ``None`` for a missing or
+        non-mapping file; that is refused as an error rather than passed into
+        ``build_run_plan``.
+        """
+        raw = config_loader.load_config(context.cwd)
+        if raw is None:
+            return {
+                "error": (
+                    "RUN_PLAN_E_NO_CONFIG: the project carries no readable "
+                    "iterate.config.yaml mapping to plan from"
+                ),
+                "remedy": (
+                    f"create {config_loader.CONFIG_FILENAME} with a dimensions list at the "
+                    "project root; the run plan is published from the config a human wrote, "
+                    "never from the built-in defaults"
+                ),
+            }
+        try:
+            plan = run_plan.build_run_plan(raw, source_name=config_loader.CONFIG_FILENAME)
+            written = run_plan.write_run_plan(plan, run_plan.plan_path(context.cwd))
+        except run_plan.RunPlanError as error:
+            return {"error": str(error), "remedy": error.remedy}
+        except OSError as error:
+            return {
+                "error": f"RUN_PLAN_E_WRITE: cannot write the run plan ({error})",
+                "remedy": "make .iterate/run-plan.json writable, then plan again",
+            }
+        # build_run_plan publishes "dimensions" as a list of dimension dicts, but its
+        # `dict[str, object]` return type cannot say so, so iterating that value would
+        # be unchecked. State the shape once at the read site.
+        dimension_ids = [
+            str(item["id"]) for item in cast(list[dict[str, object]], plan["dimensions"])
+        ]
+        payload: dict[str, Any] = {
+            "path": str(written.path),
+            "digest": written.digest,
+            "dimensions": dimension_ids,
+        }
+        # The digest must be checkable from the audit chain, not only from the tool
+        # output an agent may compact away. A ledger refusal never cancels the
+        # publication — the file is written and the other side will read it — but the
+        # failure is named in the payload (same reporting rule as above).
+        try:
+            decision_log.append_entry(
+                context.cwd,
+                decision_log.make_entry(
+                    entry_type="decision",
+                    round_number=1,
+                    data={
+                        "kind": "run-plan",
+                        "runPlanDigest": written.digest,
+                        "dimensions": payload["dimensions"],
+                    },
+                ),
+            )
+        except (OSError, *decision_log.DECISION_LOG_REFUSALS) as error:
+            log.warning("iterate run-plan decision could not be logged: %s", error, exc_info=True)
+            payload["ledgerError"] = f"{getattr(error, 'code', type(error).__name__)}: {error}"
+        return payload
+
+    async def _aggregate(self, args: IterateReviewInput, context: ToolExecutionContext) -> ToolResult:
         if not args.rounds:
             return _json_output(
                 {"error": "aggregate requires rounds: [{round, findings}]"}, error=True
@@ -353,13 +482,50 @@ class IterateReviewTool(BaseTool[BaseModel]):
             "converged": report.convergence.converged,
             "by_dimension": dict(report.summary.by_dimension),
         }
-        # The invariant gate's verdict, but only when some gate actually produced
-        # one. Absent means "nobody checked" and the reader must not turn that
-        # into a pass; see iterate/invariant_state.py.
-        measured = read_invariant_state(context.metadata)
-        if measured is not None:
-            state["invariant_state"] = measured
+        # Scenario ②'s consuming half: the kernel's dimensionContext verdict rides the
+        # same state channel the compaction attachment already reads, so a compacted
+        # session still carries "which planned dimensions were never verified".
+        coverage = self._dimension_coverage(context, effective)
+        if coverage is not None:
+            state["dimension_coverage"] = coverage
+        # Only the gates this round really measured stay in the state; see
+        # iterate/loop_gates.py for why an absent gate beats a default.
+        gates = measured_gates(
+            evidence_validation=config_loader.load_effective_config(
+                context.cwd
+            ).config.reviewer.evidence_validation,
+            findings=report.findings,
+            cwd=context.cwd,
+            metadata=context.metadata,
+        )
+        state.update(gates)
         payload: dict[str, Any] = {"report": review.report_to_dict(report)}
+        # Scenario ①'s trigger half: an invariant verdict the kernel *measured* as failed earns a
+        # re-verification through the engine channel, and the answer is relayed, not judged here.
+        # This is the one site that holds all four inputs — the measured gate, the invariant report
+        # behind its digest, the run's ledger root, and the state object about to be published — so
+        # the wiring lives in one call. See iterate/reverify_trigger.py for the rules it is bound
+        # by, including the one that keeps a missing verdict silent instead of satisfied.
+        # Scenario ①'s host half: the transport this trigger needs is the run's own MCP client,
+        # read-only. bind_host_transport hands over both shapes of it, or says why the run
+        # cannot (no mcp plane / no GlassPane server / a server that never connected), so an
+        # absent channel reads as "not attempted, because …" rather than as silence. This site
+        # awaits: engine/query.py runs tools with ``await tool.execute(...)`` and ui/runtime.py
+        # connects the MCP manager on that same loop, so the awaitable transport is the only one
+        # that can reach those sessions — a synchronous send here could only ever refuse. The
+        # additions go on a merged copy — a callable must never land in the durable
+        # tool_metadata the engine folds across turns.
+        transport_metadata = {**context.metadata, **bind_host_transport(context.metadata)}
+        reverification = await trigger_reverification_async(
+            project_root=context.cwd,
+            metadata=transport_metadata,
+            gates=gates,
+            round_number=report.convergence.total_rounds,
+            planned_dimensions=list(report.dimensions),
+        )
+        if reverification is not None:
+            state[REVERIFICATION_STATE_KEY] = reverification
+            payload[REVERIFICATION_STATE_KEY] = reverification
         if usage_totals:
             # Engine-level per-dimension usage passthrough (v1.2-c): the
             # loop policy bills these reported totals into its CostMeter.
@@ -374,6 +540,29 @@ class IterateReviewTool(BaseTool[BaseModel]):
             payload["budgetAudit"] = budget_audit.to_dict()
         context.metadata[ITERATE_STATE_KEY] = state
         return _json_output(payload)
+
+    def _dimension_coverage(
+        self, context: ToolExecutionContext, effective: config_loader.EffectiveConfig
+    ) -> str | None:
+        """The kernel's dimensionContext verdict as one line, or ``None`` when unmeasurable.
+
+        PLANNED ids come from the published run-plan file when one exists — that file is
+        the contract the GlassPane side actually reads — and from the EFFECTIVE config's
+        ``dimensions`` list otherwise. The two can differ (the config was edited after
+        ``plan`` published, or no plan was ever written), and the difference is the point:
+        the verdict must be computed against what this harness hands over, not against
+        what somebody last typed into a YAML file.
+
+        RECORDED counts come from the ledger. An entry whose data carries no valid
+        ``dimension`` belongs to no dimension and is not guessed at — the same rule
+        ``dimension_context_from_evidence`` applies to evidence packs without the key.
+        Returning ``None`` (no line, no invented 0/0) when either half cannot be built
+        keeps the compaction attachment honest.
+
+        The assembly lives in :mod:`iterate.dimension_ledger` because the compaction seam
+        asks the same question of the same two files; one accounting, two readers.
+        """
+        return _dimension_coverage_line(context, effective)
 
     @staticmethod
     def _audit_budgets(usage_totals: dict[str, int], context: ToolExecutionContext) -> review.BudgetAudit | None:
@@ -472,6 +661,39 @@ class IterateDecisionLogInput(BaseModel):
     type: str | None = Field(default=None, description="Entry type (append)")
     round: int | None = Field(default=None, ge=1, description="Round number (append)")
     data: dict[str, Any] | None = Field(default=None, description="Entry payload (append)")
+    dimension: str | None = Field(
+        default=None,
+        description=(
+            "Kebab id of the review dimension this decision served, from the run's dimension "
+            "config (append). Omit it when the call served no declared dimension — an omitted "
+            "id reads as unattributed, never as a zero for some other dimension."
+        ),
+    )
+    operation_id: str | None = Field(
+        default=None,
+        description=(
+            "The engine operation this decision belongs to, copied from the evidence the "
+            "engine returned (append). Omit it when the decision is not tied to one operation."
+        ),
+    )
+
+
+def _attributed_data(args: IterateDecisionLogInput) -> dict[str, Any] | None:
+    """The entry payload with the validated attribution merged into the keys the kernel reads.
+
+    ``dimension``/``operationId`` are the two names ``kernel_decision_record`` transcribes into
+    the ledger draft; writing them anywhere else buys an entry that looks attributed to the
+    caller and counts as unattributed everywhere else.
+
+    A call with no payload and no attribution stays ``None`` rather than becoming ``{}``, so
+    entries that were always written without a payload keep being written without one.
+    """
+    data = dict(args.data) if isinstance(args.data, dict) else {}
+    if args.dimension is not None:
+        data[dimension_ledger.DIMENSION_DATA_KEY] = args.dimension
+    if args.operation_id is not None:
+        data[dimension_ledger.OPERATION_ID_DATA_KEY] = args.operation_id
+    return data or None
 
 
 class IterateDecisionLogTool(BaseTool[BaseModel]):
@@ -479,7 +701,14 @@ class IterateDecisionLogTool(BaseTool[BaseModel]):
     description = (
         "Append-only decision log (.iterate/decision-log.jsonl). append: "
         "record round_start/review_result/atomic_fix/architectural_fix/revert/"
-        "validation/decision/report. read: retrieve all entries."
+        "validation/decision/report. read: retrieve all entries. "
+        "A decision that served one of the run's review dimensions says which one "
+        "(dimension: the kebab id from the dimension config) and, when it settled one "
+        "engine operation, which operation (operation_id, copied from the engine's "
+        "evidence). Those two names are what lets a later compaction tell a verified "
+        "dimension's history from an open one; leave them out when the call served no "
+        "declared dimension, and never invent one — a malformed id is refused, not "
+        "dropped."
     )
     input_model = IterateDecisionLogInput
 
@@ -511,15 +740,48 @@ class IterateDecisionLogTool(BaseTool[BaseModel]):
             return _json_output(
                 {"error": "type and round are required for append"}, error=True
             )
-        if args.type not in decision_log.VALID_ENTRY_TYPES:
+        if not decision_log.is_decision_kind(args.type):
             return _json_output(
-                {"error": f"unknown type '{args.type}'; valid: {sorted(decision_log.VALID_ENTRY_TYPES)}"},
+                {
+                    "error": f"'{args.type}' is not a decision kind the shared ledger can carry",
+                    "code": "KERNEL_E_DECISION_KIND",
+                    "remedy": "a kind is lowercase snake_case, at most 32 characters "
+                              "(`^[a-z][a-z0-9_]{0,31}$`). It is no longer checked against a fixed "
+                              "list — that list was this shell's opinion and the TypeScript plugin's "
+                              "was wider, which was the divergence, not a rule.",
+                },
                 error=True,
             )
-        entry = decision_log.make_entry(
-            entry_type=args.type, round_number=args.round, data=args.data
+        # The attribution is checked here, before a byte is written, for the reason the
+        # transcription is not enough: ``kernel_decision_record`` keeps a valid
+        # ``dimension``/``operationId`` and drops an invalid one without a word, so a typo
+        # would buy the caller a success and a ledger line that reports its dimension as
+        # never verified. A refusal is loud; a dropped attribution is invisible.
+        refusal = dimension_ledger.attribution_refusal(
+            dimension=args.dimension, operation_id=args.operation_id
         )
-        count, path = decision_log.append_entry(context.cwd, entry)
+        if refusal is not None:
+            return _json_output(refusal, error=True)
+        entry = decision_log.make_entry(
+            entry_type=args.type,
+            round_number=args.round,
+            data=_attributed_data(args),
+        )
+        try:
+            count, path = decision_log.append_entry(context.cwd, entry)
+        except decision_log.DECISION_LOG_REFUSALS as error:
+            # A decision that cannot be recorded is reported, not swallowed and not raised: the
+            # agent is the one who can fix the ledger (permissions, an interleaved writer, a
+            # timestamp this kernel cannot date).
+            return _json_output(
+                {
+                    "error": str(error),
+                    "code": getattr(error, "code", "KERNEL_E_DECISION_LOG_WRITE"),
+                    "remedy": getattr(error, "remedy", ""),
+                    "success": False,
+                },
+                error=True,
+            )
         payload: dict[str, Any] = {
             "operation": "append",
             "success": True,
@@ -532,6 +794,12 @@ class IterateDecisionLogTool(BaseTool[BaseModel]):
                 "data": entry.data,
             },
         }
+        if args.dimension is not None:
+            # The ledger just gained an attributed decision, so the coverage line — a fact
+            # about the ledger — went stale in this same call.
+            coverage = _refresh_dimension_coverage(context)
+            if coverage is not None:
+                payload["dimensionCoverage"] = coverage
         if args.type == "report":
             # The canonical loops append exactly one report entry per run:
             # that is the deterministic hook for the fingerprint trend library.
@@ -632,8 +900,15 @@ class IterateAssumptionTool(BaseTool[BaseModel]):
                     holds=arguments.status == "holds",
                     detail=arguments.detail,
                 )
-        except OSError as exc:
-            return _json_output({"error": f"could not write decision log: {exc}"}, error=True)
+        except (OSError, *decision_log.DECISION_LOG_REFUSALS) as exc:
+            return _json_output(
+                {
+                    "error": f"could not write decision log: {exc}",
+                    "code": getattr(exc, "code", "OSError"),
+                    "remedy": getattr(exc, "remedy", "fix the file permissions or ownership"),
+                },
+                error=True,
+            )
         return _json_output(
             {
                 "operation": "record_assumption",

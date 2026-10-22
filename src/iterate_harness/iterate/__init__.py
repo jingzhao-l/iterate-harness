@@ -8,6 +8,9 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
 - :mod:`.meta_review` — deterministic audit of a review report
 - :mod:`.validate` — exact-match validation command runner
 - :mod:`.decision_log` — append-only JSONL decision log
+- :mod:`.dimension_ledger` — which dimension a recorded decision served, and the kernel's
+  ``dimensionContext`` verdict over the ledger (the shared accounting both tool and
+  compaction read; neither one keeps its own copy)
 - :mod:`.settings` — kernel Settings bridge (IterateSettings)
 - :mod:`.loop_policy` — engine-level convergence enforcement
 - :mod:`.cost` — USD money layer over token usage
@@ -16,6 +19,10 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
 - :mod:`.personalize_cmd` — skill-parity 9-category personalize wizard
 - :mod:`.personalize_tui` — directional-key personalize wizard for the TUI
 - :mod:`.dimension_check` — skill↔harness dimension-system consistency doctor
+- :mod:`.provider_registry` — the kernel provider-registration contract (second
+  implementation, coded from the vendored corpus)
+- :mod:`.provider_producers` — this harness's own producers registered through
+  that contract, and the resolution the consumers ask through
 - :mod:`.prompts` — canonical workflow prompt templates
 - :mod:`.trend_store` — finding fingerprint trend library (new/fixed/stubborn)
 - :mod:`.worktree_flow` — fix-round git isolation orchestration
@@ -53,6 +60,15 @@ _EXPORTS: dict[str, str] = {
     "log_path": ".decision_log",
     "make_entry": ".decision_log",
     "read_entries": ".decision_log",
+    # dimension_ledger — the ledger's dimension attribution and the kernel's verdict on it
+    "contested_attributions": ".dimension_ledger",
+    "dimension_context_with_contested": ".dimension_ledger",
+    "echoed_dimension_map": ".dimension_ledger",
+    "ECHOED_DIMENSION_DATA_KEY": ".dimension_ledger",
+    "operation_dimension_map": ".dimension_ledger",
+    "planned_dimension_ids": ".dimension_ledger",
+    "project_dimension_context": ".dimension_ledger",
+    "recorded_dimension_counts": ".dimension_ledger",
     # personalize_tui
     "project_root_guard": ".personalize_tui",
     "run_tui_personalize": ".personalize_tui",
@@ -98,11 +114,42 @@ _EXPORTS: dict[str, str] = {
     "normalize_summary": ".review",
     "parse_attachments": ".review",
     "plan_to_dict": ".review",
+    # provider_producers -- this harness's producers, registered through the kernel contract
+    "ae_method_for": ".provider_producers",
+    "build_registry": ".provider_producers",
+    "ids_in_common_with": ".provider_producers",
+    "iterate_providers": ".provider_producers",
+    "producer_payloads": ".provider_producers",
+    "render_method_for": ".provider_producers",
+    "signals_carried": ".provider_producers",
     "report_from_dict": ".review",
     "report_to_dict": ".review",
     "reviewer_task_prompt": ".review",
     "ReviewAttachment": ".review",
     "sort_findings": ".review",
+    # glasspane_host_transport -- scenario ①'s host half: a read-only MCP transport, sync and awaitable
+    "GLASSPANE_SERVER_NAME_KEY": ".glasspane_host_transport",
+    "HOST_TRANSPORT_TIMEOUT_SECONDS": ".glasspane_host_transport",
+    "MCP_MANAGER_METADATA_KEY": ".glasspane_host_transport",
+    "GlasspaneAsyncTransport": ".glasspane_host_transport",
+    "GlasspaneTransport": ".glasspane_host_transport",
+    "bind_host_transport": ".glasspane_host_transport",
+    "find_glasspane_server": ".glasspane_host_transport",
+    "host_transport": ".glasspane_host_transport",
+    "make_host_acall": ".glasspane_host_transport",
+    "make_host_transport": ".glasspane_host_transport",
+    # reverify_trigger -- scenario ①'s trigger: a measured invariant failure asks the engine again
+    "GLASSPANE_ACALL_KEY": ".reverify_trigger",
+    "GLASSPANE_TRANSPORT_ABSENT_KEY": ".reverify_trigger",
+    "GLASSPANE_TRANSPORT_KEY": ".reverify_trigger",
+    "REVERIFICATION_STATE_KEY": ".reverify_trigger",
+    "record_reverification_run": ".reverify_trigger",
+    "recorded_operation_ids": ".reverify_trigger",
+    "reverification_targets": ".reverify_trigger",
+    "trigger_reverification": ".reverify_trigger",
+    "trigger_reverification_async": ".reverify_trigger",
+    # run_plan
+    "plan_path": ".run_plan",
     # settings
     "IterateSettings": ".settings",
     "effective_review_rounds": ".settings",
@@ -136,6 +183,21 @@ __all__ = [
     "TEMPLATE_PRESETS",
     "META_REVIEW_CHECKS",
     "PR_COMMENT_MARKER",
+    "GLASSPANE_TRANSPORT_KEY",
+    "REVERIFICATION_STATE_KEY",
+    "GLASSPANE_TRANSPORT_ABSENT_KEY",
+    "GLASSPANE_SERVER_NAME_KEY",
+    "HOST_TRANSPORT_TIMEOUT_SECONDS",
+    "MCP_MANAGER_METADATA_KEY",
+    "GLASSPANE_ACALL_KEY",
+    "GlasspaneAsyncTransport",
+    "GlasspaneTransport",
+    "bind_host_transport",
+    "find_glasspane_server",
+    "host_transport",
+    "make_host_acall",
+    "make_host_transport",
+    "trigger_reverification_async",
     "SEVERITY_RANK",
     "AggregateSnapshot",
     "CostMeter",
@@ -156,9 +218,11 @@ __all__ = [
     "TrendRecord",
     "ValidationResult",
     "ReviewAttachment",
+    "ae_method_for",
     "aggregate_rounds",
     "append_entry",
     "build_final_review_report",
+    "build_registry",
     "build_review_plan",
     "build_review_report",
     "clear_checkpoint",
@@ -174,7 +238,9 @@ __all__ = [
     "finding_key",
     "findings_schema",
     "flatten_commands",
+    "ids_in_common_with",
     "is_command_allowed",
+    "iterate_providers",
     "load_canonical_dimensions",
     "load_config",
     "load_effective_config",
@@ -188,30 +254,46 @@ __all__ = [
     "next_round_instruction",
     "normal_kickoff",
     "normalize_summary",
+    "contested_attributions",
+    "dimension_context_with_contested",
+    "echoed_dimension_map",
+    "ECHOED_DIMENSION_DATA_KEY",
+    "operation_dimension_map",
     "personalization_constraints",
     "parse_attachments",
+    "planned_dimension_ids",
+    "plan_path",
     "plan_to_dict",
     "post_pr_comment",
     "price_for",
+    "producer_payloads",
     "project_config",
+    "project_dimension_context",
     "project_root_guard",
     "read_entries",
+    "record_reverification_run",
     "record_run",
+    "recorded_dimension_counts",
+    "recorded_operation_ids",
     "render_doctor_report",
     "render_diff",
     "render_markdown",
+    "render_method_for",
     "render_trend_summary",
     "report_from_dict",
     "report_to_dict",
+    "reverification_targets",
     "reviewer_task_prompt",
     "run_command",
     "run_dimension_doctor",
     "run_tui_personalize",
     "run_validation",
     "save_checkpoint",
+    "signals_carried",
     "sort_findings",
     "summarize",
     "summarize_changes",
+    "trigger_reverification",
     "validate_config",
 ]
 

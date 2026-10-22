@@ -12,7 +12,8 @@ decision each accepted case produces, and every digest.
 
 This is an operator command, not a pytest. When node or the package is missing it exits
 2 and says so — a cross-implementation comparison that quietly skips is how "both sides
-agree" stops being checked.
+agree" stops being checked. A build whose version is not the one the corpus pins is refused
+the same way: it is a different contract, not a disagreement about this one.
 
     PYTHONPATH=src python3 scripts/diff_kernel_implementations.py
     PYTHONPATH=src python3 scripts/diff_kernel_implementations.py --kernel /path/to/kernel
@@ -156,8 +157,42 @@ process.stdout.write(JSON.stringify(out));
 """
 
 
+def _artifact_version(kernel: Path) -> str:
+    """The version string inside the built artifact the driver is about to require."""
+    try:
+        return str(json.loads((kernel / "package.json").read_text(encoding="utf-8")).get("version", ""))
+    except (OSError, ValueError):
+        return ""
+
+
+def _reject_stale_artifact(kernel: Path, want: str) -> str | None:
+    """Return why this build must not be judged against the corpus, or None when it is the pin.
+
+    `tests/kernel_fixtures` is pinned to one published version. Running the ruler against a
+    different build does not compare two implementations of one contract — it compares the contract
+    at two versions, so every case the newer one added shows up as `TS refused, Python accepted`.
+    That reads exactly like a cross-language divergence and invites somebody to "fix" the side that
+    is actually right, which is how a publish debt turns into a shipped bug.
+    """
+    if not want:
+        return None
+    got = _artifact_version(kernel)
+    if not got:
+        return (
+            f"{kernel} carries no readable version and the corpus pins iterate-kernel@{want}, so "
+            f"this build cannot be shown to be the pinned artifact"
+        )
+    if got != want:
+        return (
+            f"resolved {kernel} is iterate-kernel@{got} but the vendored corpus pins {want} — the "
+            f"wrong artifact, not a disagreement. Publish {want} from the kernel line and re-pin, "
+            f"or pass --kernel pointing at a checkout built from it."
+        )
+    return None
+
+
 def _kernel_dir(explicit: str | None) -> Path | None:
-    """Find a kernel whose *built* dist the driver can require."""
+    """Find a kernel whose *built* dist the driver can require, at the version the corpus pins."""
     candidates: list[Path] = []
     if explicit:
         candidates.append(Path(explicit))
@@ -176,9 +211,16 @@ def _kernel_dir(explicit: str | None) -> Path | None:
             "kernel",
         ):
             candidates.append(root / tail)
+    stale: list[str] = []
     for cand in candidates:
-        if (cand / "dist" / "convergence.js").is_file():
+        if not (cand / "dist" / "convergence.js").is_file():
+            continue
+        reason = _reject_stale_artifact(cand, version)
+        if reason is None:
             return cand
+        stale.append(reason)
+    for reason in stale:
+        print(f"  refused: {reason}", file=sys.stderr)
     print(f"  looked for a built dist under: {', '.join(str(c) for c in candidates[:8])}…", file=sys.stderr)
     if version:
         print(f"  manifest pins iterate-kernel@{version}; a checkout on another ref is not the artifact.", file=sys.stderr)

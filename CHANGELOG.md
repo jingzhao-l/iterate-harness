@@ -4,7 +4,445 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-10-22
+
+### Fixed
+
+- **`tasks/manager.py`：投递监视器不再把已经干完的活儿重跑一遍。** 监视器判断"payload 有没有被读"
+  的唯一信号是写入之后输出文件是否增长，所以基线必须在写入**之前**采样。旧实现先 `sleep` 100ms
+  再采基线——一次快得可怜的 worker（`python -u -c "import sys; print(sys.stdin.readline())"`）
+  在这 100ms 里已经把回显写进文件，于是回复被算进"写入前的旧输出"，监视器判定"没有新输出＝
+  payload 被吞了"，把一条已 `completed` 的任务拉回 `running`、重新投递、把输出重复一份、
+  `SUBAGENT_STOP` 触发两次。实测 6/6 复现（`restart_count=1`，输出里多出一份 restart 告示）。
+  现在基线在写入前采，并加一个有上限的"安静轮询"（`_OUTPUT_BASELINE_SETTLE` 50ms /
+  `_OUTPUT_BASELINE_POLL` 10ms）等异步 copier 把最后一块刷完，避免把**写入前**但还没落盘的
+  输出误判成回复；两种失败方向都被压到亚毫秒量级，而不是原来的 100ms 窗口。
+  反向也钉住：真正被吞的 payload 仍然会被重启补投
+  （`test_delivery_monitor_still_redelivers_a_swallowed_payload`）。
+  两条新用例都经过反向变异验证——把源码改回旧实现时
+  `does_not_restart_a_completed_one_shot_agent` 当场红在 `assert 'running' == 'completed'`，
+  与最初的失败现场一致。
+
+- **`personalization/extractor.py`：`git_remote` 终于能抽出远程地址了。** 旧正则
+  `(?:github|gitlab)\.com[:/](\S+?)(?:\.git)?` 里 `\S+?` 是懒惰的、后面又跟一个可选的
+  `(?:\.git)?`，于是永远只匹配一个字符——`github.com:jingzhao-l/iterate-harness.git` 抽出
+  `'j'`，然后被 `len(value) < 3` 的守卫静默丢弃。结果是这一类事实**从来没被记过**，
+  而 `_FACT_PATTERNS` 里其余九条都正常。改为 `((?:[\w-]+(?:\.[\w-]+)*/)+[\w-]+)`：
+  最后一段刻意不允许点号，这样贪心匹配吞不进 `.git` 后缀；带点号的 owner
+  （`owner.name/repo`）仍能匹配。实测：`.git` 后缀 → `jingzhao-l/iterate-harness`，
+  无后缀 → `foo/bar`，`gitlab.com/team/api.git` → `team/api`。5 条新用例，
+  反向变异（把正则换回旧写法）5 条同时变红。
+
+- **`personalization/extractor.py` / `session_hook.py`：抽出本地规则不再因坏历史崩掉，
+  也不再是一份没人调的副本。** `extract_local_rules()` 直接对 `msg.get("content")` 取值，
+  历史上任何一条不是 dict 的条目（截断的记录、手工改过的存档、`[]`、`None`、裸字符串）都会
+  抛 `AttributeError` 把整个会话收尾钩子打断；content 是 list 时也没有校验 block 里的
+  `text` 是不是字符串，`[{"text": None}]` 会在 `"\n".join()` 上炸 `TypeError`。
+  另外它一直挂在 `__all__` 里作为公共 API，但**没有任何调用方**——真在跑的是
+  `session_hook.update_rules_from_session()`，它自己写了一份几乎相同的收集循环。
+  现在把收集逻辑提成 `_collect_message_text()`，两种形态（线上 dict 形状 / 内存里的
+  `ConversationMessage` 对象，block 的 `text` 或 `content` 字段）走同一份实现，
+  非 dict 条目与类型不对的字段一律跳过而不是抛异常；`extract_local_rules` 与
+  `session_hook` 都改用它，死代码清零、行为收敛到一处。7 条新用例覆盖 dict 形态、
+  对象形态、各类畸形条目与非法入参。
+
+- **`iterate/loop_gates.py` / `loop_policy.py`：两处 mypy 一直在报的类型洞补上，
+  而且"闸门已测量"与"没有阻塞"被收成同一个判据。** `loop_gates.py` 从 `.types` 导入
+  `Finding`，而 `types.py` 里只有 `ReviewFinding`——`mypy src` 因此恒定报
+  `has no attribute "Finding"`；改为真实类型，`metadata` 也顺带从 `dict[str, Any]` 收紧到
+  `dict[str, object]`。`loop_policy.py` 的 `_kernel_decision` 把
+  `snapshot.invariant_state`（`str | None`）和 `evidence_complete`（`bool | None`）直接喂给
+  `RoundState`，而 `RoundState` 要的是四个判决字的 `Literal` 联合与真正的 `bool`——mypy 恒报
+  `arg-type`。根因是"没有阻塞 ⇒ 两把闸都已测量"这个不变量只存在于
+  `kernel_blockers()` 的返回语义里，type checker 看不穿那个 helper，于是拿一个 `str | None`
+  冒充 `Literal`。现在把收窄点提成 `_validated_snapshot()`（`kernel_blockers` 与
+  `_kernel_decision` 共用，两个答案必须一致），返回值标成 `tuple[InvariantState, bool] | None`，
+  `AggregateSnapshot.invariant_state` 本身也改标成 `InvariantState | None`——
+  唯一的产出方 `_read_invariant_state` 只会给出那四个合法值，标 `str` 是承诺了快照实际持不住
+  的东西；该函数里的 `in` 成员判定是真正的运行时守卫，`cast` 只是把守卫已经证明的事实说给
+  mypy 听（mypy 无法凭 `in` 对字面量元组的判定收窄 `str`）。`mypy src` 由 2 error 归零，
+  260 files 干净；`ruff check` 同时清掉 `tests/test_services/test_compact.py` 里一个未使用的
+  `TextBlock` 导入。
+
+- **npm 包装器：无人值守的首次运行不再自动确认下载；stamp 现在记得运行时是"怎么装出来的"。**
+  五条各不相关的缺陷一起修掉：
+  ① `askYesNo(question, defaultNo=true)` 的超时/EOF/空输入回落到 `defaultNo`，也就是
+  **true＝继续**——而提示打印的是 `[y/N]`。无人值守（`< /dev/null` 或 120s 无回应）的
+  首次运行会**自动确认几百兆的下载**，用户从来没同意过。现在回落值统一取 `!defaultNo`，
+  与显示出来的默认一致，提示也写明回落到了哪一个默认值；原先把错误语义钉成正确的那条
+  测试已经反转并扩充为 7 条。
+  ② stamp 以前只记版本字符串，所以换掉 `ITERATE_HARNESS_PYTHON` 或 `ITERATE_HARNESS_INSTALL_URL`
+  后 stamp 仍然"匹配"，包装器会静默复用一份不是用户当前配置装出来的运行时。
+  现在 stamp 是 JSON（`version` + `pythonEnv` + `source`），三者任一变化都触发重装；
+  老的裸版本 stamp 标记为 `legacy`，版本匹配时重装一次并重写成新格式——升级本身就会因
+  版本变化而重装，所以这条路径不额外付出成本。
+  ③ `packageVersion()` 在 `package.json` 读不出时返回 `"0.0.0-unknown"`，而
+  `needsBootstrap` 永远判定"过期"，于是一次注定失败的
+  `pip install iterate-harness==0.0.0-unknown` 在**每一次**调用上都跑一遍。现在版本号不可读时：
+  有现成运行时就复用并提示，没有则以可执行的报错退出，而不是尝试一个不存在的版本。
+  ④ `DOWNLOAD_TIMEOUT_MS`（120s）大于 `DOWNLOAD_TOTAL_TIMEOUT_MS`（60s），按请求的超时分支
+  永远不会触发（总时限一定先到）。下调到 30s，让那条分支重新可达。
+  ⑤ 包装器参数只应在 `--` **之前**属于包装器，`ih sub -- --no-verify` 以前会把
+  转发给子进程的标志吞掉（抽成 `splitHarnessArgs()` 便于单测）；以及 `reportBootstrapFailure`
+  与 `child.on("error")` 里的 `process.stderr.write` 在错误处理器内部可能再次抛错，
+  把已处理的失败变成未处理的异常——包上 `safeWriteTo()`。
+  npm 测试从 76 条扩到 89 条全绿。
+
+- **`pyproject.toml`：把 `mcp` 的 Dependabot 升级回收到源头，而不是在发版时把它回退掉。**
+  独立发布仓 `jingzhao-l/iterate-harness` 已接受 `mcp 2.0.0 → 2.2.0`，但本 subtree 仓库把
+  `uv.lock` 列为 gitignore，那处 bump 没有 lockfile 跟随、也就没回流到这里，于是
+  **产物比它自己声明的依赖新**（独立仓是 2.2.0，源头是 2.0.0）。发版同步 tree 时若照抄
+  源头，就会把那处已接受的升级静默回退。改为在源头补上升级：2.2.0 里
+  `mcp.server.mcpserver` 从模块变成了包，但包的 `__init__` 仍从 `.server` 重导出 `MCPServer`，
+  客户端 `mcp.client.stdio.stdio_client` 与
+  `mcp.client.streamable_http.streamable_http_client` 入口未变——`src/iterate_harness/mcp/client.py`
+  与 `tests/test_mcp/` 用到的每个符号都逐一导入验证过。全量 2879 passed，与 2.0.0 读数一致。
+
 ### Added
+
+- **#23 面 A 的回显有了读者：交叉核对只减不加，缺回显永不算异议（场景②/⑧ 的补账）。**
+  上一批给面 A 装了 `dimension` 槽并让它把声明回显成独立 content item；如果没人读它，那行字就只是
+  多一块表面——本仓反复把这种形状叫"没交付"。现在它有读者，且读者只做一件事：**怀疑**，不裁决。
+  `relay_answer` 从旁项里认出 `dimension: <id> | …` 这一行，填进新的
+  `RelayedAnswer.echoed_dimension`，而**该行仍原样留在 `annotations` 里**（读出≠吃掉，模型照旧看得见
+  壳写的每一个字）；`reverify_trigger._relay_answer` 把它作为结构化字段
+  `echoedDimension` 同时写进这一轮的载荷与 ledger 那一行，读者因此不必去刮一句它没写过的话——写侧与
+  读侧共用 `dimension_ledger.ECHOED_DIMENSION_DATA_KEY` 这一个键名常量，两侧对不上时红在读侧而不是
+  一起静默失配。
+  `dimension_ledger` 新增 `echoed_dimension_map` / `contested_attributions` /
+  `dimension_context_with_contested`：一条决策把 op 归给维度 X，而壳为同一 op 的回答回显了 Y≠X，
+  这条归属就被**扣住不计**，该维度重新读作 unverified——并且扣了几条写在同一行覆盖率话术里
+  （`_dimension_coverage_line` 只在真有扣计时追加那句，没扣计时那行字节一字不动）。三条边界是这批的
+  全部要点：**缺席的回显永不算异议**（面 B 把声明放在 metadata 里，那里根本没有这行字，把沉默读成
+  不同意就是拿一侧的写法去判另一侧）；**畸形的回显算沉默而不是另一种主张**（id 过内核校验器才认，
+  过不了就不认，绝不让一个坏值变成反驳）；**交叉核对只减不加**（一句回显永远不能替账本凭空记上一个
+  维度的证据）。`project_dimension_context` 与 `dimension_context_with_contested` 从同一次读盘产出
+  结论与扣计数——两次读盘会让"数字"与"它描述的那份账"不是同一份，那是比不报数更坏的东西。
+  新增 `tests/test_iterate/test_dimension_echo.py` 15 条：证据包取自随包语料
+  （`tests/kernel_fixtures/evidence-decision.ok-01.json`）而不是手写形状，ledger 行由真实记录器
+  `record_reverification_run` 写出而不是拼字典——写侧停发这个字段时读侧用例点名变红，而不是两侧一起
+  跟我的猜测达成一致。变异七发逐一点名变红（不提取／把旁项吃掉／收下畸形 id／关掉交叉核对／把沉默
+  当异议／结论不再扣减／写侧停发字段），按自带备份 + sha256 核回。`tests/test_iterate` 与压缩顺序套件
+  合计 1221 passed，ruff 干净；回显行的形状来自父仓 `mcp-shell/src/dimension.ts`，因此本侧读得宽、
+  认得严：措辞漂了最多是让交叉核对不发生，不会把判决读反。
+  真机走查（2026-10-22，本机 /usr/local/bin/glasspane-mcp，非夹具）：McpClientManager 连上已安装的那个壳
+  （广告 16 个工具），在引擎 loop 上 await 这条新通路发了一次真实回验——gp_last_evidence 回 answered 并
+  带上被引用的 op 号，gp_diagnose 回 refused 且用的是 daemon 自己的 GP_E_NOT_ATTACHED 与它自己的 remedy
+  （"call attach first"，一字未改），载荷 attempted=True / verified=True / clean=False，账上多出一条
+  reverification 归属行。两条回显字段都是 None——本机装的这个壳还是面 A 那批之前的构建，它还不写那行字，
+  于是新读者读到的是沉默而不是异议，这正是该行为在生产形状下的证明。反过来讲：回显这条链的端到端
+  （面 A 写 → Python 读）目前只有单元与变异证据，要等父仓把带槽的壳装上本机才算真机闭合。
+- **#22 场景①真正接通：发布点改为 await，宿主一次绑两份 transport——并如实记下上一批那份"绑了但跑不到"。**
+  回代码复核 #21 的落地形状（不是推测，是读到的行）：`engine/query.py:801` 与 `:1521` 用
+  `await tool.execute(...)` 驱动工具，`ui/runtime.py:298-300` 在引擎 loop 上 `await connect_all()`、
+  `:424` 把同一个 manager 放进 tool metadata ⇒ 发布点**恒**在拥有 MCP session 的那个 loop 内。
+  `make_host_transport` 的接受分支只在"本线程无 running loop"时才走，因此它在生产里一次也没跑到，
+  每一轮读回的都是 `GP_E_HOST_LOOP_BUSY`。更要紧的是当时那条端到端用例把这句拒绝**断成了期望行为**
+  （`{answer["code"]} == {LOOP_BUSY_CODE}`）：闸是绿的，通道是死的——"测试通过"与"能力存在"是两回事，
+  这一处正是本项目反复告诫的那类假绿。跨 loop 驱动也不行（session 绑定在连接它的那个 loop 上），
+  所以唯一的诚实出路就是本批做的：在拥有客户端的循环上 await。新增 `make_host_acall(manager, server)`
+  ——同一份 deny-by-default 只读集合（`READ_ONLY_TOOLS` 从契约 import，不复述名字）、在 await 之前拒、
+  消费 `call_tool_parts` 交 `list[str]`；有意不再套一层 `asyncio.wait_for`：客户端自己的
+  `_bounded_await`/120s 决定错误形状，宿主加第二个计时器只会改写"该报哪个超时"。
+  `bind_host_transport` 改为一次发现绑两份（`GLASSPANE_TRANSPORT_KEY` + `GLASSPANE_ACALL_KEY`），
+  键串只在 `reverify_trigger` 定义一处并由宿主 import，具名用例数 `src/` 里该字面量的出现次数来防第二份
+  契约漂移。`trigger_reverification` 拆成 `_prepare`（能不能问、问哪些、拒绝怎么转述）+ `_finalize`
+  （发布载荷与 ledger 那一行），同步/异步两个触发器只差"怎么驱动"，规则正文不再有两份。
+  `_sync_transport` 现在过滤 coroutine 函数：把 awaitable 误绑到同步键上，原先会被真的调用、拿回一条
+  `GP_E_ASYNC_HOST` 拒绝并**以引擎回话的形状**进入 relay——本项目不接受这种冒充。
+  端到端断言改成立：真实 `tool.execute` 路径下 `attempted=True`、两条答案 `state=answered`、
+  `code` 集合恰为 `{None}`、帧走 `call_tool_parts` 且 `joined_calls==[]`、三个 content item 里两条旁项
+  原样进 `annotations`、`verified=True` 而 `clean=False`（引擎说"claim still does not hold"不会被这侧洗白）、
+  ledger 恰多一条、`invariant_state` 仍是 `fail` 且不因回验成功而变 measured。另加
+  `_LoopPinningClient` 断"驱动 session 的 loop 就是连接它的那个 loop"，跨 loop 这条错误出路从此是失败
+  断言而不是挂起；同步 transport 保留给无 loop 的宿主（CLI / 测试体），其在循环内的具名拒绝用例一字未改。
+  变异四发各点名一条用例变红（异步触发器无视 acall／acall 放弃只读拒绝／同步触发器把协程函数当
+  transport／宿主只绑同步那份），按自带备份 + sha256 核回；第一版 M3 打不动任何用例，因为我那条负例把
+  awaitable 绑在**异步键**上、同步触发器根本不看那个键——重写为绑错到同步键上之后 M3 当场点名变红，
+  这条账记在这里是因为"我的负例测的是自己写的键"正是假绿的另一种形状。全套件 2849 passed / 6 skipped /
+  4 failed——那 4 条在 pristine main（`3a0dc70d`）隔离复跑同样红，是本机无 `python` 可执行文件的既有环境
+  失败（`return_code=127`），与本批无关。`test_host_transport.py` 收集数 23 → **31**（新增 8 条）。
+- **#21 场景①的宿主半：harness 自己绑定同步只读 GlassPane transport，失败判决真的送达引擎。**
+  `reverify_trigger` 的规则 5 一直如实记录 "not attempted"，因为这个仓库里没有人绑过 transport——
+  `McpClientManager` 是 async，`run_reverification` 是 sync sender。新增
+  `iterate/glasspane_host_transport.py`：`bind_host_transport(metadata)` 从 run 已有的
+  `mcp_manager` 造出 transport 并绑到 `GLASSPANE_TRANSPORT_KEY`，`_aggregate` 只在合并副本上绑，
+  callable 绝不进入跨轮折叠的 durable `tool_metadata`。四条构造性约束：(1) 只读——工具集合
+  `from glasspane_reverification import READ_ONLY_TOOLS`，不复述名字，且写工具在协程创建之前就被
+  拒（stub 记录零帧），拒绝走 shell 自己的 `CODE: msg | remedy: R` 形状 `GP_E_HOST_WRITE_TOOL`；
+  (2) 边界——消费 `call_tool_parts()` 交给 `relay_answer` 的是 `list[str]` 而非 join（具名测试拿
+  join 后的同样字节反证 `unparseable`）；(3) 再入——发布点在引擎 loop 内，故分两种可观测行为：
+  本线程无 running loop 就 `asyncio.run(wait_for(...))` 有界驱动（窗口 150s 大于客户端自己的
+  120s，让客户端错误形状先赢），本线程已有 running loop 就**不发**、返回 `GP_E_HOST_LOOP_BUSY`
+  并把 remedy 写成宿主可执行的两条出路（为回验单独配 stdio session，或由拥有 client 的 loop
+  await `run_reverification_async`），绝不 `asyncio.run` 撞 RuntimeError 再吞成假答案；(4) 传输错误
+  与超时保持 `McpServerNotConnectedError`/`McpServerTimeoutError` → relay 成 `GP_E_CHANNEL` 带 remedy。
+  可观测性补齐：`GLASSPANE_TRANSPORT_ABSENT_KEY` 让"没绑上"读成 not attempted, because X（无 mcp
+  plane / 没有 server 广告只读工具 / server 状态是 failed），而不是沉默也不是空成功。ledger 与
+  gate 规则一字未动：无判决仍不发布任何键，回验永不使 gate 变 measured——具名测试断言 published
+  state 的 gate 键集合恰等于 `loop_gates` 测出的那个，且拒绝路径写零字节、真实发送恰一条归属条目。
+- **#20 多 item 边界：MCP 客户端不再销毁 shell 的 content-item 边界，回验 relay 改逐 item 分类。**
+  实测（2026-10-21，对当时那份代码直调）：`mcp/client.py` 把 `result.content` 用
+  `"\n".join(parts)` 拼成一个字符串，`glasspane_reverification.relay_answer` 拿到"daemon 帧 +
+  任何第二项"一律判 `unparseable`——而 shipped `glasspane-mcp` 的 `gp_diagnose` **今天就回多项**
+  （帧 + `update state:` 块，见 GlassPane `mcp-shell/test/update-state.test.mjs`；2026-10-20 批次
+  又加了 `provider: … | declared prerequisites: …` 归属行）。这不是新发生的，是早已成立，只是没有
+  真形状测试。修法在消费端：`McpClientManager.call_tool_parts()` 返回逐 item 的 `list[str]`
+  （非 text 项、`structured_content`、`(no output)` 兜底逐项保留，不发明新政策），`call_tool`
+  改为它的 `"\n".join(...).strip()`——LLM 看到的东西一字不变，具名测试钉住字节相等；错误面
+  （`McpServerNotConnectedError`/超时）不动。`relay_answer` 接受 `str` / `Mapping` / `Sequence[str]`：
+  多 item 时选"第一项能 parse 成 JSON 对象或匹配 shell 编码拒绝形状"的那项做判决，**其余每项
+  原样存进 `RelayedAnswer.annotations`** 并由 `to_model_lines()` 逐条逐字展示（update 块和归属行
+  是关于这次调用的用户可见事实，丢掉与读不到帧同错）。`_refusal_from_text` 从此只作用于单项
+  （docstring 补了多 item 的实测句）。joined `str` 输入**保持** `unparseable` 语义、绝不按换行
+  重切——合法帧的文本自己就带换行，重切是猜边界，负控制测试钉住这条。`reverify_trigger` 的宿主
+  传输契约改述为 parts 形状（返回 `list[str]` 或纯 `str` 都合法），无判决则依旧一言不发。
+  综述 §8.5 场景③"无 CLI 文本解析"由此真正成立：判定路径上没有任何文本拼接再解析。
+  具名测试：`tests/test_mcp/test_call_tool_parts.py`（1/2/3/padded item 的 join==parts、非 text 项、
+  兜底、错误面）；`test_glasspane_reverification.py`（帧+归属 answered、归属在前的乱序、
+  evidencePack+第二项仍可转录、拒绝+注记、全 unparseable 不造判决、多行帧仍解析、model lines
+  每条注记恰好一次、joined 负控制）；`test_reverify_wiring.py`（parts 传输到 round 与账本、
+  str 传输零行为变化）。
+
+
+### Changed
+
+- **内核 `iterate-kernel@0.1.9`：`zod` 从范围改成精确版本，因为发布出去的 `.d.ts` 是按那一个版本发光的。**
+  0.1.8 及之前声明 `"zod": ">=3.25.76 <5"`，而 lock 实际解析到 3.25.76、`.d.ts` 也是 zod 3 形状
+  （`ZodObject<Shape, "strict", z.ZodTypeAny, Out, In>`）。消费者一侧的解析器只要挑了 zod 4，拿到的不是
+  类型错误而是**类型消失**：`z.infer` 静默退化成 `any`，TypeScript 反而去抱怨消费者自己的回调
+  （`TS7006: Parameter 'ref' implicitly has an 'any' type`）——编译过、类型没了，两侧都绿。这不是推测：
+  GlassPane 的 `mcp-shell` 改吃发布包时当场撞上，它在下游用 npm `overrides` 把整棵树钉住才绕开。
+  上游的修法是把声明收成事实：`"zod": "3.25.76"`，并加 `kernel/test/zod-contract.test.mjs` 三条判据
+  让"声明与发光版本不一致"变不可发布（精确性、装机==声明、`.d.ts` 仍是 zod 3 形状）。反向变异三发
+  各打中具名用例，收尾 sha256 核回。将来真要换 zod major 是一次契约事件：release note 里点名、
+  与这条 canary 同批改，而不是让消费者自己撞见 `any`。
+  **已发布并追平**：`npm publish` 后 registry `latest` = 0.1.9（shasum `270a119729d3…`），`tests/kernel_fixtures/manifest.json` 升到 0.1.9，`scripts/check_kernel_fixtures.py` 对**已发布包**逐文件核过 9 份；`scripts/diff_kernel_implementations.py --kernel <0.1.9 dist>` 55 例判决、摘要与注册表语义两侧一致。
+
+
+- **场景③写侧翻转：`.iterate/decision-log.jsonl` 现在装的是内核的规范条目，不是本壳的私有形状。**
+  `decision_log.append_entry` 不再 `json.dumps({timestamp, round, type, data})`：它把这条记录经
+  `kernel_decision_record.decision_log_draft_from_record` 转录，再用 `kernel_decision_log` 追加成带哈希链的
+  条目（`sequence`/`prevEntryHash` 由链自己拥有，调用方塞不进去）。**读侧一字未改的读者**（`last_state`、
+  `ci_report`、`html_report`、`replay`、`batch`、`trend_store` 与四条 web 路由）继续拿到同一个
+  `DecisionLogEntry(timestamp, round, type, data)` 视图——转录规则 3 把 `data` 整份复制进 `payload`，
+  所以投影是有意义的，不是靠发明字段。
+  **`VALID_ENTRY_TYPES` 不再是闸门**：内核故意没有决策 kind 的封闭集（`^[a-z][a-z0-9_]{0,31}$` 是形状规则），
+  因为"加一种决定就要发一次内核"正是分叉的成因。本壳那份 8 项清单与 plugin 那份 10 项清单的差
+  （`round_failed`/`resume` 在这里被拒、在那里合法）就此结束——`append type=resume` 现在写得进去，
+  `type="Round Failed!"` 被拒并给出 remedy。清单留作 `KNOWN_ENTRY_TYPES`（文档，非校验），旧名字保留为别名。
+  **三件有意的行为改变，都不是回归**：① 全 legacy 的历史在**下一次写入时迁移**成链（逐条转录、id 的
+  时间前缀取记录自己的 `createdAt`、原字节留在同目录 `.pre-ledger-*.bak`，新链先在内存里 verify 再换文件）
+  ——id 若取迁移那一刻，八月的决定会排到它自己之后，而链照样 verify 得过，所以这条单独钉住；② 内核读不进
+  的历史（时间戳不可解析等）**拒绝追加**而不是写过去，且一个字节都不改：静默跳过正是让账本缺口看不见的方式，
+  而审计面与报告面是两个问题——`read_entries` 照旧宽容（坏行跳过、不抛）；③ 链已开始之后又出现 legacy 行
+  （TypeScript plugin 至今写旧形状）＝**拒绝**，并给出可执行出路 `archive_contested_log()`（无损归档、0600、
+  下一写从 sequence 0 重启）。这里不能"就地修好"：重算一条已带哈希的行就是伪造它，留着它则整本 verify 不过；
+  把重启做成静默行为等于抹掉连续性，所以它必须是人说的那一句——也因此归档一个健康的账本同样被拒。
+  两个 best-effort 边界（`defensive/kernel.py` 记假设、`iterate_assumption` 工具）原来只吞 `OSError`，
+  现一并吞 `DECISION_LOG_REFUSALS` 并把 code 打进日志/回包——否则一条被拒的假设记录会把它本要告知的编辑
+  循环打断。
+  证据：`tests/test_iterate/test_decision_log.py` 13 → 21 条（迁移与原字节留存、id 的时刻来源、交织拒绝
+  ＋归档往返、非交织不许归档、磁盘字节能被 `hashlib` 独立重算、目录 `0700`、kind 形状双向）；两条按新语义
+  改写（旧断言要的是 `json.dumps` 冒号后的空格，以及"坏 type 就是不在 8 项里"），一条旧宽容用例
+  （`corrupt entry 不影响后续追加`）换成"拒绝且零改动"。**未做完的一半点名**：`harness/iterate-plugin`
+  那份 TS 仍写旧形状，而它今天完全不依赖 `iterate-kernel`（只有 js-yaml 与宿主 peer 依赖）——翻转它等于给
+  一个已发布插件加一份运行时依赖，那是取号与打包的决定，不在这里替它做。
+
+- **场景④翻转：收敛判定权从审核报告交给内核（owner 2026-10-13 的裁决落地）。**
+  `loop_policy.IterateLoopPolicy._decide` 此前第一句就是 `if snapshot.converged:`——那是
+  `review.build_review_report` 对"最后一轮 0 条新发现"做的算术，不是任何人对"这一轮能不能停"的
+  判定。现在它把轮次喂给 `convergence_policy.convergence_decision`（内核 `iterate.convergence/0.1`
+  的第二份实现，53 例两侧一致由 `scripts/diff_kernel_implementations.py` 量），只有内核说
+  `halt`/`converged` 才停。**三个入参至此各有其主**：`invariant_state` 与 `evidence_complete` 由
+  轮次在 `iterate/loop_gates.py` 现场量（上一批），`breaker_level` 由**循环自己**数连续无进展轮
+  （0..3，3 即跳闸）——轮量不到所在跑的升级，所以 `loop_gates` 仍然不产它，理由从"本机没有断路器"
+  改成"它不属于轮次这一层"。跳闸在循环侧与内核规则 1 **两处都拦**：喂不进内核的跑（缺闸）正是需要
+  被拦的那个，只留内核一处就会漏。
+  **两条有意的行为改变，不是回归**：① 没测不变量闸、或没做证据举证的跑**不再自动收敛**，走到 round
+  cap 停，且停止理由点名原因——`round cap reached (3) — kernel not consulted: no invariant verdict
+  was measured; no evidence attestation was made`；② `invariant_state == "fail"` 从"停在 gate
+  failed"改成内核规则 5 的 `fix`（再多跑一轮去修），代价是一道坏掉的闸现在会花到 cap 而不是早停,
+  它守的诚实性由结构保证：`converged` 这个理由只能由内核产出。
+  `ReviewProgressEvent.converged` 随之改为**内核的结论**而非报告的旗标（UI/Web 上那句"已收敛"此前
+  可以在循环继续时亮着）；`services/compact` 跨压缩边界给模型的那行也从裸 `converged=True` 改成
+  `reviewerClaimedConverged=True` 加上实测闸位列——告诉模型一个 harness 已经不认的结论就是假指示器；
+  `iterate/prompts.py` 第 4 步的指令同步改成"停不停是循环的判断"。
+  证据：9 条新用例 + 2 条按新语义改写（旧的两条断的是"没闸也能收敛"，其前提已被裁决推翻）。其中
+  `test_the_breaker_level_is_actually_fed_to_the_contract` 是接缝用例：两处守门结果同串，不单独钉
+  "数字真喂进契约"的话，把 `breaker_level=0` 写死也没人红。变异九发各打中具名用例、前后 sha256 核回；
+  **其中第三发第一版是零红**——那道缺席门与内核自身的构造校验得出同样的停止行为、不可区分，所以没有
+  给它编一条"看起来能红"的断言，而是把拒绝原因写进停止理由，让它成为可观察、可红的 surface。
+  整包 `pytest -q` 2715 passed / 6 skipped（基线 2702，本批 +13；本机需 `python→python3` shim），
+  rebase 到 0.1.8 之后复跑 **2717 passed / 6 skipped**（多出的 2 条是契约那批自己加的 Python
+  用例），ruff 0.16.8 干净。那 2 条 warning 来自本批未触碰的 `tests/test_swarm/test_imports.py` 与
+  `tests/test_tools/test_task_tools.py`（一条未 await 的 mock 协程、一条子进程 transport 析构），
+  不是本批引入。顺带删掉 `tests/test_services/test_compact.py:640` 一处 HEAD 上就有的未用
+  import（F401）。
+  **与本批同日落地的内核 `0.1.8`（`9d6d9036`，`breakerLevel` 改为可选）关系要说清**：那批把
+  "缺席"与"0"在类型上分开，为的是让没有断路器的跑不必填一个主张"存在断路器且未跳闸"的 0；本批则
+  让 iterate 循环**有了**断路器（数连续无进展轮），所以每次咨询都带一个真实的 0..3。两种形状在这份
+  契约下都合法、主张不同，互不覆盖。
+  **一条实测的红记在案，不是本批造成的**：`scripts/diff_kernel_implementations.py` 默认解析的是
+  **已发布**产物 `node_modules/iterate-kernel@0.1.7`，那份按 required 拒收缺 `breakerLevel` 的
+  state，于是 0.1.8 新增的 `convergence/absent-breaker-still-halts-on-budget` 判成
+  `TS refused, Python accepted`。把尺子指向我按 0.1.8 源码现编的 dist 时 **55 例一致**（TS 侧
+  `test/convergence.test.mjs` 实测 24 例全过）。所以这条红不是两侧实现分叉，而是 **0.1.8 尚未发布、
+  harness 的 pin 未升级**；CI 不跑这把尺子（grep `.github/workflows` 无引用），上游不会替我喊红。
+  发布 0.1.8 并追平 `tests/kernel_fixtures` 的 pin 属内核发布线的动作（npm 不可逆），本批不代做。
+  **点名未做**：报告侧的 `converged` 字段仍是"最后一轮 0 条新发现"的算术，checkpoint / `ih iterate
+  report` / html 报告读的都是它，于是它现在可能与循环结论不一致——不一致是可见的（停止理由 + compact
+  那行的闸位列），但把三处命名统一是另一批的活，本轮没有顺手改 30 个文件。
+
+### Fixed
+
+- **`scripts/diff_kernel_implementations.py` 不再把"契约有两个版本"读成"两份实现分叉"。** 它原先按
+  候选路径拿到**第一个**有 `dist/convergence.js` 的 `iterate-kernel` 就用，不核版本。10-18 实测：
+  语料已随 `9d6d9036` 重钉到 0.1.8，而默认解析落到 GlassPane harness 里那份**已发布的 0.1.7**，
+  于是 0.1.8 新增的 `convergence/absent-breaker-still-halts-on-budget` 报成
+  `TS refused, Python accepted`。这条红又不在 CI 里（grep `.github/workflows` 无引用），下一轮跑
+  尺子的人按提示去看会以为 Python 侧写错了——最省事的"修法"是把对的那一侧改弱去对齐旧产物。
+  现在候选的版本必须等于 manifest 钉的版本，否则**跳过并打印具名拒绝**（`the wrong artifact, not a
+  disagreement`，附两条补救：内核线发布该版本后重钉，或 `--kernel` 指到按它构建的 checkout）；
+  `package.json` 读不出版本同样拒——不能假设手里那份就是钉的那份。全部候选被拒 ⇒ exit 2，与既有
+  "取不到就是红、不许静默跳过"的口径一致。
+  新 5 条用例（importlib 直接驱动脚本函数，`REPO`/`MANIFEST` 都 monkeypatch 到 tmp，不依赖本机
+  装了什么）；变异三发各打中具名用例（接受任意构建／把钉的那份判成过期／walk 直接回第一个 dist），
+  前后 sha256 核回；ruff 0.16.8 干净。实测这条红现在长成：`refused: resolved …iterate-kernel is
+  iterate-kernel@0.1.7 but the vendored corpus pins 0.1.8 …`，exit=2。
+  **决定记在这里**：本批**不代发布** `iterate-kernel@0.1.8`。npm 版本不可变，而 0.1.8 的 TS 与语料
+  仍可能在那条线上继续动，发出去就只能越过、不能替换；pin 追平属内核发布线的动作。补救命令：
+  `cd kernel && npm ci && npm run build && npm publish`，之后把 `tests/kernel_fixtures` 的语料与
+  manifest 按**已发布包**逐文件重记。
+
+### Added
+
+- **场景②的下半场：维度归属进了台账，压缩钩子按内核的判决排队。** 内核的 `decision-log-entry`
+  schema 一直允许可选的 `dimension`/`operationId`，`kernel_decision_record` 也只在它们**合法**时抄进
+  draft、不合法就静默丢掉——但生产侧从来没有人把这两个键写进 `data`：`iterate_decision_log` 的 append
+  只收一段自由 JSON。于是 `dimensionCoverage` 那行统计的是"代理恰好打了什么字"。
+  **生产者半边**：`IterateDecisionLogInput` 多收 `dimension`/`operation_id`，校验用的就是仓库其余部分
+  import 的那两件内核物件（`DIMENSION_ID_PATTERN`/`DIMENSION_ID_MAX_LENGTH` 与 `OPERATION_ID_PATTERN`），
+  这里一个字面的正则或数字都没有；不合法就按工具既有的拒绝形状给出 code＋remedy，且拒绝路径上台账
+  **一个字节都不多**（逐条前后 `read_bytes` 对比）——拼错的维度被转录悄悄丢掉，覆盖率会少报还看起来像量过。
+  合法值合并进 `data` 后由转录自己 lift；append 成功即刷新已发布的 `iterate_state["dimension_coverage"]`，
+  复用 aggregate 那一份算法。**只在快照已存在时刷新**：本工具不拥有 `iterate_state`，造一份半空的等于替
+  loop_policy 编一个没人量过的轮次数与 mode。
+  **消费者半边**：`_collect_compactable_tool_ids` 现在收 `project_root`，把每条 tool_result 的文本扫出
+  opId（搜索形式是 import 进来的 `OPERATION_ID_PATTERN` 去锚点加词界，不重述语法），经台账映射到维度，
+  顺序由 `dimension_context(planned, recorded)` 的 **status** 决定——**不比计数**，与收敛判定同一条规矩。
+  verified 维度的历史排到队首先清，非 verified 的排到队尾后清，**没有归属的块保持今天的位置一动不动**
+  （缺席只能读成缺席）；`keep_recent` 的含义没变，清的条数与今天逐条相等，变的只有"是哪几条"。
+  规则 1 在这里有一个必须写出来的后果：**已计划且被归属的维度必然是 verified**，所以能被推到队尾的
+  归属只剩"计划里没有的那个 id"，测试就是按这个形状写的。
+  两份账不再各写各的：新模块 `iterate/dimension_ledger.py` 是 run-plan 文件与台账的唯一读者，工具那行
+  与压缩那个顺序都从它出发（四个新公共名字已登记进 `_EXPORTS`/`__all__`）。
+  **测试**：`tests/test_iterate/test_decision_attribution.py` 与
+  `tests/test_services/test_compact_dimension_order.py` 共 21 例；变异七发各打中具名用例——去掉校验(3 红)、
+  大小写折叠(4 红，含既有 `test_aggregate_coverage_counts_only_valid_dimensioned_entries`)、改成首次归属取胜(2 红)、
+  连未归属的块一起重排(3 红)、拿计数比代替内核 status(3 红)、多清一块(预算不变性那例红)、从
+  `compact_conversation` 那里漏传 `project_root`(接线那例红，证明它不是空跑)——三个改动文件
+  每发之后都 `cp` 副本核回，sha256 逐字相等。`engine/query.py` 与 `/compact` 命令各加一个
+  `project_root` 传参把台账的根送到压缩钩子手上；不动 `mcp/client.py`、`glasspane_reverification.py`、
+  `reverify_trigger.py`，版本号一位没取。
+
+- **场景①接线：不变量判失败的那一轮，真的去问一次引擎。** `iterate/glasspane_reverification.py`
+  能发 `iterate.reverification/0.1` 也能原样转发引擎的回答，但**循环里从来没有人把请求交给它**——
+  本批补的就是这一只手。落点选在轮次发布处（`iterate_review` 的 aggregate），因为只有那里同时握着
+  四样输入：`loop_gates.measured_gates` 刚**量过**的 invariant 判决、该判决背后的那份 invariant 报告
+  （请求的 `trigger.reportDigest` 要引它）、本轮即将发布的 `iterate_state`、以及台账的根。
+  `loop_policy` 只能在轮边界看到已经转发过的判决字符串、看不到报告，在那里建请求等于替它造一份
+  报告；`engine/query.py` 则刻意不把 defensive kernel 带回 tool_metadata（`DEFENSIVE_KERNEL_KEY`
+  在合并时被跳过），所以它也拿不到报告。绑定规则全部是既有规则，写在新模块的 docstring 里：
+  **没有判决就一个字都不说**（返回 `None`，调用方什么都不发布——"不需要"与"不知道"必须可读出来）；
+  **判定不是我们的**（只经 `any_verified`/`all_clean` 转发，不比计数、不改判）；
+  **重验绝不把闸变成已测**（不写任何 gate key，引擎不可达/拒绝时闸与 `loop_gates` 产出的一字不差）；
+  **拒绝原样转发**；**传输由宿主给**——本仓自己的 `McpClientManager.call_tool` 是 async，而
+  `run_reverification` 是同步发送方、遇到 awaitable 回 `GP_E_ASYNC_HOST` 而不是把协程当回答归档，
+  所以宿主没在 `glasspane_reverify_transport` 交出同步只读传输时，这一轮**记下"没发送"**（这是状态，
+  不是沉默）。`defensive/kernel.py` 为此补了三个只读属性（`last_invariant_report`/`invariant_ensure`/
+  `invariant_commands`）：没有它们，真内核下这道闸根本读不到、摘要也建不出来。
+  新增 `tests/test_iterate/test_reverify_wiring.py` 12 条（真 `DefensiveKernel` 跑出来的报告 +
+  语料证据包 + 钉死的 `iterate.reverification/0.1` 词表）。
+  主代理独立验因果：把"没有判决"那条 `return None` 改成返回一个空 payload，
+  `test_no_verdict_sends_nothing_and_claims_nothing` **当场具名变红**，按 sha256 `cdac151f…` 核回后 12/12。
+  **仍未通的一半**：宿主侧的同步传输没人提供，所以这条通路今天在生产里是"记为未发送"；而
+  `mcp/client.py` 把多 item 回包 `"\n"` 拼接的做法会把一份真 `gp_diagnose` 帧读成 `unparseable`
+  （本轮实测，见 CHANGELOG 顶部那条缺陷记录）。这两件不通，场景① 只能算接好了一半。
+- **场景⑤接线：两个判定生产者真的注册，消费它们的是拒绝分支而不是装饰。** `iterate/provider_registry.py`
+  此前只有尺子读它（`scripts/diff_kernel_implementations.py` 与自身测试）。新增
+  `iterate/provider_producers.py` 以夹具 `registry.iterate` 那两条原样的 id/kind/method/requires 注册
+  `iterate-engine-ae`（`diagnose` requires `evidence-pack`）与 `iterate-report-render`
+  （`render-markdown` requires `decision-log`），**version 取 `iterate_harness.__version__` 现读**、
+  不抄夹具的 `0.1.4`（夹具注释自己说那是"写作当时的包/引擎版本"，抄它等于替产品认证一条产品没测过的主张），
+  `requires` 的词表由引擎包自己的 camelCase 字段名派生（`circuitBreaker`→`circuit-breaker`），不重打字面量。
+  两处消费都是**能改输出的**：① `glasspane_reverification._relay_pack` 先问契约"这份包可以读判定吗"——
+  信号字段全在而全空的包不再进转录（那会回一个把"没测"读成"引擎看不出来"的 `inconclusive`），
+  改由提供方的 `PROVIDER_E_METHOD` 拒绝并按引擎拒绝的原样转发 code/message/remedy，答上的那些在
+  `RelayedAnswer.method` 里带出它是按哪个方法读的（出处，不是判决）；② `iterate report --pr` 在空台账上
+  原先印 "No findings recorded."（没测的运行读起来像干净的一次），现在由注册的
+  `report-render` 拒绝，因为它声明 `requires: ["decision-log"]`。
+  具名用例 25 条（含版本变异对照、重复注册拒绝且注册表不变、`[]` 与缺 `requires` 是两个主张、
+  `ids_in_common_with` 对出厂两份回 `[]`、对夹具 `collision` 段回那两个 id），语料清单里点名这两个新消费者。
+
+- **场景②接线：运行计划真的发布，压缩账里带上内核的维度判决。** `iterate/run_plan.py` 与
+  `iterate/dimension_context.py` 此前在 `src/` 里零消费者（只有各自的测试与
+  `scripts/check_run_plan_channel.py` 用它们——2.7.x 那条更正至今成立），本批把它们放进循环：`_plan`
+  用**原始 config 映射**（`load_config`，不是 effective config——发布的必须是人写下的维度表，不是本壳
+  替没声明的项目发明的缺省值）建并写 `.iterate/run-plan.json`，回 `{path, digest, dimensions}`，并追加
+  一条 `decision` 台账把 digest 落进哈希链；`_aggregate` 把
+  `format_dimension_context(dimension_context(planned, recorded))` 压进 `iterate_state`，经
+  `AggregateSnapshot` 透传，由压缩附件打印成 `- dimensionCoverage: …`，**与私有 `byDimension` 并存不取代**
+  （后者说发现出自哪一维，前者说计划里哪几维一条决策都没有），缺席则整行不印——印一个发明的 0/0 等于
+  对压缩后的模型声称一条本壳没有的事实。recorded 只认台账 `data` 里合法的 `dimension`，没有该键的条目
+  不属于任何一维、不猜。取号留给发布线：新 payload 字段与新打印行都是用户可见形状。
+  两半未做，照实记：microcompact 的"优先压缩无关维度历史"没动（`ToolResultBlock` 只有
+  `tool_use_id/content/is_error`，与台账的 `op_<ULID>` 之间没有 join 键；可行路子是从内容里捞 `op_` 号，
+  本轮不做假样子）；`iterate_decision_log` 的 `data` 仍是自由形状，所以账里有没有维度取决于写的人是否
+  声明，把它做成显式参数是一次取号决定。
+
+- **场景④那两把闸的对照补到能红（只动测试，未动生产代码）。** 上一批的
+  `test_breaker_level_is_never_invented` 断的是 `"breaker_level" not in GATE_KEYS`，而
+  `GATE_KEYS` 这个常量在生产代码里**没有任何读者**（grep 实测只命中声明与这条测试）——于是它测的是
+  一张清单而不是行为。本批发了一版对照证据：把 `gates["breaker_level"] = 0` 真的打进
+  `measured_gates()` 后，按原式子重放那条断言**仍然绿**，而新断言（五种输入形状逐个跑
+  `measured_gates()`，断返回的键 ⊆ `GATE_KEYS` 且永不含 `breaker_level`）当场点名变红。
+  另补 `8664b0e` 点名的端到端欠账：aggregate 发布那行原先只有单元级覆盖，现在 5 条工具级用例钉住
+  真锚点⇒`True`、编造路径⇒`False`、通道关⇒键缺席、kernel 实例进 metadata⇒`invariant_state=pass`、
+  没 kernel⇒缺席。
+  变异五发（打 0 档 breaker / 硬编码 True / 无视通道开关 / 摘掉 invariant / 停止发布）各打中具名
+  用例，变异前后按 sha256 核回。`tests/test_iterate` 1065→1070，整包 `pytest -q` 2702 passed /
+  6 skipped，ruff 干净。
+  **两条如实记在案、本批不做的**：① `loop_gates.py:22` 的 `from .types import Finding` 是悬空引用
+  （真名 `ReviewFinding`，mypy 实测 `attr-defined`），origin/main 上仍在、但共享工作树里已有一条
+  **未提交**的并行编辑把它改掉——那是别人的批次，我不抄不覆盖；② `AggregateSnapshot` 仍不带
+  `evidence_complete`，因为此刻没有任何读者会读它，等④翻转那批把字段和用法一起加（先加就是没人读的
+  计数）。
+- **`iterate-kernel@0.1.8`：`RoundState.breakerLevel` 改为可选，缺席不等于 0（场景④最后一闸）。**
+  契约原文说 `breakerLevel` 是"引擎自己为这次运行报的等级"，可 iterate 循环里根本没有这个值：
+  实测 harness 只在按需复核（`gp_last_evidence`）时取证据包，没有任何地方把某个包缓存在轮次
+  metadata 里，而本机也没有断路器概念。此前 producers 只有两种选择，都不诚实：要么不发状态，
+  要么填 0——而 0 断言的是"存在断路器且未跳闸"。现在缺席合法，规则 1 显式跳过；TS/JSON Schema/
+  Python 三处同一批改，缺席与 `0..3` 在类型上就分得开。
+  对照是拿**真发布物**取的，不是自说自话：同一份 `{round:2, maxRounds:7, invariantState:pass,
+  openFindings:0, evidenceComplete:true}` 在 0.1.7 上被 `KernelSchemaError` 拒在
+  `breakerLevel`，在 0.1.8 上判 `converged / all-gates-green`；再加一条 `absent-breaker-still-halts-on-budget`
+  钉住"跳过规则 1 不等于放水"——预算到了照样 halt。语料两例 + manifest 升到 0.1.8（9 条
+  sha 全重钉）；内核 231 条、Python 收敛与语料守卫 40 条、跨语言当面比对全一致，ruff 干净。
+
+
+- **`iterate/loop_gates.py`：轮次边界只报"真的量过的闸"（场景④后半：`evidence_complete`）。**
+  聚合发布点此前只有 `invariant_state` 一条；`evidence_complete` 的真值在**另一个 action**
+  （`_meta_review`，`iterate_tools.py:391`）里算，而循环是在轮次边界做判断的——拿一个可能还没
+  发生的调用的结论当测量不行，所以在发布点用同一个纯校验自己量一遍。选择逻辑收进一个函数，
+  工具侧只剩一行 `state.update(...)`，没有端到端用例的表面积就只有赋值那一行。
+  `breaker_level` 明确**不产**：本机没有断路器，填 0 与"有断路器且报告未跳闸"不可区分——
+  所以宁可让调用方继续拒绝咨询内核，也不喂它一个没人拥有的数字（用例
+  `test_breaker_level_is_never_invented` 把这条钉住）。另钉两条容易糊过去的：证据校验关闭时
+  键必须缺席（不得默认 True）；findings 为空是"无可验证＝完整"，那不是"项目已验证"——
+  后者由 `open_findings` 说。5 条新用例；`test_iterate_tools` + 循环策略 + 两份内核套件全绿，
+  ruff 干净。判定权仍归 `loop_policy`，本批不改任何收敛行为；翻转要等 `breaker_level` 定源。
+
 
 - **`iterate/invariant_state.py`：收敛契约那个"没人看过就别装成看过"的字段，终于有了唯一
   合法的来源（场景④的前半）。** 内核的 `RoundState.invariant_state` 取

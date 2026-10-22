@@ -156,7 +156,26 @@ class McpClientManager:
         return resources
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> str:
-        """Invoke one MCP tool and stringify the result."""
+        """Invoke one MCP tool and stringify the result.
+
+        This is the join of :meth:`call_tool_parts` — byte-identical for callers that show
+        the reply to a model. A consumer that must classify the engine's answer per content
+        item (the GlassPane re-verification relay) has to use ``call_tool_parts`` instead:
+        the shipped shell answers ``gp_diagnose`` with several content items, and joining
+        them destroys that boundary before anything can read it.
+        """
+        return "\n".join(await self.call_tool_parts(server_name, tool_name, arguments)).strip()
+
+    async def call_tool_parts(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> list[str]:
+        """Invoke one MCP tool and return one string per result content item.
+
+        The item boundary is what the shell actually sends: today ``gp_diagnose`` answers
+        with the daemon frame *plus* an ``update state:`` block plus a ``provider:``
+        attribution line. This method preserves that shape — one list entry per content
+        item, with the same non-text, ``structured_content`` and ``(no output)`` fallbacks
+        ``call_tool`` has always produced — so a relay can classify the answer item and
+        keep the rest verbatim. The error surface is ``call_tool``'s, unchanged.
+        """
         session = self._sessions.get(server_name)
         if session is None:
             status = self._statuses.get(server_name)
@@ -189,7 +208,7 @@ class McpClientManager:
             parts.append(str(result.structured_content))
         if not parts:
             parts.append("(no output)")
-        return "\n".join(parts).strip()
+        return parts
 
     async def read_resource(self, server_name: str, uri: str) -> str:
         """Read one MCP resource and stringify the response."""

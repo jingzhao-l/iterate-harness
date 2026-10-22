@@ -13,6 +13,10 @@ Design constraints:
   twice edits the existing comment rather than adding a new one.
 - **Testable**: the process boundary is a single injectable ``runner``
   callable ``(args, cwd, input_text) -> (returncode, output)``.
+- **Registered-renderer gated**: ``render_markdown`` is the method
+  ``iterate-report-render`` registers under the kernel's provider contract, and it
+  declares ``requires: ["decision-log"]``. A caller that hands over the log gets that
+  prerequisite checked by the registration rather than assumed by the renderer.
 
 All rendering is pure; ``post_pr_comment`` is the only side-effectful
 entry point.
@@ -27,6 +31,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .ci_report import ReportSummary
+from .provider_producers import render_method_for
+from .provider_registry import ProviderRegistryError
 
 #: Hidden marker embedded in every posted comment (never rendered by
 #: GitHub). Used to find — and later update — OUR comment among all the
@@ -78,8 +84,38 @@ def _location(finding: dict[str, Any]) -> str:
     return _cell(file_value)
 
 
-def render_markdown(summary: ReportSummary, gate: dict[str, Any] | None = None) -> str:
-    """Render the report as a Markdown PR comment (marker-anchored)."""
+def render_markdown(
+    summary: ReportSummary,
+    gate: dict[str, Any] | None = None,
+    *,
+    decision_log: object = None,
+) -> str:
+    """Render the report as a Markdown PR comment (marker-anchored).
+
+    ``decision_log`` is the material the summary was read from, for callers willing to
+    say what it was. ``iterate-report-render`` registers ``render-markdown`` as requiring a
+    ``decision-log``, so handing the renderer its own material lets that contract answer a
+    question the renderer used to skip: a run with nothing in the log has no verdict to
+    publish, and posting "No findings recorded." for it would present an unmeasured run as a
+    clean one. A refusal is rendered as the provider's own code/message/remedy rather than
+    raised — this module's contract with CI is that it degrades, never throws.
+
+    Leaving ``decision_log`` out is not the same claim as handing it an empty log (the
+    contract's own absent-vs-empty distinction), so those callers render as before.
+    """
+    if decision_log is not None:
+        try:
+            render_method_for(decision_log)
+        except ProviderRegistryError as error:
+            return "\n".join(
+                [
+                    PR_COMMENT_MARKER,
+                    "## iterate report",
+                    "",
+                    f"**renderer refused:** {error.code}: {error.message}",
+                    f"- remedy: {error.remedy}",
+                ]
+            )
     header = (
         f"**mode:** {_cell(summary.mode)} · **verdict:** {_cell(summary.verdict)} · "
         f"**findings:** {summary.total_findings}"

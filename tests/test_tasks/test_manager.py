@@ -96,6 +96,114 @@ async def test_write_to_stopped_agent_task_restarts_process(tmp_path: Path, monk
     assert updated.metadata["status_note"] == "Task restarted; prior interactive context was not preserved."
 
 
+async def _await_monitor_settled(manager: BackgroundTaskManager, task_id: str, timeout: float = 10.0) -> None:
+    """Wait until the task's delivery monitor has finished (or is gone).
+
+    The monitor pops itself out of ``_delivery_monitors`` on completion, so the
+    dict is the authoritative "still watching" signal. Polling it keeps these
+    race tests honest about *behaviour* rather than about a guessed sleep.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        monitor = manager._delivery_monitors.get(task_id)  # type: ignore[attr-defined]
+        if monitor is None or monitor.done():
+            return
+        await asyncio.sleep(0.02)
+    pytest.fail(f"delivery monitor for {task_id} did not settle within {timeout}s")
+
+
+async def _await_restarted_and_terminal(
+    manager: BackgroundTaskManager, task_id: str, timeout: float = 15.0
+) -> TaskRecord:
+    """Wait until a task has been restarted at least once and gone terminal."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        record = manager.get_task(task_id)
+        if record is not None and int(record.metadata.get("restart_count", "0")) >= 1:
+            if record.status in {"completed", "failed", "killed"}:
+                return record
+        await asyncio.sleep(0.02)
+    record = manager.get_task(task_id)
+    assert record is not None
+    pytest.fail(f"task {task_id} was not restarted to a terminal state; status={record.status}")
+
+
+@pytest.mark.asyncio
+async def test_delivery_monitor_does_not_restart_a_completed_one_shot_agent(
+    tmp_path: Path, monkeypatch
+):
+    """Regression test for the delivery baseline race.
+
+    A worker that reads its prompt, echoes it, and exits is a *healthy*
+    one-shot run. The monitor's only evidence that the payload was consumed is
+    output appearing after the write, so the baseline must be snapshotted
+    **before** the write: sampling it behind a settle delay folded the reply
+    into "pre-existing output", made the run look like a swallowed delivery,
+    and restarted already-finished work (flipping a terminal record back to
+    "running" and doubling the output).
+    """
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    manager = BackgroundTaskManager()
+
+    task = await manager.create_agent_task(
+        prompt="ready",
+        description="quick worker run",
+        cwd=tmp_path,
+        command='python -u -c "import sys; print(sys.stdin.readline().strip())"',
+    )
+
+    await asyncio.wait_for(manager._waiters[task.id], timeout=30)  # type: ignore[attr-defined]
+    await _await_monitor_settled(manager, task.id)
+
+    updated = manager.get_task(task.id)
+    assert updated is not None
+    assert updated.status == "completed"
+    assert updated.return_code == 0
+    # No restart: the work ran exactly once.
+    assert int(updated.metadata.get("restart_count", "0")) == 0
+    output = manager.read_task_output(task.id)
+    assert output.count("ready") == 1
+    assert "restarted" not in output
+    await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_delivery_monitor_still_redelivers_a_swallowed_payload(
+    tmp_path: Path, monkeypatch
+):
+    """Guard the other direction of the delivery contract.
+
+    A worker that has already printed its last turn and then exits *without*
+    reading a follow-up has genuinely swallowed the payload. The baseline
+    change must not disable the restart: the record is brought back and the
+    message re-delivered, so a follow-up can never silently evaporate.
+    """
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    manager = BackgroundTaskManager()
+
+    task = await manager.create_agent_task(
+        prompt="first turn",
+        description="dying worker",
+        cwd=tmp_path,
+        # Prints its last turn, then exits without ever reading stdin.
+        command='python -u -c "import time; print(\'turn1\'); time.sleep(1.5)"',
+    )
+    # Let the first turn flush so the write below has a non-empty baseline.
+    await asyncio.sleep(0.4)
+
+    # Lands in the pipe while the worker is still alive, then discarded when
+    # the worker exits without reading it: a genuine swallowed delivery.
+    await manager.write_to_task(task.id, "follow-up")
+    updated = await _await_restarted_and_terminal(manager, task.id)
+
+    assert updated.status == "completed"
+    assert int(updated.metadata.get("restart_count", "0")) == 1
+    output = manager.read_task_output(task.id)
+    assert output.count("turn1") >= 2
+    assert "restarted" in output
+    await manager.aclose()
+
+
 @pytest.mark.asyncio
 async def test_create_shell_task_stores_env_on_record(tmp_path: Path, monkeypatch):
     """``env=`` passed to ``create_shell_task`` must land on the

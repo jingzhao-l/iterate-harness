@@ -25,6 +25,7 @@ import pytest
 from iterate_harness.iterate.glasspane_reverification import (
     MUTATING_TOOLS,
     DeferredTarget,
+    ReverificationRun,
     plan_calls,
     relay_answer,
     run_reverification,
@@ -214,3 +215,120 @@ def test_the_request_digest_is_the_one_the_invariant_report_carries() -> None:
 def test_a_mutating_tool_name_can_never_reach_the_engine(tool: str) -> None:
     calls, _deferred = plan_calls({"targets": {"operationIds": [_real_pack()["operationId"]]}})
     assert all(name != tool for name, _args in calls)
+
+
+# ---------------------------------------------------- the multi-item reply (the shipped shape)
+
+#: The daemon frame the shell sends as item 0, the ``update state:`` block it appends as
+#: item 1, and the ``provider:`` attribution the 2026-10-20 batch added as item 2. Shapes
+#: copied from the GlassPane tests ``mcp-shell/test/update-state.test.mjs`` and
+#: ``mcp-shell/test/qoder-20261019-remedy-executability.test.mjs`` — ``gp_diagnose`` really
+#: answers with all of them, as SEPARATE content items.
+
+DAEMON_FRAME = json.dumps(
+    {"operationId": "op_20261021_0001", "diagnosis": {"class": "T0", "report": "the GUI claim still does not hold"}}
+)
+UPDATE_BLOCK = (
+    "update state: status=up-to-date current=1.6.2 latest=1.6.2"
+    " updatedAt=2026-10-20T04:00:00.000Z autoUpdate=on\n"
+    "ca trust bundle: this install has never recorded an export."
+    " NOT the same as \"the bundle is fine\".\n"
+    "updater self-update: refreshed — /Users/x/.glasspane/runtime/1.6.2/updater/cli.js"
+)
+PROVIDER_LINE = (
+    "provider: glasspane-engine-ae version 0.1.9 method diagnose"
+    " | declared prerequisites: evidencePack with at least one non-empty signal field"
+)
+
+
+def test_frame_plus_attribution_is_answered_with_the_attribution_kept() -> None:
+    """The measured defect: a frame joined with a second item used to read `unparseable`.
+
+    With the boundary preserved, the frame answers and the attribution survives verbatim —
+    dropping it would throw away a user-visible fact about the call.
+    """
+    answer = relay_answer("gp_diagnose", {}, [DAEMON_FRAME, PROVIDER_LINE])
+    assert answer.state == "answered"
+    assert answer.outcome == "T0"
+    assert answer.operation_id == "op_20261021_0001"
+    assert answer.annotations == (PROVIDER_LINE,)
+
+
+def test_the_answer_item_is_found_whatever_position_the_shell_put_it_in() -> None:
+    answer = relay_answer("gp_diagnose", {}, [UPDATE_BLOCK, DAEMON_FRAME])
+    assert answer.state == "answered"
+    assert answer.outcome == "T0"
+    assert answer.annotations == (UPDATE_BLOCK,)
+
+
+def test_an_evidence_pack_frame_still_transcribes_beside_a_second_item() -> None:
+    """The path that was silently dying: pack frame + update block. The pack must transcribe."""
+    pack = _real_pack()
+    frame = json.dumps({"evidencePack": pack})
+    answer = relay_answer("gp_last_evidence", {"operationId": pack["operationId"]}, [frame, UPDATE_BLOCK])
+    assert answer.state == "answered"
+    assert answer.operation_id == pack["operationId"]
+    assert answer.outcome in {"pass", "fail", "inconclusive", "soft-breaker", "breaker"}
+    assert answer.summary
+    assert answer.annotations == (UPDATE_BLOCK,)
+
+
+def test_a_refusal_beside_an_annotation_keeps_code_message_and_remedy_intact() -> None:
+    answer = relay_answer("gp_diagnose", {}, [UPDATE_BLOCK, "GP_E_NOT_ATTACHED: no app attached | remedy: call attach first"])
+    assert answer.state == "refused"
+    assert answer.code == "GP_E_NOT_ATTACHED"
+    assert answer.message == "no app attached"
+    assert answer.remedy == "call attach first"
+    assert answer.annotations == (UPDATE_BLOCK,)
+
+
+def test_every_item_unparseable_stays_unparseable_with_no_invented_verdict() -> None:
+    answer = relay_answer("gp_diagnose", {}, ["not json at all", UPDATE_BLOCK])
+    assert answer.state == "unparseable"
+    assert answer.outcome is None
+    assert answer.code is None
+    # Nothing is silently dropped even here: the side item is still kept verbatim.
+    assert UPDATE_BLOCK in answer.annotations
+
+
+def test_a_frame_whose_text_legitimately_spans_lines_still_parses() -> None:
+    """A real frame's text may contain newlines — pretty-printed JSON, a report with lines.
+
+    This is exactly why a joined string is never re-split on "\\n": line one of this item
+    is not the frame, and any relay that took ``.split("\\n")[0]`` would file it unparseable.
+    """
+    pretty = json.dumps(
+        {"operationId": "op_20261021_0002", "diagnosis": {"class": "T1", "report": "line one\nline two"}},
+        indent=2,
+    )
+    answer = relay_answer("gp_diagnose", {}, [pretty, PROVIDER_LINE])
+    assert answer.state == "answered"
+    assert answer.outcome == "T1"
+    assert answer.annotations == (PROVIDER_LINE,)
+    # Same frame as the only item, and as the legacy single-text input: still answered.
+    assert relay_answer("gp_diagnose", {}, [pretty]).state == "answered"
+    assert relay_answer("gp_diagnose", {}, pretty).state == "answered"
+
+
+def test_model_lines_show_each_annotation_exactly_once() -> None:
+    answer = relay_answer("gp_diagnose", {}, [DAEMON_FRAME, UPDATE_BLOCK, PROVIDER_LINE])
+    run = ReverificationRun(request_digest="iv_test", attempted=True, answers=(answer,))
+    lines = run.to_model_lines()
+    text = "\n".join(lines)
+    for annotation in (UPDATE_BLOCK, PROVIDER_LINE):
+        assert text.count(annotation) == 1, f"{annotation!r} must appear exactly once, verbatim"
+        assert f"  {annotation}" in lines, "the annotation line is the verbatim item, not a re-wording"
+    assert any("engine outcome=T0" in line for line in lines), "the frame itself still relays"
+
+
+def test_a_joined_string_is_never_re_split_into_items_negative_control() -> None:
+    """The guard for the fix: a host that still hands over ``call_tool``'s join gets `unparseable`.
+
+    Re-splitting the blob on newlines would be guessing at a boundary the client destroyed —
+    a legitimate frame may itself contain newlines. So this stays unparseable, and a "fix"
+    that splits here must redden this test.
+    """
+    joined = f"{DAEMON_FRAME}\n{PROVIDER_LINE}"
+    answer = relay_answer("gp_diagnose", {}, joined)
+    assert answer.state == "unparseable"
+    assert answer.annotations == ()

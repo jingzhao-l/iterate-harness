@@ -23,15 +23,25 @@ WHAT IT REFUSES TO DO, and why each refusal is the point:
   accident this whole path exists to prevent is a loop reporting a verdict it never got.
 - **It never re-decodes a refusal.** When the engine answers with a coded refusal, the
   code/message/remedy are relayed verbatim; the remedy is written for an agent to execute.
+- **It never reads a verdict out of a pack the registered provider will not price.** Whether a
+  pack may be diagnosed at all is answered through the kernel's provider contract
+  (:func:`.provider_producers.ae_method_for` asks ``iterate-engine-ae`` which method this pack
+  carries), and that refusal is relayed in the same verbatim shape as an engine one. A pack
+  whose signal fields are all present and all empty would otherwise reach the transcription,
+  which answers `inconclusive` for nothing measured.
 """
 
 from __future__ import annotations
 
 import inspect
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
+
+from .provider_producers import ae_method_for
+from .provider_registry import ProviderRegistryError
 
 #: Read-only tools by name. The set is small on purpose: anything that moves the app,
 #: captures a screenshot into a caller's model, or re-attaches is a decision, not a
@@ -58,6 +68,21 @@ class RelayedAnswer:
     code: str | None = None
     message: str | None = None
     remedy: str | None = None
+    #: Which registered AE method this answer was read under, when the relay had to ask one.
+    #: Provenance, not a verdict: it says which registration licensed the reading.
+    method: str | None = None
+    #: Content items the shell sent *besides* the answer item, kept verbatim. The shipped
+    #: shell answers ``gp_diagnose`` with the daemon frame plus an ``update state:`` block
+    #: plus a ``provider:`` attribution line; those side items are user-visible facts about
+    #: the call, and silently dropping one is exactly as wrong as failing to read the frame.
+    annotations: tuple[str, ...] = ()
+    #: The dimension 面 A says this call served, read out of the shell's own echo item
+    #: (``mcp-shell/src/dimension.ts``). ``None`` means the reply carried no such line — which
+    #: is NOT "the call served no dimension": a call through 面 B puts the declaration in tool
+    #: metadata instead of in the text, and this field says nothing about it. It is a citation
+    #: of what the shell said, used by :mod:`.dimension_ledger` to cross-check a self-declared
+    #: ledger attribution; the annotation itself stays in ``annotations`` regardless, verbatim.
+    echoed_dimension: str | None = None
 
 
 @dataclass(frozen=True)
@@ -103,14 +128,20 @@ class ReverificationRun:
         for answer in self.answers:
             arguments = ", ".join(f"{key}={value}" for key, value in sorted(answer.arguments.items())) or "-"
             if answer.state == "answered":
+                asked = f" via {answer.method}" if answer.method else ""
                 lines.append(
-                    f"  {answer.tool}({arguments}): engine outcome={answer.outcome} "
+                    f"  {answer.tool}({arguments}): engine outcome={answer.outcome}{asked} "
                     f"operationId={answer.operation_id or 'none'} — {answer.summary or ''}".rstrip()
                 )
             elif answer.state == "refused":
                 lines.append(f"  {answer.tool}({arguments}): {answer.code}: {answer.message} remedy: {answer.remedy}")
             else:
                 lines.append(f"  {answer.tool}({arguments}): answer was not the engine's documented shape; not interpreted")
+            # Side items travel verbatim: the update block and the provider attribution are
+            # facts about this call, so a relayed or compacted round still shows each once,
+            # with no verdict wording added by us.
+            for annotation in answer.annotations:
+                lines.append(f"  {annotation}")
         for target in self.deferred:
             lines.append(f"  deferred {target.kind} ({target.detail}): {target.reason}")
         if not self.answers:
@@ -172,12 +203,105 @@ def relay_answer(tool: str, arguments: Mapping[str, Any], raw: object) -> Relaye
     The three shapes are the engine's own: an evidence pack, a coded refusal, or
     something this harness cannot classify. The last one is reported as such — a
     best-effort guess would be this module inventing a verdict.
+
+    ``raw`` arrives in one of the host's three shapes: a single item's text, one
+    already-decoded ``Mapping``, or the boundary-preserving ``Sequence[str]`` from
+    ``McpClientManager.call_tool_parts`` — which is what the shipped shell actually
+    produces: ``gp_diagnose`` answers with the daemon frame *plus* an ``update state:``
+    block *plus* a ``provider:`` attribution line, and measured 2026-10-21 against this
+    exact code a frame joined with ANY second item classified as ``unparseable``. So a
+    sequence is classified per item: the first item that is the engine's answer — it
+    parses as a JSON object, or matches the shell's coded-refusal line — is relayed, and
+    every other item is kept verbatim in ``RelayedAnswer.annotations``.
+
+    A joined ``str`` stays supported (it is still what ``call_tool`` returns for other
+    callers), and a joined string that cannot be parsed is ``unparseable`` as before:
+    it is deliberately NOT re-split on newlines, because a legitimate frame's text may
+    itself contain newlines and re-splitting would be guessing at the boundary.
     """
-    payload: object = raw
+    if isinstance(raw, (str, Mapping)):
+        return _relay_item(tool, arguments, raw)
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        items = list(raw)
+        if not items:
+            return _relay_item(tool, arguments, "")
+        index = next((position for position, item in enumerate(items) if _is_answer_item(item)), 0)
+        answer = _relay_item(tool, arguments, items[index])
+        annotations = tuple(item if isinstance(item, str) else str(item) for position, item in enumerate(items) if position != index)
+        return replace(
+            answer,
+            annotations=annotations,
+            echoed_dimension=_echoed_dimension(annotations),
+        )
+    return RelayedAnswer(tool=tool, arguments=dict(arguments), state="unparseable")
+
+
+#: 面 A's echo item, in the shape the shell writes it:
+#: ``dimension: <id> | declared by this call; …``. Only the id is read; the sentence after the
+#: pipe stays where it is — this parses a declaration, it does not re-summarise a remedy.
+_DIMENSION_ECHO = re.compile(r"^dimension:[ \t]*(?P<id>[^\s|]+)")
+
+
+def _echoed_dimension(items: Sequence[str]) -> str | None:
+    """The dimension id the shell echoed, or ``None`` when no item is an echo it owns.
+
+    Deliberately conservative in three ways, because this value is going to be used to
+    *doubt* a ledger attribution:
+
+    - the id is checked with the kernel's own validator (via
+      :func:`.dimension_ledger.is_valid_dimension_id`), so a truncated or malformed echo is
+      read as "no echo", not as a competing claim;
+    - only the first echo wins, and an item that merely contains the word is not one — the
+      line must start with it, which is the shape the shell emits;
+    - a joined string never reaches here (``relay_answer`` classifies sequences per item), so
+      this is not guessing at a boundary the transport already destroyed.
+
+    Drift in the shell's wording costs a cross-check, never a wrong verdict: that asymmetry is
+    why the reader is lenient about the sentence and strict about the id.
+    """
+    from .dimension_ledger import is_valid_dimension_id
+
+    for item in items:
+        match = _DIMENSION_ECHO.match(item)
+        if match is not None and is_valid_dimension_id(match.group("id")):
+            return str(match.group("id"))
+    return None
+
+
+def _is_answer_item(item: object) -> bool:
+    """True when one content item IS the engine's answer, not a note beside it.
+
+    The answer is an item that parses as a JSON object (a frame, a pack — whatever
+    shape it then decodes to) or matches the shell's coded-refusal line. Everything
+    else — the ``update state:`` block, the ``provider:`` attribution — annotates
+    the call without being it.
+    """
+    if isinstance(item, Mapping):
+        return True
+    if not isinstance(item, str):
+        return False
+    if _refusal_from_text(item) is not None:
+        return True
+    try:
+        parsed = json.loads(item)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(parsed, Mapping)
+
+
+def _relay_item(tool: str, arguments: Mapping[str, Any], payload: object) -> RelayedAnswer:
+    """Classify exactly ONE engine item. Never call this on a join of items."""
     if isinstance(payload, str):
         structured = _refusal_from_text(payload)
         if structured is not None:
-            return RelayedAnswer(tool=tool, arguments=dict(arguments), state="refused", **structured)
+            return RelayedAnswer(
+                tool=tool,
+                arguments=dict(arguments),
+                state="refused",
+                code=structured["code"],
+                message=structured["message"],
+                remedy=structured["remedy"],
+            )
         try:
             payload = json.loads(payload)
         except (ValueError, TypeError):
@@ -219,7 +343,11 @@ def _refusal_from_text(text: str) -> dict[str, str] | None:
     with nothing attached answers with exactly that text (the format lives in
     `mcp-shell/src/errors.ts:formatToolError`), so a relay that only understood a JSON
     object with a `code` field would file a legitimate engine refusal as noise — the one
-    answer type that has to reach the model with its remedy attached.
+    answer type that has to reach the model with its remedy attached. Measured 2026-10-21
+    against the same shell's multi-item replies (the daemon frame plus an ``update state:``
+    block plus a ``provider:`` line): this parse is only ever applied to ONE content item,
+    because fed a join of the frame and a second item it matches nothing and files a
+    legitimate refusal — or the frame beside it — as noise.
     """
     head, separator, tail = text.partition(" | remedy: ")
     if not separator or ":" not in head:
@@ -249,6 +377,23 @@ def _relay_pack(tool: str, arguments: Mapping[str, Any], pack: Mapping[str, Any]
             message=f"the pack carries none of {', '.join(absent)}",
             remedy="re-verification needs a pack the engine actually recorded; the transcription answers 'inconclusive' for absent fields, and that is not a verdict on the app",
         )
+    # Whether this pack may be read for a verdict is the provider contract's question, not
+    # this module's: `iterate-engine-ae` registers `diagnose` as requiring an evidence pack,
+    # and a mapping whose signal fields are present but all empty carries none. The refusal is
+    # relayed in the engine-refusal shape -- code, message, remedy verbatim -- because "this
+    # pack records nothing" must not arrive at the model as "the engine looked and could not
+    # tell", which is the accident the check above exists to prevent.
+    try:
+        method = ae_method_for(pack)
+    except ProviderRegistryError as error:
+        return RelayedAnswer(
+            tool=tool,
+            arguments=dict(arguments),
+            state="refused",
+            code=error.code,
+            message=error.message,
+            remedy=error.remedy,
+        )
     try:
         outcome = decision_outcome_from_evidence(pack)
         summary = decision_summary_from_evidence(pack)
@@ -266,6 +411,7 @@ def _relay_pack(tool: str, arguments: Mapping[str, Any], pack: Mapping[str, Any]
         operation_id=str(pack["operationId"]) if pack.get("operationId") else None,
         outcome=str(outcome),
         summary=str(summary),
+        method=method,
     )
 
 
@@ -277,7 +423,9 @@ def run_reverification(
 ) -> ReverificationRun:
     """Send the request over a **synchronous** tool call and relay the answers.
 
-    ``call_tool`` is (tool, arguments) -> the engine's reply text. A host whose MCP client
+    ``call_tool`` is (tool, arguments) -> the engine's reply: either the boundary-preserving
+    ``list[str]`` of content items that ``McpClientManager.call_tool_parts`` produces, or a
+    plain ``str`` for a host that only has the joined view. A host whose MCP client
     is async (which is what ``McpClientManager`` is) must use
     :func:`run_reverification_async`; calling this one with an async callable hands back
     coroutine objects that are not answers, and those land as ``unparseable`` — measured,

@@ -50,7 +50,11 @@ const STAMP_FILE_NAME = "version.stamp";
 const TARBALL_CACHE_DIR_NAME = "cache";
 
 const MAX_DOWNLOAD_REDIRECTS = 5;
-const DOWNLOAD_TIMEOUT_MS = 120000;
+// Per-request *inactivity* timeout: no bytes on the socket for this long means
+// the connection has died. It must stay below DOWNLOAD_TOTAL_TIMEOUT_MS or the
+// wall-clock cap always wins and the `request.on("timeout")` branch below can
+// never fire.
+const DOWNLOAD_TIMEOUT_MS = 30000;
 // Hard wall-clock cap per single self-download (a stale-but-connected registry
 // that never dribbles more bytes must not be able to hang the bootstrap).
 const DOWNLOAD_TOTAL_TIMEOUT_MS = 60000;
@@ -277,8 +281,67 @@ function venvExecutablePaths(venvDir, platform) {
   };
 }
 
-function needsBootstrap(stampContent, expectedVersion) {
-  return String(stampContent || "").trim() !== String(expectedVersion || "").trim();
+// The inputs that determine what a runtime *is*. Recording them in the stamp
+// lets the wrapper rebuild when the user flips the lever that built the venv,
+// instead of silently reusing a runtime they did not ask for.
+function runtimeInputs(version, environment) {
+  const env = environment || process.env;
+  return {
+    version: String(version || ""),
+    pythonEnv: String(env[PYTHON_ENV_VAR] || ""),
+    source: String((installCandidates(version, env) || [])[0] || ""),
+  };
+}
+
+function formatStamp(inputs) {
+  return JSON.stringify(inputs);
+}
+
+function parseStamp(stampContent) {
+  // Stamps written by this wrapper are a JSON object (version + the inputs
+  // they were built from). Stamps written by an older wrapper are a bare
+  // version string, and are marked `legacy`: they cannot prove which
+  // interpreter or install source built the runtime they describe.
+  const text = String(stampContent || "").trim();
+  if (!text) return null;
+  if (text[0] === "{") {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.version === "string") {
+        return {
+          version: parsed.version,
+          pythonEnv: String(parsed.pythonEnv || ""),
+          source: String(parsed.source || ""),
+          legacy: false,
+        };
+      }
+    } catch {
+      /* fall through to the legacy single-string shape */
+    }
+  }
+  return { version: text, pythonEnv: "", source: "", legacy: true };
+}
+
+// Bootstrap is needed when the stamp's version differs from THIS wrapper's, or
+// when the interpreter override / install source changed since the stamp was
+// written. Reusing a runtime built with a different Python — or installed from
+// a different URL — is worse than one extra reinstall: the user sees an
+// `ih --version` that disagrees with the wrapper that launched it, and nothing
+// explains why.
+//
+// A legacy bare-version stamp proves nothing about inputs, so it rebuilds once
+// and is rewritten with inputs. That costs nothing in practice: any upgrade
+// already changes the version and forces a reinstall, so the only extra
+// reinstall is for a stamp whose version already matches this wrapper.
+function needsBootstrap(stampContent, expectedVersion, expectedInputs) {
+  const stamp = parseStamp(stampContent);
+  if (!stamp || stamp.version !== String(expectedVersion || "").trim()) return true;
+  if (stamp.legacy) return true;
+  if (!expectedInputs) return false;
+  return (
+    String(stamp.pythonEnv || "") !== String(expectedInputs.pythonEnv || "") ||
+    String(stamp.source || "") !== String(expectedInputs.source || "")
+  );
 }
 
 function isRemoteHttpUrl(target) {
@@ -476,6 +539,8 @@ function pipInstallArgs(target) {
 // Runtime resolution
 // ---------------------------------------------------------------------------
 
+const UNKNOWN_VERSION = "0.0.0-unknown";
+
 function packageVersion() {
   const manifestPath = path.resolve(__dirname, "..", "package.json");
   try {
@@ -485,13 +550,18 @@ function packageVersion() {
     }
   } catch (error) {
     // A corrupted/missing manifest must not crash every `ih` invocation with an
-    // unhandled exception; fall back to an unknown version so the wrapper can
-    // still run the Python harness and surface the real error later if any.
+    // unhandled exception. Return UNKNOWN_VERSION and let the caller decide:
+    // an existing runtime is reused, and a fresh install is refused rather
+    // than attempted against a version that cannot exist.
     process.stderr.write(
       `[iterate-harness] warning: cannot read ${manifestPath}: ${error.message}\n`
     );
   }
-  return "0.0.0-unknown";
+  return UNKNOWN_VERSION;
+}
+
+function isUnknownVersion(version) {
+  return version === UNKNOWN_VERSION;
 }
 
 function runtimeHomeDir(env) {
@@ -1096,7 +1166,15 @@ async function bootstrap(homeDir, version, env, options) {
   }
 
   const stampPath = path.join(homeDir, STAMP_FILE_NAME);
-  fs.writeFileSync(stampPath, `${version}\n`, "utf8");
+  // The stamp records what the runtime was built FROM, not just which version:
+  // a venv created with `ITERATE_HARNESS_PYTHON` set, or from an
+  // `ITERATE_HARNESS_INSTALL_URL` override, must not be silently reused once
+  // that override disappears or changes.
+  fs.writeFileSync(
+    stampPath,
+    `${formatStamp(runtimeInputs(version, env))}\n`,
+    "utf8"
+  );
   ui.success(`iterate-harness ${version} installed`);
 }
 
@@ -1116,11 +1194,34 @@ async function ensureRuntime(env, options) {
     ? fs.readFileSync(stampPath, "utf8")
     : "";
 
+  // A version we cannot read cannot be installed: `iterate-harness==0.0.0-unknown`
+  // does not exist, so attempting a bootstrap here would fail every run and
+  // re-download nothing. Reuse the runtime that is already there, or refuse
+  // with an actionable error instead of a doomed install.
+  if (isUnknownVersion(version)) {
+    if (fs.existsSync(executable.ih)) {
+      ui.warning(
+        `wrapper version is unreadable; reusing the existing runtime at ${homeDir}`
+      );
+      return executable.ih;
+    }
+    throw new BootstrapError(
+      [
+        "cannot determine the wrapper version (npm/package.json is missing or unreadable),",
+        "and no runtime is installed yet — nothing to run.",
+        "Reinstall the package (`npm i -g iterate-harness`) or restore its package.json.",
+      ].join(" ")
+    );
+  }
+
   // Bootstrap is needed when the stamp does not match THIS wrapper's version
   // OR when the venv's ih entry point is gone even though the stamp survived
   // (user deleted/corrupted the venv) — self-heal instead of demanding
-  // `rm -rf` on every run.
-  const stampOutdated = needsBootstrap(stampContent, version);
+  // `rm -rf` on every run. The stamp also carries the interpreter/install
+  // source it was built with, so flipping ITERATE_HARNESS_PYTHON or
+  // ITERATE_HARNESS_INSTALL_URL triggers a rebuild instead of a silent reuse.
+  const inputs = runtimeInputs(version, environment);
+  const stampOutdated = needsBootstrap(stampContent, version, inputs);
   const ihMissing = !fs.existsSync(executable.ih);
 
   if (!skipInstall && (stampOutdated || ihMissing)) {
@@ -1146,7 +1247,7 @@ async function ensureRuntime(env, options) {
       const currentStamp = fs.existsSync(stampPath)
         ? fs.readFileSync(stampPath, "utf8")
         : "";
-      if (!needsBootstrap(currentStamp, version) && fs.existsSync(executable.ih)) {
+      if (!needsBootstrap(currentStamp, version, inputs) && fs.existsSync(executable.ih)) {
         ui.info(`iterate-harness ${version} was installed by another process; reusing it.`);
       } else {
         if (opts.interactive) {
@@ -1187,16 +1288,53 @@ async function ensureRuntime(env, options) {
 // Delegation to the real ih executable
 // ---------------------------------------------------------------------------
 
+// Every error path funnels through here, including the top-level promise
+// rejection handler in the bin scripts. A stderr write can itself fail
+// (closed/redirected console — the classic Windows EPIPE/EBADF case, or a
+// destroyed stream), and throwing from inside the error handler would turn a
+// handled failure into an unhandled rejection with a raw stack trace. Never
+// let the reporting path blow up.
+function safeWriteTo(stream, text) {
+  try {
+    stream.write(text);
+  } catch {
+    /* best-effort: nothing else can report this failure */
+  }
+}
+
 function reportBootstrapFailure(error) {
   const message = error instanceof BootstrapError ? error.message : (error && error.stack) || error;
-  process.stderr.write(`[iterate-harness] ${message}\n`);
+  safeWriteTo(process.stderr, `[iterate-harness] ${message}\n`);
 }
 
 // The install wizard only makes sense when a human can actually answer: both
 // stdin and stderr must be TTYs. Piped/CI/`< /dev/null` runs bootstrap
 // non-interactively so they never block on a prompt that nobody can see.
-function interactiveSession() {
-  return Boolean(process.stdin.isTTY && process.stderr.isTTY);
+// `streams` is injectable for tests, since `process.stdin`/`process.stderr` are
+// getter-only and cannot be reassigned.
+function interactiveSession(streams) {
+  const s = streams || {};
+  const stdin = s.stdin === undefined ? process.stdin : s.stdin;
+  const stderr = s.stderr === undefined ? process.stderr : s.stderr;
+  return Boolean(stdin.isTTY && stderr.isTTY);
+}
+
+// Split the CLI argv into what the wrapper consumes and what it forwards to
+// the delegated `ih` child. The wrapper flags belong to the wrapper ONLY when
+// they appear before a `--` separator: anything after `--` is the child's, so
+// `ih sub -- --no-verify` must forward that flag instead of swallowing it.
+function splitHarnessArgs(args) {
+  const cliArgs = Array.isArray(args) ? args : [];
+  const separator = cliArgs.indexOf("--");
+  const wrapperSlice = separator === -1 ? cliArgs : cliArgs.slice(0, separator);
+  return {
+    forwardedArgs: [
+      ...wrapperSlice.filter((arg) => arg !== NO_VERIFY_FLAG && arg !== ALLOW_HTTP_FLAG),
+      ...(separator === -1 ? [] : cliArgs.slice(separator)),
+    ],
+    noVerify: wrapperSlice.includes(NO_VERIFY_FLAG),
+    allowHttp: wrapperSlice.includes(ALLOW_HTTP_FLAG),
+  };
 }
 
 async function runHarness(args, env) {
@@ -1204,14 +1342,8 @@ async function runHarness(args, env) {
   // when stderr is not a TTY (e.g. piped output), so `ih --version | jq` stays clean.
   ui.printBanner();
 
-  const cliArgs = Array.isArray(args) ? args : [];
-  const forwardedArgs = cliArgs.filter(
-    (arg) => arg !== NO_VERIFY_FLAG && arg !== ALLOW_HTTP_FLAG
-  );
-  const options = {
-    noVerify: cliArgs.includes(NO_VERIFY_FLAG),
-    allowHttp: cliArgs.includes(ALLOW_HTTP_FLAG),
-  };
+  const { forwardedArgs, noVerify, allowHttp } = splitHarnessArgs(args);
+  const options = { noVerify, allowHttp };
 
   // Signal handling spans the whole run: during bootstrap a Ctrl-C/SIGTERM
   // must clean up in-flight downloads and not orphan a pip/python child; after
@@ -1258,7 +1390,12 @@ async function runHarness(args, env) {
   });
 
   child.on("error", (error) => {
-    process.stderr.write(`[iterate-harness] failed to launch ih: ${error.message}\n`);
+    // Same guard as reportBootstrapFailure: a failing stderr write here would
+    // turn a launch failure into an uncaught exception instead of a clean exit.
+    safeWriteTo(
+      process.stderr,
+      `[iterate-harness] failed to launch ih: ${error.message}\n`
+    );
     process.exit(1);
   });
   child.on("close", (code, signal) => {
@@ -1311,15 +1448,21 @@ module.exports = {
   interactiveSession,
   isRemoteHttpUrl,
   isSupportedPython,
+  isUnknownVersion,
   needsBootstrap,
   packageVersion,
   parsePythonVersion,
+  parseStamp,
   pipInstallArgs,
   pypiInstallSpec,
   pythonCandidates,
   releaseTarballUrl,
   reportBootstrapFailure,
   runHarness,
+  runtimeInputs,
+  splitHarnessArgs,
+  formatStamp,
+  UNKNOWN_VERSION,
   venvExecutablePaths,
   wheelAssetName,
   wheelAssetUrl,

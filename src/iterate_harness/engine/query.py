@@ -885,6 +885,9 @@ async def run_query(
                 carryover_metadata=context.tool_metadata,
                 context_window_tokens=context.context_window_tokens,
                 auto_compact_threshold_tokens=context.auto_compact_threshold_tokens,
+                # The run's ledger lives in the project the query is working on, and it is
+                # what says which dimension's history is safe to clear first.
+                project_root=context.cwd,
             )
         )
         try:

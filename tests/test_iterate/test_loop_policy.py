@@ -43,13 +43,208 @@ class TestLoopPolicy:
 
     def test_converged_aggregate_stops_the_loop(self):
         policy = IterateLoopPolicy(max_review_rounds=3)
-        snapshot = state(rounds_seen=2, total_findings=3, findings_by_round=[3, 0], converged=True)
+        snapshot = state(
+            rounds_seen=2,
+            total_findings=3,
+            findings_by_round=[3, 0],
+            converged=True,
+            invariant_state="pass",
+            evidence_complete=True,
+        )
         decision = policy.on_turn_end({ITERATE_STATE_KEY: snapshot}, UsageSnapshot(), "m")
         assert decision.stop_reason is not None
         assert "converged" in decision.stop_reason
         assert decision.inject_message is not None  # closing-report notice
         assert isinstance(decision.progress, ReviewProgressEvent)
         assert decision.progress.converged is True
+
+    def test_a_bare_convergence_claim_does_not_stop_the_loop(self):
+        """The flip: the reviewer's flag is a report, not a verdict.
+
+        Nothing measured the invariant gate and no evidence attestation ran, so the kernel is
+        not consulted at all — and a run that cannot state its gates does not get to converge.
+        """
+        policy = IterateLoopPolicy(max_review_rounds=5)
+        snapshot = state(
+            rounds_seen=2, total_findings=3, findings_by_round=[3, 0], converged=True
+        )
+        decision = policy.on_turn_end({ITERATE_STATE_KEY: snapshot}, UsageSnapshot(), "m")
+        assert decision.stop_reason is None
+        assert decision.inject_message is not None
+        assert decision.progress.converged is False
+
+    def test_missing_evidence_attestation_never_reads_as_converged(self):
+        policy = IterateLoopPolicy(max_review_rounds=5)
+        snapshot = state(
+            rounds_seen=2,
+            findings_by_round=[3, 0],
+            converged=True,
+            invariant_state="pass",  # gate green, attestation absent
+        )
+        decision = policy.on_turn_end({ITERATE_STATE_KEY: snapshot}, UsageSnapshot(), "m")
+        assert decision.stop_reason != "converged"
+        blockers = policy.kernel_blockers(read_state({ITERATE_STATE_KEY: snapshot}))
+        assert blockers == ["no evidence attestation was made"], blockers
+
+    def test_the_loop_names_why_it_declined_to_consult_the_kernel(self):
+        """The operator gets the cause, not just a cap number.
+
+        Without this the two absence checks would be indistinguishable from the contract's own
+        construction refusal — i.e. a guard nobody can see working.
+        """
+        policy = IterateLoopPolicy(max_review_rounds=3, stall_pause_rounds=0)
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=3, findings_by_round=[2, 1, 0], converged=True)},
+            UsageSnapshot(),
+            "m",
+        )
+        assert decision.stop_reason is not None
+        assert decision.stop_reason.startswith("round cap reached (3)")
+        assert "kernel not consulted" in decision.stop_reason
+        assert "no invariant verdict was measured" in decision.stop_reason
+        assert "no evidence attestation was made" in decision.stop_reason
+
+    def test_an_unmeasured_invariant_gate_verifies_instead_of_converging(self):
+        """`unmeasured` is the contract's own word for "nobody ran it" — rule 7 says verify."""
+        policy = IterateLoopPolicy(max_review_rounds=5)
+        snapshot = state(
+            rounds_seen=2,
+            findings_by_round=[3, 0],
+            converged=True,
+            invariant_state="unmeasured",
+            evidence_complete=True,
+        )
+        decision = policy.on_turn_end({ITERATE_STATE_KEY: snapshot}, UsageSnapshot(), "m")
+        assert decision.stop_reason != "converged"
+        assert decision.progress.converged is False
+
+    def test_the_breaker_counts_no_progress_rounds_and_trips_at_three(self):
+        """The loop's own escalation is the kernel's `breakerLevel`; 3 halts before anything else.
+
+        Gateless on purpose: this halt must fire even when the kernel cannot be consulted,
+        because the spinning run is exactly the one that cannot feed the contract. The stall
+        pause (default after 2 such rounds) asks the user first; tripping is what happens when
+        the run keeps spinning after being asked.
+        """
+        policy = IterateLoopPolicy(max_review_rounds=9)
+        for seen, findings, level in [(1, [3], 0), (2, [3, 0], 1), (3, [3, 0, 0], 2)]:
+            decision = policy.on_turn_end(
+                {ITERATE_STATE_KEY: state(rounds_seen=seen, findings_by_round=findings)},
+                UsageSnapshot(),
+                "m",
+            )
+            assert decision.stop_reason is None, seen
+            assert policy.breaker_level == level, seen
+        assert policy.breaker_level == 2, "the third round is where the stall pause asked"
+        decision = policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=4, findings_by_round=[3, 0, 0, 0])},
+            UsageSnapshot(),
+            "m",
+        )
+        assert policy.breaker_level == 3
+        assert decision.stop_reason == "circuit breaker tripped (level 3)"
+
+    def test_a_round_that_found_something_resets_the_breaker(self):
+        policy = IterateLoopPolicy(max_review_rounds=9, stall_pause_rounds=0)
+        policy.on_turn_end({ITERATE_STATE_KEY: state(rounds_seen=1, findings_by_round=[0])}, UsageSnapshot(), "m")
+        assert policy.breaker_level == 1
+        policy.on_turn_end(
+            {ITERATE_STATE_KEY: state(rounds_seen=2, findings_by_round=[0, 4])}, UsageSnapshot(), "m"
+        )
+        assert policy.breaker_level == 0
+
+    def test_the_breaker_is_read_before_the_gates_are_green(self):
+        """Kernel rule 1 outranks rule 8: a tripped breaker halts a fully green round."""
+        policy = IterateLoopPolicy(max_review_rounds=9)
+        policy._breaker_level = 3
+        decision = policy.on_turn_end(
+            {
+                ITERATE_STATE_KEY: state(
+                    rounds_seen=2,
+                    findings_by_round=[3, 0],
+                    converged=True,
+                    invariant_state="pass",
+                    evidence_complete=True,
+                )
+            },
+            UsageSnapshot(),
+            "m",
+        )
+        assert decision.stop_reason == "circuit breaker tripped (level 3)"
+        assert decision.progress.converged is False
+
+    def test_an_errored_invariant_gate_halts_the_run(self):
+        """Rule 3: a gate that refused to run yields no verdict, so the loop stops on it."""
+        policy = IterateLoopPolicy(max_review_rounds=9)
+        decision = policy.on_turn_end(
+            {
+                ITERATE_STATE_KEY: state(
+                    rounds_seen=1,
+                    findings_by_round=[2],
+                    invariant_state="error",
+                    evidence_complete=True,
+                )
+            },
+            UsageSnapshot(),
+            "m",
+        )
+        assert decision.stop_reason == "invariant check errored (the gate did not run to a verdict)"
+
+    def test_the_breaker_level_is_actually_fed_to_the_contract(self):
+        """The seam, not just the loop's own guard: the kernel reads this run's counter.
+
+        Without this, `breaker_level=self._breaker_level` could be hardcoded to 0 and only the
+        loop's duplicate check would be doing the work — the two guards agree, so agreeing is not
+        evidence that both are wired.
+        """
+        policy = IterateLoopPolicy(max_review_rounds=9)
+        policy._breaker_level = 3
+        snapshot = read_state(
+            {
+                ITERATE_STATE_KEY: state(
+                    rounds_seen=2,
+                    findings_by_round=[3, 0],
+                    invariant_state="pass",
+                    evidence_complete=True,
+                )
+            }
+        )
+        assert snapshot is not None
+        kernel = policy._kernel_decision(snapshot)
+        assert kernel is not None
+        assert kernel.action == "halt"
+        assert kernel.reason == "circuit-breaker-tripped"
+
+    def test_the_state_reader_accepts_only_a_real_bool_for_evidence(self):
+        """`1` and "true" are not attestations; they leave the gate absent (kernel unconsulted)."""
+        for raw in (1, 0, "true", ""):
+            snapshot = read_state({ITERATE_STATE_KEY: {"evidence_complete": raw}})
+            assert snapshot.evidence_complete is None, raw
+        snapshot = read_state({ITERATE_STATE_KEY: {"evidence_complete": False}})
+        assert snapshot.evidence_complete is False
+
+    def test_the_state_reader_survives_a_state_without_the_coverage_key(self):
+        """(e) A producer from before scenario ② must not crash the reader: absent is None."""
+        snapshot = read_state({ITERATE_STATE_KEY: {"rounds_seen": 1, "total_findings": 0}})
+        assert snapshot is not None
+        assert snapshot.dimension_coverage is None
+
+    def test_the_state_reader_keeps_only_a_real_coverage_line(self):
+        snapshot = read_state(
+            {
+                ITERATE_STATE_KEY: {
+                    "rounds_seen": 1,
+                    "dimension_coverage": "1/2 dimensions verified, 1 unverified (security), 1 decision",
+                }
+            }
+        )
+        assert snapshot is not None
+        assert snapshot.dimension_coverage.startswith("1/2 dimensions verified")
+        # A blank or non-string value is the same fact as absence, never a verdict.
+        for raw in ("   ", 7, None, {"decisions": 1}):
+            snapshot = read_state({ITERATE_STATE_KEY: {"rounds_seen": 1, "dimension_coverage": raw}})
+            assert snapshot is not None
+            assert snapshot.dimension_coverage is None, raw
 
     def test_round_cap_stops_even_when_not_converged(self):
         policy = IterateLoopPolicy(max_review_rounds=2)
@@ -449,7 +644,7 @@ class TestDimensionCostUsd:
             }
         )
         assert snapshot is not None
-        event = policy._build_progress(snapshot, UsageSnapshot(), "m1")
+        event = policy._build_progress(snapshot, UsageSnapshot(), "m1", converged=False)
         assert isinstance(event, ReviewProgressEvent)
         # exact split: 0.5M*$2 + 0.25M*$4 = 1.0 + 1.0 = 2.0
         assert event.dimension_cost_usd == {"security": 2.0}
@@ -530,8 +725,14 @@ class TestStallPause:
         # report/CI consumers read the reason string as success.
         assert not decision.stop_reason.startswith("converged")
 
-    def test_failed_invariant_gate_blocks_converged(self):
-        policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=0)
+    def test_a_failed_invariant_keeps_fixing_instead_of_claiming_converged(self):
+        """Kernel rule 5 on a failed gate is `fix`, not a green stop: the loop keeps working.
+
+        This replaces the pre-flip veto that stopped the run with an "invariant gate failed"
+        reason. The honesty it guarded — never reporting convergence on broken code — is now
+        structural: only the kernel can produce the `converged` stop, and it refuses on `fail`.
+        """
+        policy = IterateLoopPolicy(max_review_rounds=5)
         decision = policy.on_turn_end(
             {
                 ITERATE_STATE_KEY: state(
@@ -539,17 +740,24 @@ class TestStallPause:
                     findings_by_round=[2, 1, 0],
                     converged=True,
                     invariant_state="fail",
+                    evidence_complete=True,
                 )
             },
             UsageSnapshot(),
             "m",
         )
-        assert decision.stop_reason is not None
-        assert decision.stop_reason != "converged"
-        assert "invariant" in decision.stop_reason
+        assert decision.stop_reason is None
+        assert decision.inject_message is not None  # another round, not a closing report
+        assert decision.progress.converged is False
 
-    def test_unmeasured_invariant_state_still_allows_converged(self):
-        policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=0)
+    def test_a_gateless_run_ends_at_the_round_cap_not_as_converged(self):
+        """The accepted consequence of the owner decision: no gates ⇒ no convergence, ever.
+
+        A run with no invariant channel and no evidence attestation cannot feed the contract, so
+        it spends its rounds and stops on the cap. The reason string is what report/CI consumers
+        read as success, so this pins that it never says "converged".
+        """
+        policy = IterateLoopPolicy(max_review_rounds=3, stall_pause_rounds=0)
         decision = policy.on_turn_end(
             {
                 ITERATE_STATE_KEY: state(
@@ -561,7 +769,10 @@ class TestStallPause:
             UsageSnapshot(),
             "m",
         )
-        assert decision.stop_reason == "converged"
+        assert decision.stop_reason is not None
+        assert decision.stop_reason.startswith("round cap reached (3)")
+        assert decision.stop_reason != "converged"
+        assert decision.progress.converged is False
 
     def test_stall_pause_preserves_queued_nudge(self):
         policy = IterateLoopPolicy(max_review_rounds=5, stall_pause_rounds=1)
