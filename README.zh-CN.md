@@ -231,7 +231,11 @@ ih iterate sessions                  # 列出已存会话（--limit N / --json�
 
 ```bash
 ih iterate log            # 查看决策日志尾部
-ih iterate log --trend    # 查看跨运行 finding 趋势（新增/已修复/回归/顽固）
+ih iterate log --trend    # 趋势库薄摘要
+ih iterate trend          # 逐次运行的新增/修复/回归历史 + 未解决/顽固问题
+ih iterate trend --json   # 机器可读趋势报告（供看板/CI 使用）
+ih iterate trend --fail-on-regression        # CI 门禁：已修复问题回归即失败
+ih iterate trend --fail-on-new high          # CI 门禁：出现新高/严重问题即失败
 ih iterate log --replay   # 按时间序回放整次运行（相对时间戳）
 ih iterate report         # 渲染最终报告（CI 模式，见下）
 ih iterate report --pr    # 把报告发布/更新为 PR 评论（gh CLI，幂等）
@@ -270,6 +274,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 - **Esc 中途干预** — 闭环运行中按 Esc：在下一轮边界暂停并弹出方向键菜单（跳过当前 finding / 收窄维度 / 直接停 / 继续）；再按一次 Esc 强制打断当前 turn。
 - **断点续跑** — TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding。
 - **finding 指纹趋势库** — 每次收尾用 `文件\|行号\|维度` 指纹把 finding 记入 `.iterate/trend-library.json`；`ih iterate log --trend` / `/iterate trend` 跨运行统计新增 / 已修复 / 回归 / 顽固（连续 3+ 轮）finding。
+- **逐次运行趋势历史** — `ih iterate trend` 从决策日志还原每一次已完成的运行，展示该轮**新增 / 修复 / 回归**以及未解决/顽固问题；`--fail-on-regression` / `--fail-on-new <severity>` 可直接作为 CI 门禁。同一视图也出现在 WebUI 的「趋势」页（见下）。
 
 ### 报告与集成
 
@@ -281,6 +286,10 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 - **批量排行** — `ih iterate batch repoA repoB …` 顺序评审多个仓库，按严重度加权排出最差榜；单个仓库失败不会中断整批。
 - **定时评审** — `ih iterate schedule add "0 9 * * 1-5"` 注册 cron 任务，每日（UTC）自动跑 changed-only 快审（`--clean-ok`）；新增 vs 顽固 finding 经趋势库呈现。
 - **cron 调度守护进程** — `ih iterate cron start|stop|status|history` 管理执行定时任务的后台守护进程——启动一次后，定时评审无人值守持续运行，可查历史（`--limit` / `--json`）。
+
+### WebUI 管理台
+
+`ih web serve` 启动仅监听回环地址的管理台（`--project <root>` 固定项目，服务器上用 `--no-browser`）。页面：仪表盘、迭代详情、趋势、工作区、检查点、预算与限流、配置、报告。**趋势**页（快捷键 `g t`）渲染与 `ih iterate trend` 相同的逐轮新增/修复/回归历史与顽固/未解决 finding，并随新决策条目实时更新——不盯终端也能判断这一轮到底有没有收敛。
 
 ### 成本、资源与门禁
 

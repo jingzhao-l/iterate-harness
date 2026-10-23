@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
 
+from iterate_harness.iterate.dimension_ledger import record_observed_echo
+from iterate_harness.iterate.glasspane_reverification import relay_answer
 from iterate_harness.mcp.client import McpClientManager, McpServerNotConnectedError
 from iterate_harness.mcp.types import McpToolInfo
 from iterate_harness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+
+log = logging.getLogger(__name__)
 
 #: The provider's tool-name pattern is ``^[a-zA-Z0-9_-]{1,64}$``; the adapter
 #: spends 7 characters on the ``mcp__`` prefix and the ``__`` separator.
@@ -34,16 +39,47 @@ class McpToolAdapter(BaseTool[BaseModel]):
         self.input_model = _input_model_from_schema(self.name, tool_info.input_schema)
 
     async def execute(self, arguments: BaseModel, context: ToolExecutionContext) -> ToolResult:
-        del context
+        payload = arguments.model_dump(mode="json", exclude_none=True)
         try:
-            output = await self._manager.call_tool(
+            parts = await self._manager.call_tool_parts(
                 self._tool_info.server_name,
                 self._tool_info.name,
-                arguments.model_dump(mode="json", exclude_none=True),
+                payload,
             )
         except McpServerNotConnectedError as exc:
             return ToolResult(output=str(exc), is_error=True)
-        return ToolResult(output=output)
+        # Byte-identical to what this adapter returned before: ``McpClientManager.call_tool`` is
+        # defined as exactly this join. The parts are taken instead of the join because the
+        # GlassPane shell answers one call with several content items (its frame, an update-state
+        # block, a provider line, and — since the dimension slot — what the call was declared
+        # for), and a consumer that must classify them cannot read a string that already lost the
+        # boundary. What the model sees is unchanged.
+        self._witness_echo(context, payload, parts)
+        return ToolResult(output="\n".join(parts).strip())
+
+    def _witness_echo(
+        self, context: ToolExecutionContext, payload: dict[str, Any], parts: list[str]
+    ) -> None:
+        """Park a witnessed ``dimension: …`` declaration under the operation it was fetched for.
+
+        Cheap by construction: the scan is a prefix test over items this call already has, and
+        the classifier — which does parse the frame — runs only when some item is an echo. That
+        ordering is deliberate: an ordinary ``bash`` or ``read`` reply must not pay a JSON parse
+        to conclude nothing.
+        """
+        if not any(item.startswith("dimension: ") for item in parts):
+            return
+        try:
+            answer = relay_answer(self._tool_info.name, payload, parts)
+        except Exception as error:  # noqa: BLE001 — a witness must never break a tool reply
+            # Loud on purpose: the failure is in this harness's classifier, not in the engine's
+            # answer, and swallowing it in debug would mean a broken witness silently stops
+            # checking while every test that goes through the reply still passes.
+            log.warning(
+                "glasspane echo witnessing failed for %s: %s", self._tool_info.name, error, exc_info=True
+            )
+            return
+        record_observed_echo(context.metadata, answer.operation_id, answer.echoed_dimension)
 
 
 _JSON_TYPE_MAP: dict[str, type] = {

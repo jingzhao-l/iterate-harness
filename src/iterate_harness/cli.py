@@ -850,7 +850,7 @@ app = typer.Typer(
 
 auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
-iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
+iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
 web_app = typer.Typer(name="web", help="WebUI management console")
 
 app.add_typer(auth_app)
@@ -1548,6 +1548,73 @@ def iterate_log(
     print(f"({len(entries)} entries total)")
 
 
+@iterate_app.command("trend")
+def iterate_trend(
+    top: int = typer.Option(
+        20, "--top", min=1, max=500, help="How many open/stubborn findings to list"
+    ),
+    history: int = typer.Option(
+        20, "--history", min=1, max=500, help="How many finished runs to show (newest last)"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the structured report as JSON"),
+    fail_on_regression: bool = typer.Option(
+        False,
+        "--fail-on-regression",
+        help="Exit 1 when the latest run reintroduced a previously fixed finding",
+    ),
+    fail_on_new: str = typer.Option(
+        "",
+        "--fail-on-new",
+        help="Exit 1 when the latest run added a finding at/above this severity "
+        "(none|low|medium|high|critical)",
+    ),
+) -> None:
+    """Show the cross-run trend: new/fixed/regressed findings per finished run.
+
+    Reads the decision log (one ``report`` entry per finished run) and the
+    trend library, so it works on historical runs too. Use ``--fail-on-*`` as
+    a CI gate for "did this change make things worse".
+    """
+    from iterate_harness.iterate import trend_report
+
+    top = _typer_int(top)
+    history = _typer_int(history)
+    as_json = _typer_flag(as_json)
+    fail_on_regression = _typer_flag(fail_on_regression)
+    level = (fail_on_new or "").strip().lower()
+    if level and level not in trend_report.SEVERITY_ORDER:
+        raise typer.BadParameter(
+            f"unknown severity {fail_on_new!r}; expected one of "
+            f"{', '.join(trend_report.SEVERITY_ORDER)}"
+        )
+
+    report = trend_report.build_trend_report(Path.cwd(), history=history, top=top)
+    if as_json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(trend_report.render_trend_report(report))
+
+    failed = False
+    if fail_on_regression:
+        regressions = trend_report.regression_count(report)
+        if regressions:
+            print(
+                f"trend gate: {regressions} regression(s) in the latest run",
+                file=sys.stderr,
+            )
+            failed = True
+    if level:
+        count = trend_report.new_findings_at_or_above(report, level)
+        if count:
+            print(
+                f"trend gate: {count} new finding(s) at or above {level}",
+                file=sys.stderr,
+            )
+            failed = True
+    if failed:
+        raise typer.Exit(1)
+
+
 @iterate_app.command("report")
 def iterate_report(
     github: bool = typer.Option(
@@ -1966,8 +2033,8 @@ def web_serve(
 ) -> None:
     """Start the WebUI management console (FastAPI + React frontend).
 
-    Serves the dashboard, runs timeline, checkpoints, budget, config, and
-    reports on a local loopback address and opens the browser. The backend
+    Serves the dashboard, runs timeline, trend, checkpoints, budget, config,
+    and reports on a local loopback address and opens the browser. The backend
     binds to 127.0.0.1 by default and never exposes itself externally.
     """
     from iterate_harness.web.api import serve as web_serve_backend
@@ -3367,3 +3434,12 @@ def main(
             disallowed_tools=_split_tool_names(disallowed_tools),
         )
     )
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
+    # ``python -m iterate_harness.cli`` used to exit 0 without printing a
+    # single byte: the app was only wired up in ``iterate_harness.__main__``,
+    # so importing the module succeeded, did nothing, and looked like a
+    # successful empty run. Run the app here so the module path behaves like
+    # the package path.
+    app()

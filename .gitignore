@@ -24,12 +24,15 @@ htmlcov/
 *~
 .python-version
 
-# React TUI frontend
-frontend/terminal/node_modules/
+# React TUI frontend. No trailing slash: a symlinked node_modules (used by
+# shared-checkout worktrees to reuse one install) is a *file* to git, so a
+# directory pattern would not match it and would show up as untracked.
+frontend/terminal/node_modules
+frontend/terminal/dist
 
 # WebUI frontend
-frontend/web/node_modules/
-frontend/web/dist/
+frontend/web/node_modules
+frontend/web/dist
 
 # User data (never commit API keys or session data)
 .iterate-harness/

@@ -26,6 +26,11 @@ dependencies = [
     "typing-extensions==4.16.0",
     "pydantic==2.13.4",
     "httpx==0.28.1",
+    # httpx reads ALL_PROXY/HTTPS_PROXY from the environment by default. A
+    # socks5:// proxy without this extra makes client construction raise
+    # ImportError before the harness can start at all; the OpenAI/Anthropic
+    # SDKs give no actionable hint. Small, pure-Python, no transitive deps.
+    "socksio==1.0.0",
     # Floor set by the 2026-09 HTTPX2 advisories: 2.12.0 fixes CVE-2026-84382
     # (unbounded streaming decompression), 2.11.0 fixes CVE-2026-84380
     # (Content-Length/Transfer-Encoding auto-framing) and CVE-2026-84379
@@ -91,6 +96,11 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# The editable install (`pip install -e`) pins `iterate_harness` to ONE
+# checkout, so a worktree that does not own that path would silently import —
+# and test — the other tree's sources. Putting this tree's `src` first makes
+# the checkout you run in the code you get, in CI and in worktrees alike.
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100

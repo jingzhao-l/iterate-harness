@@ -14,6 +14,7 @@ import type {
   StartRequest,
   StatusResponse,
   TimelineEntry,
+  TrendReport,
   TriageDecision,
   WorkspaceView,
 } from "./types";
@@ -203,6 +204,17 @@ export const api = {
 
   reports: (projectRoot?: string): Promise<ReportView[]> =>
     request<ReportView[]>(`/reports${buildQuery(projectRoot)}`),
+
+  // Cross-run trend: per-run new/fixed/regressed history + stubborn/open
+  // findings. Read-only; safe to refetch while a loop is running.
+  trend: (
+    projectRoot?: string,
+    top = 20,
+    history = 20,
+  ): Promise<TrendReport> =>
+    request<TrendReport>(
+      `/trend${buildQuery(projectRoot, { top, history })}`,
+    ),
 
   reportPreview: (name: string, projectRoot?: string): Promise<ReportPreview> =>
     request<ReportPreview>(

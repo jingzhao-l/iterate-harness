@@ -3,8 +3,8 @@
 // and torn down on unmount to avoid leaked EventSource connections. Every
 // routed page is wrapped in an ErrorBoundary so a render crash never blanks
 // the whole console. Keyboard shortcuts (design §17 UX):
-//   - "g" then "d/r/w/c/b/p/g": jump to Dashboard / Runs / Workspaces /
-//     Checkpoints / Budget / Config / Reports (g-buffer navigation)
+//   - "g" then "d/r/w/c/b/p/g/t": jump to Dashboard / Runs / Workspaces /
+//     Checkpoints / Budget / Config / Reports / Trend (g-buffer navigation)
 //   - "/" or Cmd/Ctrl+K: toggle the human-in-the-loop chat panel
 
 import { useEffect, useRef, useState } from "react";
@@ -19,6 +19,7 @@ import ConfigPage from "./pages/ConfigPage";
 import Dashboard from "./pages/Dashboard";
 import Reports from "./pages/Reports";
 import Runs from "./pages/Runs";
+import Trend from "./pages/Trend";
 import Workspaces from "./pages/Workspaces";
 
 const NAV_ITEMS = [
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
   { to: "/budget", label: "预算与限流", end: false },
   { to: "/config", label: "配置", end: false },
   { to: "/reports", label: "报告", end: false },
+  { to: "/trend", label: "趋势", end: false },
 ];
 
 // Single-key → route map for the "g <key>" jump shortcuts.
@@ -40,6 +42,7 @@ const G_BUFFER_ROUTES: Record<string, string> = {
   b: "/budget",
   p: "/config",
   g: "/reports",
+  t: "/trend",
 };
 
 const CONN_LABELS: Record<string, string> = {
@@ -216,6 +219,7 @@ export default function App(): React.JSX.Element {
             <Route path="/budget" element={<BudgetRate />} />
             <Route path="/config" element={<ConfigPage />} />
             <Route path="/reports" element={<Reports />} />
+            <Route path="/trend" element={<Trend />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </ErrorBoundary>

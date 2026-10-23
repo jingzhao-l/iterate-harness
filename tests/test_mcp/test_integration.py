@@ -25,8 +25,12 @@ class FakeMcpManager:
     def list_resources(self):
         return self.resources
 
+    async def call_tool_parts(self, server_name: str, tool_name: str, arguments: dict) -> list[str]:
+        """What the adapter consumes; ``call_tool`` below is its join, as in the real client."""
+        return [f"{server_name}:{tool_name}:{arguments['name']}"]
+
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict):
-        return f"{server_name}:{tool_name}:{arguments['name']}"
+        return "\n".join(await self.call_tool_parts(server_name, tool_name, arguments)).strip()
 
     async def read_resource(self, server_name: str, uri: str):
         return f"{server_name}:{uri}"

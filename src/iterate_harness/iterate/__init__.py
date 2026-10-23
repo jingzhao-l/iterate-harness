@@ -25,6 +25,7 @@ Pure, deterministic modules ported from ``harness/iterate-plugin/src``:
   that contract, and the resolution the consumers ask through
 - :mod:`.prompts` — canonical workflow prompt templates
 - :mod:`.trend_store` — finding fingerprint trend library (new/fixed/stubborn)
+- :mod:`.trend_report` — per-run new/fixed/regressed history for the trend command/page
 - :mod:`.worktree_flow` — fix-round git isolation orchestration
 
 This ``__init__`` uses PEP 562 lazy attribute resolution: the kernel's
@@ -61,10 +62,11 @@ _EXPORTS: dict[str, str] = {
     "make_entry": ".decision_log",
     "read_entries": ".decision_log",
     # dimension_ledger — the ledger's dimension attribution and the kernel's verdict on it
-    "contested_attributions": ".dimension_ledger",
-    "dimension_context_with_contested": ".dimension_ledger",
-    "echoed_dimension_map": ".dimension_ledger",
+    "DIMENSION_CONTEST_CODE": ".dimension_ledger",
     "ECHOED_DIMENSION_DATA_KEY": ".dimension_ledger",
+    "ECHO_METADATA_KEY": ".dimension_ledger",
+    "echo_contestation": ".dimension_ledger",
+    "record_observed_echo": ".dimension_ledger",
     "operation_dimension_map": ".dimension_ledger",
     "planned_dimension_ids": ".dimension_ledger",
     "project_dimension_context": ".dimension_ledger",
@@ -154,6 +156,14 @@ _EXPORTS: dict[str, str] = {
     "IterateSettings": ".settings",
     "effective_review_rounds": ".settings",
     "project_config": ".settings",
+    # trend_report
+    "TrendReport": ".trend_report",
+    "TrendRun": ".trend_report",
+    "build_trend_report": ".trend_report",
+    "collect_runs": ".trend_report",
+    "new_findings_at_or_above": ".trend_report",
+    "regression_count": ".trend_report",
+    "render_trend_report": ".trend_report",
     # trend_store
     "RunDiff": ".trend_store",
     "TrendDelta": ".trend_store",
@@ -216,6 +226,8 @@ __all__ = [
     "RunDiff",
     "TrendDelta",
     "TrendRecord",
+    "TrendReport",
+    "TrendRun",
     "ValidationResult",
     "ReviewAttachment",
     "ae_method_for",
@@ -225,6 +237,8 @@ __all__ = [
     "build_registry",
     "build_review_plan",
     "build_review_report",
+    "build_trend_report",
+    "collect_runs",
     "clear_checkpoint",
     "compute_convergence",
     "convergence_stop_notice",
@@ -252,12 +266,16 @@ __all__ = [
     "merge_config",
     "meta_review_report",
     "next_round_instruction",
+    "new_findings_at_or_above",
     "normal_kickoff",
     "normalize_summary",
-    "contested_attributions",
-    "dimension_context_with_contested",
-    "echoed_dimension_map",
+    "regression_count",
+    "render_trend_report",
     "ECHOED_DIMENSION_DATA_KEY",
+    "ECHO_METADATA_KEY",
+    "DIMENSION_CONTEST_CODE",
+    "record_observed_echo",
+    "echo_contestation",
     "operation_dimension_map",
     "personalization_constraints",
     "parse_attachments",

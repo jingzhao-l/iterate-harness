@@ -4,6 +4,81 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-10-23
+
+### Added
+
+- **`ih iterate trend`：把「这一轮到底变好了没有」变成一条可查询、可门禁的事实。**
+  趋势库一直只有一个 `file|line|dimension` 指纹的当前状态，`log --trend` 也只把它压成
+  tracked/open/fixed/stubborn 四个数；"最新一轮新增了什么、修掉了什么、有没有把修过的
+  问题又带回来" 这个问题在 CLI 与 WebUI 里都**无法回答**，尽管决策日志里每条 `report`
+  条目早就带着完整 findings。新增 `iterate/trend_report.py` 从日志还原逐轮历史：
+  - `new` = 本轮有、上一轮没有；`fixed` = 上一轮有、本轮没有；
+  - `regressed` = 本轮出现，且在**更早**某一轮被修复过（按整段历史判定，不是只看上一轮）；
+  - `unchanged` = 两轮都在；首轮全部计为 `new`。
+  命令行支持 `--history/--top/--json`，以及两个 CI 门禁：`--fail-on-regression`
+  （最新一轮出现回归即 exit 1）与 `--fail-on-new <none|low|medium|high|critical>`
+  （最新一轮新增达到该严重度即 exit 1）。没有历史时输出明确下一步（先跑一次循环），
+  不是空白或 traceback。旧版 `log --trend` 保持原样，不破坏脚本。
+  日志里的历史形状（`findings` / `topFindings` / `notableFindings` / 嵌套 `summary`）
+  都走既有 `findings_from_report`，损坏条目与不可跟踪 finding 跳过而不是让整页崩溃；
+  列表长度有上限（计数仍精确），避免几千条 finding 把 API 响应撑爆。
+- **WebUI 新增「趋势」页（`GET /api/v1/trend`，快捷键 `g t`）。** 这是引擎能力第一次
+  真正接到管理台，而不是再包一层 CLI 文本：卡片区展示运行数 / 跟踪中 / 未解决 / 顽固 /
+  可见窗口净方向；「最近一轮变化」按回归 / 新增 / 修复三列列出文件、行号、维度、严重度；
+  「运行历史」表逐轮列出 total/new/fixed/regressed/unchanged，有回归的行高亮；
+  顽固问题与未解决问题各有一张表，并按维度给出未解决计数。页面在 SSE 报告新决策条目时
+  自动刷新（运行中无需手动 reload），也有显式刷新与失败重试。只读接口，不写 `.iterate`。
+
+### Fixed
+
+- **`trend_store.record_run` 的读-改-写终于加锁了；并发收尾不再丢 finding。**
+  2.7.0 只把**写文件**换成了临时文件 + 原子 replace，读和写之间仍然没有任何互斥：
+  两个进程（例如 WebUI 与 TUI，或两个 swarm worker）同时收尾时都读到旧库、各自保存，
+  后写者把先写者的记录整段覆盖掉——文件始终是合法 JSON，所以没有任何报错，只是趋势
+  永久少了一条。现在整段临界区用 `sidecar_lock_path` + `exclusive_file_lock` 串行化，
+  与其他共享注册表（credentials/settings/mailbox）一致。新增的并发用例把 `load_library`
+  拉长 100ms 并让两个线程同时进入：去掉锁时稳定只剩 1 条记录（复现丢更新），加锁后
+  `a.py`/`b.py` 两条都在。
+- **SOCKS 代理用户不再在启动阶段直接崩掉。** `httpx`（OpenAI/Anthropic SDK 共用）默认
+  读取 `ALL_PROXY`/`HTTPS_PROXY`；当环境里是 `socks5://…` 而没装 `socksio` 时，客户端
+  构造就抛 `ImportError`，用户看到的是一段 SDK 栈，harness 根本起不来。新增精确锁版依赖
+  `socksio==1.0.0`（纯 Python、无传递依赖），SOCKS 代理可直接使用。这也是本机全量测试里
+  7 条 `test_openai_client` / hooks 用例失败的根因。
+- **`tests/test_tools/test_bash_tool.py` 的 drain 用例不再看机器负载脸色。** 测试替身在
+  第一次 `read()` 里 `sleep(0.08)` 后返回 `b""`，本意是"错过 50ms 读窗口"；但真实
+  `StreamReader` 只在 EOF 返回 `b""`，负载高时事件循环先跑完 sleep，drain 正确地把它
+  当成流结束而提前返回，用例随即红。改为抛 `asyncio.TimeoutError`（与 `wait_for` 的
+  超时语义一致），让"第一次读超时、第二次拿到 late burst"在任何调度下都成立；生产代码
+  未改（它把 `b""` 当 EOF 是对的）。
+- **工作树里跑 `pytest` 不再去测另一棵树的代码（这条让此前的绿是假的）。**
+  harness 是 `pip install -e` 装的，editable 记录把 `iterate_harness` 固定到**某一个**
+  checkout；在别的 worktree 里 `cd harness/iterate-harness && pytest tests/ -q` 时，
+  测试文件里的 `from iterate_harness import ...` 解析到的是那个被固定的 checkout 的源码。
+  于是本版本的工作树实测**根本没能被测到**：全量用例如期跑到最后一步，报
+  `ImportError: cannot import name 'trend_report'`（新模块只存在于工作树里），
+  而此前任何一次绿灯都无法证明是这棵树的代码在跑。`[tool.pytest.ini_options]`
+  显式加 `pythonpath = ["src"]`，让"你在哪跑"就等于"测的是哪"，CI 与工作树一致
+  （与 mypy 早已用 `mypy_path = "src"` 规避的同一陷阱）。
+- **`trend_report` 不再把布尔值当成行号或计数。** Python 里 `True` 是 `int` 的实例，
+  所以 `line: true` 会被认成第 1 行、`totalFindings: true` 会被当成 1 条 finding——
+  而趋势库的指纹对同样的 `true` 一律按"文件级、无行号"处理（`finding_fingerprint`
+  显式拒绝 bool），于是同一个 finding 在趋势报告里显示成 `file:1`、在趋势库里显示成
+  `file`，两个视图对不上，行号列还会冒出字面 `True`。现在两处口径一致：`line` 为布尔
+  时按"无行号"处理，`totalFindings` 不是真整数时回落到该条目实际还原出的 finding 数。
+- **`python -m iterate_harness.cli` 不再静默空跑。** 应用此前只在 `__main__.py` 里接上，
+  所以按模块路径调用时导入成功、什么都不做、退出码 0——看起来像"跑完了"，其实什么都没
+  执行。现在模块路径与 `python -m iterate_harness` 行为一致。
+
+### Changed
+
+- `.gitignore` 的 `node_modules` 去掉尾斜杠。带斜杠的 `frontend/web/node_modules/`
+  只匹配**目录**，而共享 checkout 的工作树里 node_modules 是一个**符号链接**（git 眼里
+  是文件），于是它一路显示为未跟踪，任何一次 `git add -A` 都可能把一个 200MB 的安装
+  目录推上发布仓。
+- `frontend/web/package.json` 与 lock 从落后的 2.7.0 对齐到本次版本；此前 2.8.0 发版
+  只 bump 了 Python 包与 npm 包装器，前端元数据留在旧版本，构建产物与发布记录对不上。
+
 ## [2.8.0] - 2026-10-22
 
 ### Fixed
@@ -100,6 +175,68 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ### Added
 
+- **#25 见证 stash 的并行覆盖窗口修掉，并把"为什么 fork 那侧不核"写进函数注释。**
+  折叠规则只认"新键或换了对象"，于是同一轮里两个并行 MCP 调用各自从"没有见证"的浅快照起手、
+  各建一个 dict，后折回的整键盖掉前一个——第二次的证据在，第一次的没了，方向仍是漏判不是误判，
+  但"漏判"本身就是这条核对存在的理由。修法是在 `engine/query.py` 的折叠循环里对这一个键做合并
+  而不是替换（键名与上限从 `dimension_ledger` import，引擎不重述字符串；合并后再按上限淘汰最旧，
+  免得一轮里几十个兄弟调用把每一轮都要携带的 dict 撑大），引擎对其它键的"不回填旧浅拷贝"规则一字未动。
+  用例里那道**屏障才是这条测试的本体**：不加屏障时两个调用实际是一先一后跑完的，第二个快照到第一个
+  的 dict 并原地改，于是断言无论折叠怎么写都绿——那测的是调度器不是规则；强制两次调用同时在飞之后
+  把合并还原成替换，那条用例当场点名红（`len(arrivals) == 2` 也先挡住"没重叠也算过"这种滑过去）。
+  另一处是防止下一个人重走我的弯路：`echo_contestation` 的注释里点名 fork 那侧
+  （`plugin/glasspane-decision-log.ts` 从引擎回包的 pack 记决策、维度取自同一次调用的 metadata，
+  声明与记录同源），照搬过去就是"拿一个值和它自己比"——#23 那版就是这么死的，别再补一遍。
+  `tests/test_engine` + `tests/test_iterate` 1272 passed，唯一那条红（`test_subagent_stop_hook…`，
+  `return_code=127`）在 pristine 基线同样红，是本机没有 `python` 可执行文件的既有环境项。
+- **#24 交叉核对搬到见证侧：#23 那个"账本侧裁决"在生产里永远跑不到，这次换成 agent 自己那一次调用。**
+  先记清为什么搬。#23 把判定放在 ledger 的 `reverification` 行上（声明 X、壳回 Y ⇒ 扣住不计），落码后回
+  读发送方才看见死路：那条路上唯一可能写进回显的发送者就是 ① 自己，而 ① 要声明某 op 服务哪个维度，
+  只能把账本里那条归属抄回来——被拿来核对的正是被核对的东西，比较永远相等；不抄就没有回显。于是
+  "沉默不算异议"这条我自己写下的规矩，反过来证明了那个读者没有生产者。**删掉裁决，保留引用**：
+  `echoed_dimension_map` / `contested_attributions` / `_uncontested_counts` /
+  `dimension_context_with_contested` 一并移除，覆盖率那行回到原状，`echoedDimension` 仍随 ① 的行写进
+  ledger（它是"壳当时说了什么"的旁证，与 `annotations` 同一性质，不接任何判决），键名改由
+  `dimension_ledger.ECHOED_DIMENSION_DATA_KEY` 一处拼写、写侧 import。
+  新的读者放在真正有生产者的那条缝上：`tools/mcp_tool.py`——agent 自己调 `gp_*` 就是它。改动三处，
+  各自有能红的对照：(1) 适配器改吃 `call_tool_parts`，交给模型的仍是 `call_tool` 那句一字不差的
+  join（用例把两种视图逐字节比过），因为回显是**独立 content item**，拼平了就再也分不出来；
+  (2) `record_observed_echo` 把见证按 op 存进 run 的 tool metadata（与 `iterate_state` 同一条 durable
+  通道，才能在后面那一笔写账本时还在），有界 64、滑窗淘汰最旧——不设界的 dict 会跟着每一轮折叠；
+  (3) `iterate_decision_log` 的 append 在 `attribution_refusal` 之后查 `echo_contestation`，声明与见证
+  不一致就**拒写**、返回 `KERNEL_E_DIMENSION_CONTEST`，remedy 给出两条都能执行的路（按见证的维度记，
+  或重新按你要的维度读一次再引那一次），并且**不许改前一次调用的声明**——它就是这次核对用的证据。
+  不一致以外的全部情形都放行：没有见证、见证属于别的 op、以及声明与见证一致。核对不替账本凭空加一个
+  维度的证据，这一点与 #23 同一条边界。
+  前缀守卫也有读者：只有存在 `dimension: ` 开头的旁项时才进分类器，普通工具回话不吃那次 JSON 解析；
+  探针用"记账式 spy"而非抛异常的 spy——适配器刻意兜住见证失败不让它打断 agent 的工具回话，会抛的
+  探针正好被那道兜底吞掉，那样测不到"从没被调用"这句话（这条是本轮变异教我的，见下）。见证失败也从
+  debug 提到 warning：坏掉的见证若静默停摆，所有走回话的用例照样绿。
+  真机对照（2026-10-22，两个壳都是本机真物，op 号取自 `~/.glasspane/evidence` 里真实落盘的文件名）：
+  今天从 main 打出的 bundle 广告 `dimension`、真回话里带出那行回显、见证写下
+  `{op_01M35PAMYNNPJRNCCM6Q2C34XQ: security}`，随后用 "correctness" 去记决策被拒；而 `/usr/local/bin`
+  那个旧壳不广告、无回显、无见证，核对放行——沉默不算异议在生产形状下同时被两侧测到。顺带量到一件事：
+  这台机器的 daemon 自报 **1.6.2**，它的 `capabilities` 还是修好之前那份手抄表（多 `probe`、缺
+  attach/last_evidence/probe_status），所以壳那句"该调用会被答 methodNotFound"与"last_evidence 真的
+  答了 pack"同时成立——**读得对、后果说过头**，源里清单已由 `EngineMethod` 派生，父仓下一次发布即消失；
+  这不是新缺陷，但它是"漂移告警要拿在跑的构建去核"的一条实例。
+  测试：`test_dimension_echo.py` 15 → **21** 条。新加的两条走的是 `engine/query._execute_tool_call`
+  本体，不是把手工 stash 递给被测函数：先看 MCP 那一调把见证折进 `context.tool_metadata`，再看同一
+  context 上的 `iterate_decision_log` 因此被拒、而换成一致的维度就写得进去——上一版栽的正是"函数单测
+  绿、状态没人搬"。顺带修了两个假件的形状：`_FakeMcpManager` / `FakeMcpManager` 只有 `call_tool` 而
+  真 `McpClientManager` 两个视图都有，适配器改吃 parts 后它们当场 AttributeError——**假件缺哪个方法，
+  就该补哪个方法，而不是让产品代码去迁就假件**，两边现在保持"join 就是 parts 的拼接"这个真实关系。
+  变异九发逐一点名变红（适配器不再见证／模型字节改形／前缀守卫拿掉／写时核对删除／把别的 op 的缺席
+  当异议／一致也当异议／上限不淘汰／收下非法 key／① 的行停发引用），按自带备份 + sha256 核回。P5
+  第一版打不动东西：我那条"沉默当异议"的变异改的是*已有 stash* 那一支，而对应用例根本没建 stash——
+  换到有 stash 的那条上才红，这条也记着。
+  归属留档（这一轮量了三次，每次都换说法，记清楚）：第一次全量 16 失败里 8 条（openai client /
+  reasoning effort / untested_features）是这台机器 shell 带着 HTTP(S)_PROXY 时 httpx 建 transport 就炸
+  的噪声，清掉代理变量后基线（`origin/main` `82369b99`）与我这棵树跑同一子集都是同样 3 条既有环境失败
+  （`test_tasks/test_manager.py`，本机没有 `python` 可执行文件），另 2 条就是上面那两个假件——**"我
+  改红了套件"与"这台机器的代理改红了套件"是两句话，得分别量**。干净环境再全量一次：2876 passed /
+  9 failed；把那 9 条单独再跑做对照，我这棵树红 6 条、基线在同一份名单上红 **7** 条，全落在那一族
+  环境项（无 `python` + 负载下的计时）里，本批一条也没新弄红。ruff check 干净。落 iterate-skill main。
 - **#23 面 A 的回显有了读者：交叉核对只减不加，缺回显永不算异议（场景②/⑧ 的补账）。**
   上一批给面 A 装了 `dimension` 槽并让它把声明回显成独立 content item；如果没人读它，那行字就只是
   多一块表面——本仓反复把这种形状叫"没交付"。现在它有读者，且读者只做一件事：**怀疑**，不裁决。

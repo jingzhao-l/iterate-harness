@@ -111,9 +111,17 @@ class _FakeMcpManager:
     def list_tools(self) -> list[McpToolInfo]:
         return list(self._tool_infos)
 
-    async def call_tool(self, server_name: str, tool_name: str, _arguments: dict) -> str:
+    async def call_tool_parts(
+        self, server_name: str, tool_name: str, _arguments: dict
+    ) -> list[str]:
+        """The view the adapter consumes. The real client defines ``call_tool`` as exactly
+        this list joined, so the stand-in keeps the same relationship rather than offering
+        one of the two views and letting the adapter drift from production shape."""
         self.calls.append((server_name, tool_name))
-        return f"{server_name}:{tool_name}"
+        return [f"{server_name}:{tool_name}"]
+
+    async def call_tool(self, server_name: str, tool_name: str, arguments: dict) -> str:
+        return "\n".join(await self.call_tool_parts(server_name, tool_name, arguments)).strip()
 
 
 class TestUniquifyToolName:

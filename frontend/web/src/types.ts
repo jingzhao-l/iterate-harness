@@ -125,6 +125,54 @@ export interface ConfigView {
   version: string;
 }
 
+// Cross-run trend (design §17.3 P8). Mirrors iterate/trend_report.py.
+export interface TrendFinding {
+  file: string;
+  line: number | null;
+  dimension: string;
+  severity: string;
+  summary: string;
+  fingerprint?: string;
+  runs?: number;
+  first_seen?: string;
+  last_seen?: string;
+}
+
+export interface TrendRun {
+  index: number;
+  timestamp: string;
+  round: number;
+  verdict: string;
+  mode: string;
+  total: number;
+  reported_total: number;
+  new: number;
+  fixed: number;
+  regressed: number;
+  unchanged: number;
+  by_severity: Record<string, number>;
+  by_dimension: Record<string, number>;
+  new_findings?: TrendFinding[];
+  fixed_findings?: TrendFinding[];
+  regressed_findings?: TrendFinding[];
+}
+
+export interface TrendReport {
+  project_root: string;
+  generated_at: string;
+  has_data: boolean;
+  total_runs: number;
+  tracked: number;
+  open: number;
+  fixed: number;
+  stubborn: number;
+  runs: TrendRun[];
+  latest: TrendRun | null;
+  open_findings: TrendFinding[];
+  stubborn_findings: TrendFinding[];
+  open_by_dimension: Record<string, number>;
+}
+
 export interface ReportView {
   name: string;
   path: string;

@@ -56,6 +56,24 @@ class StatusResponse(BaseModel):
     audit_recent: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class TrendView(BaseModel):
+    """Cross-run finding trend (design §17.3 P8)."""
+
+    project_root: str
+    generated_at: str
+    has_data: bool
+    total_runs: int
+    tracked: int
+    open: int
+    fixed: int
+    stubborn: int
+    runs: list[dict[str, Any]] = Field(default_factory=list)
+    latest: dict[str, Any] | None = None
+    open_findings: list[dict[str, Any]] = Field(default_factory=list)
+    stubborn_findings: list[dict[str, Any]] = Field(default_factory=list)
+    open_by_dimension: dict[str, int] = Field(default_factory=dict)
+
+
 class RunSummary(BaseModel):
     """One decision-log entry in the runs overview (design §17.3 P2)."""
 

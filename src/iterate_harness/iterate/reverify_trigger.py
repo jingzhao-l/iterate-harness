@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import Any
 
 from .decision_log import DECISION_LOG_REFUSALS, append_entry, make_entry, read_entries
+from .dimension_ledger import ECHOED_DIMENSION_DATA_KEY
 from .glasspane_reverification import (
     RelayedAnswer,
     ReverificationRun,
@@ -241,7 +242,7 @@ def _relay_answer(answer: RelayedAnswer, *, full: bool) -> dict[str, Any]:
     # echoed nothing" — which a reader must not read as "the call served no dimension", since a
     # call through the other surface declares it in metadata.
     if answer.echoed_dimension is not None:
-        relayed["echoedDimension"] = answer.echoed_dimension
+        relayed[ECHOED_DIMENSION_DATA_KEY] = answer.echoed_dimension
     if full:
         relayed["arguments"] = dict(answer.arguments)
         relayed["outcome"] = answer.outcome

@@ -79,26 +79,11 @@ def _load_known_intentional(context: ToolExecutionContext) -> list[itypes.KnownI
 def _dimension_coverage_line(
     context: ToolExecutionContext, effective: config_loader.EffectiveConfig
 ) -> str | None:
-    """The run's ``dimensionContext`` verdict as one line, or ``None`` when unmeasurable.
-
-    The withheld-attribution note rides on the same line and only when there is something to
-    say: a coverage figure that quietly dropped a contested attribution would be a smaller
-    number the model cannot ask about, and "the shell's echo disagreed" is the one fact that
-    makes the drop legible. It never adds a verification.
-    """
-    built, contested = dimension_ledger.dimension_context_with_contested(
+    """The run's ``dimensionContext`` verdict as one line, or ``None`` when unmeasurable."""
+    built = dimension_ledger.project_dimension_context(
         context.cwd, fallback=[str(d) for d in effective.config.dimensions]
     )
-    if built is None:
-        return None
-    line = format_dimension_context(built)
-    if contested:
-        line += (
-            f" — {len(contested)} attribution(s) withheld: the dimension declared for the call "
-            "disagrees with what the shell echoed for it, so the run reports that evidence as "
-            "unverified instead of choosing which side to believe"
-        )
-    return line
+    return None if built is None else format_dimension_context(built)
 
 
 def _refresh_dimension_coverage(context: ToolExecutionContext) -> str | None:
@@ -762,6 +747,18 @@ class IterateDecisionLogTool(BaseTool[BaseModel]):
         )
         if refusal is not None:
             return _json_output(refusal, error=True)
+        # The witnessed-call cross-check, one step later and on the same side of the write. The
+        # shell said what the call that produced this operation was declared for; this is the
+        # agent's later claim about the same operation. Two independent witnesses disagreeing is
+        # not something this harness may adjudicate, and it is not something to keep quietly —
+        # so the entry is refused, nothing is written, and both ways forward are named. No
+        # observation is no objection: an operation nobody fetched through this shell, or a
+        # shell too old to echo, leaves the claim standing exactly as it was before this check.
+        contest = dimension_ledger.echo_contestation(
+            metadata=context.metadata, dimension=args.dimension, operation_id=args.operation_id
+        )
+        if contest is not None:
+            return _json_output(contest, error=True)
         entry = decision_log.make_entry(
             entry_type=args.type,
             round_number=args.round,

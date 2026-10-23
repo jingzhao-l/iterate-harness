@@ -85,10 +85,15 @@ class _LateDeliverStdout:
 
     async def read(self, _size: int = -1):
         self.calls += 1
-        if self.calls <= 1:
+        if self.calls == 1:
             # Exceed the default 50ms read window so ``wait_for`` times out.
+            # Raising TimeoutError (rather than returning b"") matters: a real
+            # StreamReader returns b"" only at EOF, so returning it here made
+            # the test flip to "empty stream" whenever the event loop was slow
+            # enough to let the sleep finish before wait_for's timer — the
+            # drain then correctly returned early and the assertion failed.
             await asyncio.sleep(0.08)
-            return b""
+            raise asyncio.TimeoutError
         if self.calls == 2:
             return b"early output\n"
         # After delivering the burst once, go idle/empty so the drain's retry

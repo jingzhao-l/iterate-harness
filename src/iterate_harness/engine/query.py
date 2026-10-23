@@ -26,6 +26,7 @@ from iterate_harness.api.provider import is_model_multimodal
 from iterate_harness.api.usage import UsageSnapshot
 from iterate_harness.config.paths import get_data_dir
 from iterate_harness.defensive.kernel import DEFENSIVE_KERNEL_KEY, DefensiveKernel
+from iterate_harness.iterate.dimension_ledger import ECHO_METADATA_KEY, ECHO_METADATA_CAP
 from iterate_harness.engine.messages import (
     ContentBlock,
     ConversationMessage,
@@ -1604,6 +1605,20 @@ async def _execute_tool_call(
             if key in ("tool_registry", "ask_user_prompt", DEFENSIVE_KERNEL_KEY):
                 continue
             prior_ref = prior_metadata.get(key, _NOT_PRESENT)
+            if key == ECHO_METADATA_KEY and isinstance(value, dict):
+                # One accumulating key gets a merge instead of a replace, and the reason is the
+                # same concurrency this loop exists to protect: two sibling MCP calls in ONE turn
+                # both start from a shallow copy that has no witness dict, so each builds its own
+                # and the last fold would silently discard the other's evidence. Merging keeps
+                # both; the cap is re-applied so a turn full of siblings cannot grow the stash
+                # past what every later turn has to carry.
+                existing = context.tool_metadata.get(key)
+                merged = dict(existing) if isinstance(existing, dict) else {}
+                merged.update(value)
+                while len(merged) > ECHO_METADATA_CAP:
+                    merged.pop(next(iter(merged)))
+                context.tool_metadata[key] = merged
+                continue
             if prior_ref is _NOT_PRESENT or value is not prior_ref:
                 context.tool_metadata[key] = value
     elapsed = time.monotonic() - t0

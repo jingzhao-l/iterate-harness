@@ -10,6 +10,8 @@ the temp file. Fix: ``tempfile.mkstemp`` (process-unique name) +
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -71,9 +73,10 @@ def test_replace_failure_cleans_temp_file(tmp_path, monkeypatch):
     assert _tmp_leftovers(tmp_path) == []
 
 
-def test_concurrent_record_runs_keep_library_consistent(tmp_path):
+def test_concurrent_record_runs_keep_library_consistent(tmp_path, monkeypatch):
     # Two writers doing read-modify-write concurrently: no temp-file race
     # crashes, no torn JSON on disk, and no leftover temp files.
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
     f1 = finding(file="a.py", line=1)
     f2 = finding(file="b.py", line=2)
     stamp = "2026-01-01T00:00:00+00:00"
@@ -88,4 +91,41 @@ def test_concurrent_record_runs_keep_library_consistent(tmp_path):
     library = trend_store.load_library(tmp_path)
     assert len(library) >= 1
     assert all(isinstance(value, dict) for value in library.values())
+    assert _tmp_leftovers(tmp_path) == []
+
+
+def test_concurrent_record_runs_do_not_lose_updates(tmp_path, monkeypatch):
+    """Widen the read-modify-write window; both findings must survive.
+
+    Without a lock both threads load the same empty library, sleep, and then
+    each writes only its own finding — a deterministic lost update. With the
+    lock the second writer loads the first writer's file and keeps both
+    records (the older one is marked fixed by full-sweep attribution).
+    """
+    monkeypatch.setenv("ITERATE_DATA_DIR", str(tmp_path / "data"))
+    real_load = trend_store.load_library
+
+    def slow_load(project_root):
+        records = real_load(project_root)
+        time.sleep(0.1)
+        return records
+
+    monkeypatch.setattr(trend_store, "load_library", slow_load)
+    f1 = finding(file="a.py", line=1)
+    f2 = finding(file="b.py", line=2)
+    stamp = "2026-01-01T00:00:00+00:00"
+    barrier = threading.Barrier(2)
+
+    def write(item):
+        barrier.wait(timeout=5)
+        return trend_store.record_run(tmp_path, [item], stamp)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(write, f1), pool.submit(write, f2)]
+        for future in futures:
+            future.result()
+
+    library = trend_store.load_library(tmp_path)
+    assert len(library) == 2
+    assert {record["file"] for record in library.values()} == {"a.py", "b.py"}
     assert _tmp_leftovers(tmp_path) == []

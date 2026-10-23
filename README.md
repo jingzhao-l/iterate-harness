@@ -257,7 +257,11 @@ ih iterate sessions                  # list saved sessions (--limit N, --json), 
 
 ```bash
 ih iterate log            # tail the decision log
-ih iterate log --trend    # cross-run finding trend (new/fixed/regressed/stubborn)
+ih iterate log --trend    # thin cross-run library summary
+ih iterate trend          # per-run new/fixed/regressed history + stubborn/open findings
+ih iterate trend --json   # machine-readable trend report (for dashboards/CI)
+ih iterate trend --fail-on-regression        # CI gate: fail if a fixed finding came back
+ih iterate trend --fail-on-new high          # CI gate: fail on new high/critical findings
 ih iterate log --replay   # replay the whole run chronologically (relative timestamps)
 ih iterate report         # render the final report (CI mode, see below)
 ih iterate report --pr    # post/update the report as a PR comment (gh CLI, idempotent)
@@ -296,6 +300,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Esc intervention** — press Esc mid-loop: the loop pauses at the next round boundary and opens a directional-key menu (skip top finding / narrow dimensions / stop / resume); a second Esc force-interrupts the turn.
 - **Breakpoint resume** — the TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings.
 - **Finding trend library** — every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `ih iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs.
+- **Per-run trend history** — `ih iterate trend` reconstructs every finished run from the decision log and shows what that run **added, fixed, or regressed**, plus open/stubborn findings; `--fail-on-regression` / `--fail-on-new <severity>` turn it into a CI gate. The same view is a page in the WebUI (see below).
 
 ### Reports & integration
 
@@ -307,6 +312,16 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Batch ranking** — `ih iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch.
 - **Scheduled review** — `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library.
 - **Cron scheduler daemon** — `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`).
+
+### WebUI management console
+
+`ih web serve` starts a loopback-only console (`--project <root>` to pin a
+project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
+Workspaces, Checkpoints, Budget & Rate, Config, Reports. The **Trend** page
+(`g t` shortcut) renders the same per-run new/fixed/regressed history and
+stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
+entries arrive — no terminal needed to tell whether a loop is actually
+converging.
 
 ### Cost, resources & gates
 

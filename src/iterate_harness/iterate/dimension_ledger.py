@@ -56,10 +56,25 @@ DIMENSION_DATA_KEY = "dimension"
 OPERATION_ID_DATA_KEY = "operationId"
 
 #: The relayed echo, as :mod:`.reverify_trigger` writes it into a ``reverification`` ledger
-#: entry. Named here because the writer and this reader are two halves of one key: a writer
-#: that used another name would leave every cross-check silently finding no echo, which is the
-#: quiet direction of wrong.
+#: entry: a citation beside the answer, kept verbatim in the annotations too, and read by no
+#: verdict here on purpose — see :func:`echo_contestation` for why the judgement is taken from
+#: the witnessed call rather than from these rows. Named here so writer and any future reader
+#: share one key.
 ECHOED_DIMENSION_DATA_KEY = "echoedDimension"
+
+#: Where the MCP adapter parks the declarations it witnessed, in the run's tool metadata — the
+#: same durable channel ``iterate_state`` uses, so a later ``iterate_decision_log`` call in this
+#: session can be judged against the call that came before it.
+ECHO_METADATA_KEY = "glasspane_echoed_dimensions"
+
+#: How many witnessed declarations the stash keeps. Bounded because this dict is folded into
+#: every following turn, and an unbounded one grows with the session.
+ECHO_METADATA_CAP = 64
+
+#: Refusal code for a decision whose declared dimension contradicts the witnessed echo. The
+#: shell owns the shape refusal (``GP_E_DIMENSION``); this one is about a claim that was
+#: well-formed and still does not match the call it cites, so it is the harness's own.
+DIMENSION_CONTEST_CODE = "KERNEL_E_DIMENSION_CONTEST"
 
 
 def is_valid_dimension_id(value: object) -> bool:
@@ -195,106 +210,94 @@ def operation_dimension_map(project_root: str | Path) -> dict[str, str]:
     return mapping
 
 
-def echoed_dimension_map(project_root: str | Path) -> dict[str, str]:
-    """Operation id → the dimension the shell echoed on the call that answered for it.
+def record_observed_echo(
+    metadata: dict[str, Any] | None, operation_id: object, echoed: object
+) -> None:
+    """Write down what the shell said a call was declared for, keyed by the operation it answered.
 
-    Read out of the ledger's own ``reverification`` entries, because that is the one place this
-    harness holds the engine's answer and the shell's declaration for the same operation
-    together — and it is a citation of what came back, not a new claim: an answer with no echo
-    contributes nothing here, which is what makes "the other surface declares in metadata" read
-    as silence rather than as disagreement.
+    Called by the MCP adapter on the reply it is about to hand the model, so the witness is
+    contemporaneous: what the shell echoed *at the time of the call*, not what anyone remembers
+    later. Absent on purpose when either half is missing or malformed — an echo without an
+    operation, or an operation without an echo, is nothing anybody may act on.
+
+    The stash is bounded and lives in the run's tool metadata (the same channel
+    ``iterate_state`` travels on), because a long session must not grow an unbounded dict that
+    gets folded into every following turn.
+
+    One stated limit, in the safe direction. Two MCP calls in the SAME turn both start from a
+    shallow copy with no witness dict, so each builds its own; the engine's fold therefore
+    **merges** this one key instead of replacing it (see ``engine/query.py``), and both siblings'
+    witnesses survive. A sibling that overflows the cap can still evict the oldest entry — the
+    failure mode is a missed contest, never a wrong one, and nothing here can refuse a decision
+    that agrees with what was witnessed.
     """
-    from .reverify_trigger import LEDGER_DATA_KIND
-
-    echoes: dict[str, str] = {}
-    for entry in decision_log.read_entries(project_root):
-        data: Mapping[str, Any] = entry.data if isinstance(entry.data, dict) else {}
-        if data.get("kind") != LEDGER_DATA_KIND:
-            continue
-        answers = data.get("answers")
-        if not isinstance(answers, list):
-            continue
-        for answer in answers:
-            if not isinstance(answer, dict):
-                continue
-            operation_id = answer.get(OPERATION_ID_DATA_KEY)
-            echoed = answer.get(ECHOED_DIMENSION_DATA_KEY)
-            if is_valid_operation_id(operation_id) and is_valid_dimension_id(echoed):
-                echoes[str(operation_id)] = str(echoed)
-    return echoes
+    if metadata is None or not is_valid_operation_id(operation_id):
+        return
+    if not is_valid_dimension_id(echoed):
+        return
+    stash = metadata.get(ECHO_METADATA_KEY)
+    if not isinstance(stash, dict):
+        stash = {}
+        metadata[ECHO_METADATA_KEY] = stash
+    stash[str(operation_id)] = str(echoed)
+    while len(stash) > ECHO_METADATA_CAP:
+        # Insertion order is arrival order; dropping the oldest keeps the window on the calls
+        # this round can still cite.
+        stash.pop(next(iter(stash)))
 
 
-def contested_attributions(project_root: str | Path) -> list[dict[str, str]]:
-    """Decisions whose declared dimension the shell's own echo contradicts.
+def echo_contestation(
+    *, metadata: object, dimension: object, operation_id: object
+) -> dict[str, str] | None:
+    """The refusal payload when the ledger's claim contradicts what the shell echoed.
 
-    WHY THIS EXISTS AND WHY IT ONLY SUBTRACTS. A ledger attribution is the agent saying "this
-    call served dimension X"; the echo is the shell saying what the call it just answered was
-    declared as. When the two disagree, the harness has no basis to keep the more flattering
-    reading, and it has no mandate to decide which one is true either — the kernel decides
-    coverage from what was *recorded*, so the only honest action is to withhold the contested
-    attribution and say how many were withheld. Nothing here ever adds a verification, and a
-    missing echo is not a contest: silence leaves the attribution standing.
+    ``None`` — no objection — in every case this module cannot measure: no stash, no observation
+    for that operation, or a declaration that agrees. A mismatch means the decision being
+    recorded now cites an operation whose evidence was fetched under a *different* declared
+    dimension, which is the ledger renaming what a session claims it covered.
+
+    Why the judgement sits here and not over the ledger's own rows: the only sender that could
+    put an echo into a reverification row is scenario ①'s re-verification, and ① can declare a
+    dimension for an operation only by quoting the very attribution the check would test — the
+    request carries no per-operation dimension, and inventing one would make the comparison
+    circular. Here the two sides are genuinely independent: the shell witnessed the call, the
+    agent is now making a claim about it.
+
+    Nothing here decides which side is true, and nothing edits the earlier call. It refuses the
+    new write and names the two ways forward, because a harness that quietly kept the more
+    flattering attribution would be the thing being lied to.
+
+    And please read this before "fixing the asymmetry" on the other surface: the fork's plugin
+    (``packages/opencode/src/plugin/glasspane-decision-log.ts``) writes its decision from the
+    evidence frame in the reply it just handled, and its dimension comes from that same call's
+    tool metadata. Declaration and record are one source there, so there is no second witness to
+    disagree — a check copied onto that side would compare a value with itself. The contest is
+    meaningful exactly where two moments exist: a call witnessed now, a claim written later.
     """
-    echoes = echoed_dimension_map(project_root)
-    contested: list[dict[str, str]] = []
-    for dimension, operation_id in _attributed_entries(project_root):
-        if operation_id is None:
-            continue
-        echoed = echoes.get(operation_id)
-        if echoed is not None and echoed != dimension:
-            contested.append(
-                {
-                    DIMENSION_DATA_KEY: dimension,
-                    OPERATION_ID_DATA_KEY: operation_id,
-                    ECHOED_DIMENSION_DATA_KEY: echoed,
-                }
-            )
-    return contested
-
-
-def _uncontested_counts(project_root: str | Path) -> tuple[dict[str, int], list[dict[str, str]]]:
-    """Per-dimension decision counts with contested attributions removed, plus what was removed."""
-    contested = contested_attributions(project_root)
-    withheld = {(item[DIMENSION_DATA_KEY], item[OPERATION_ID_DATA_KEY]) for item in contested}
-    counts: dict[str, int] = {}
-    for dimension, operation_id in _attributed_entries(project_root):
-        if operation_id is not None and (dimension, operation_id) in withheld:
-            continue
-        counts[dimension] = counts.get(dimension, 0) + 1
-    return counts, contested
-
-
-def dimension_context_with_contested(
-    project_root: str | Path, *, fallback: Sequence[str] | None = None
-) -> tuple[DimensionContext | None, list[dict[str, str]]]:
-    """One accounting pass: the kernel's verdict and the attributions it withheld.
-
-    Returned together because they must come from the SAME read. Two passes would let a writer
-    that appends between them produce a verdict and a count that describe different ledgers —
-    and a count that does not describe the verdict it is printed under is worse than no count.
-    """
-    planned = planned_dimension_ids(project_root, fallback=fallback)
-    if not planned:
-        return None, []
-    counts, contested = _uncontested_counts(project_root)
-    if contested:
-        log.info(
-            "iterate dimension coverage withholds %d contested attribution(s): %s",
-            len(contested),
-            ", ".join(
-                f"{item[OPERATION_ID_DATA_KEY]} declared {item[DIMENSION_DATA_KEY]!r} "
-                f"while the shell echoed {item[ECHOED_DIMENSION_DATA_KEY]!r}"
-                for item in contested
-            ),
-        )
-    recorded = {dimension: {"decisions": count} for dimension, count in counts.items()}
-    try:
-        return dimension_context(planned, recorded), contested
-    except DimensionContextError as error:
-        # A malformed id on either side is a producer bug; the run keeps working, but this
-        # verdict is not printed rather than printed wrong.
-        log.warning("iterate dimension coverage could not be computed: %s", error)
-        return None, contested
+    if not isinstance(metadata, dict):
+        return None
+    if not is_valid_dimension_id(dimension) or not is_valid_operation_id(operation_id):
+        return None
+    stash = metadata.get(ECHO_METADATA_KEY)
+    if not isinstance(stash, dict):
+        return None
+    observed = stash.get(str(operation_id))
+    if not is_valid_dimension_id(observed) or observed == dimension:
+        return None
+    return {
+        "error": (
+            f"dimension {dimension!r} was declared for {operation_id}, but the shell answered "
+            f"that call under {observed!r}"
+        ),
+        "code": DIMENSION_CONTEST_CODE,
+        "remedy": (
+            "one of the two is wrong and the ledger cannot hold both: record the decision under "
+            f"{observed!r} (the declaration the evidence was actually fetched for), or re-read it "
+            f"with gp_last_evidence {{operationId: {operation_id!r}, dimension: {dimension!r}}} "
+            "and cite that call instead. Do not edit the earlier call's declaration — it is the "
+            "witness this check just used"
+        ),
+    }
 
 
 def project_dimension_context(
@@ -304,8 +307,19 @@ def project_dimension_context(
 
     ``None`` is the honest answer and it is not the same answer as an all-zero context: a
     caller that ordered compaction on an invented verdict would be clearing evidence the
-    kernel never said was verified. Contested attributions are already out of it — see
-    :func:`dimension_context_with_contested` for the version that also says how many.
+    kernel never said was verified.
     """
-    built, _contested = dimension_context_with_contested(project_root, fallback=fallback)
-    return built
+    planned = planned_dimension_ids(project_root, fallback=fallback)
+    if not planned:
+        return None
+    recorded = {
+        dimension: {"decisions": count}
+        for dimension, count in recorded_dimension_counts(project_root).items()
+    }
+    try:
+        return dimension_context(planned, recorded)
+    except DimensionContextError as error:
+        # A malformed id on either side is a producer bug; the run keeps working, but this
+        # verdict is not printed rather than printed wrong.
+        log.warning("iterate dimension coverage could not be computed: %s", error)
+        return None

@@ -300,10 +300,18 @@ def record_run(
         covered = {
             str(d) for d in covered_dimensions if isinstance(d, str) and d.strip()
         }
-    records = load_library(project_root)
-    delta = _apply_run_updates(records, safe_findings, now, covered_dimensions=covered)
-    _prune(records)
-    _save_library(project_root, records)
+    # The atomic replace kept the *file* from tearing, but the read-modify-write
+    # cycle was still unguarded: two processes finishing runs at the same time
+    # (WebUI + TUI, or two swarm workers) both loaded the old library and the
+    # later save silently dropped the earlier run's findings. Serialise the
+    # whole cycle the same way the other shared registries do.
+    from iterate_harness.utils.file_lock import exclusive_file_lock, sidecar_lock_path
+
+    with exclusive_file_lock(sidecar_lock_path(library_path(project_root))):
+        records = load_library(project_root)
+        delta = _apply_run_updates(records, safe_findings, now, covered_dimensions=covered)
+        _prune(records)
+        _save_library(project_root, records)
     return delta
 
 
