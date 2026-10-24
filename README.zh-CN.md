@@ -243,6 +243,16 @@ ih iterate report --html  # 单文件 HTML 报告（收敛曲线、内嵌 diff�
 ih iterate doctor         # skill↔harness 维度体系一致性检查
 ```
 
+### 团队与运行中子代理
+
+```bash
+ih iterate agents           # 列出 harness 正在跟踪的所有子代理，在跑的排前面
+ih iterate agents --json    # 机器可读名单（id/team/kind/status/时长/输出）
+ih iterate agents --tail 0  # 只取体积不要输出内容（轮询时很便宜）
+ih iterate agents --status running --limit 50
+ih iterate agents --stop reviewer@team1 --confirm   # 按任务 id 或 name@team 停掉一个
+```
+
 ### 批量与定时
 
 ```bash
@@ -275,6 +285,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 - **断点续跑** — TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding。
 - **finding 指纹趋势库** — 每次收尾用 `文件\|行号\|维度` 指纹把 finding 记入 `.iterate/trend-library.json`；`ih iterate log --trend` / `/iterate trend` 跨运行统计新增 / 已修复 / 回归 / 顽固（连续 3+ 轮）finding。
 - **逐次运行趋势历史** — `ih iterate trend` 从决策日志还原每一次已完成的运行，展示该轮**新增 / 修复 / 回归**以及未解决/顽固问题；`--fail-on-regression` / `--fail-on-new <severity>` 可直接作为 CI 门禁。同一视图也出现在 WebUI 的「趋势」页（见下）。
+- **团队名单与停止通道** — `ih iterate agents` 是「到底是哪个子代理卡住了、卡在哪」唯一能回答的地方：子进程 teammate、进程内 teammate 和普通 Shell 任务全部登记在同一个 task manager store 里，名单就是那个 store 的投影——在跑的排前面，带类型/后端、运行时长、输出体积和有上限的输出尾部。`--stop <id> --confirm` 是配套的干预通道（任务 id 或 `name@team`，服务端审计）。WebUI 里同一视图是一个实时页面。
 
 ### 报告与集成
 
@@ -289,7 +300,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 
 ### WebUI 管理台
 
-`ih web serve` 启动仅监听回环地址的管理台（`--project <root>` 固定项目，服务器上用 `--no-browser`）。页面：仪表盘、迭代详情、趋势、工作区、检查点、预算与限流、配置、报告。**趋势**页（快捷键 `g t`）渲染与 `ih iterate trend` 相同的逐轮新增/修复/回归历史与顽固/未解决 finding，并随新决策条目实时更新——不盯终端也能判断这一轮到底有没有收敛。
+`ih web serve` 启动仅监听回环地址的管理台（`--project <root>` 固定项目，服务器上用 `--no-browser`）。页面：仪表盘、迭代详情、趋势、工作区、**团队**、检查点、预算与限流、配置、报告。**趋势**页（快捷键 `g t`）渲染与 `ih iterate trend` 相同的逐轮新增/修复/回归历史与顽固/未解决 finding，并随新决策条目实时更新——不盯终端也能判断这一轮到底有没有收敛。**团队**页（`g a`）显示服务进程此刻正在跑的每一个子代理——子进程 teammate、进程内 teammate 与 Shell 任务并排，带运行时长、输出体积和各自最后说的内容——也是唯一能在浏览器里停掉单个卡住子代理的入口（二次确认 + 服务端审计）；有子代理在跑时轮询刷新，名单安静下来就自动停止轮询。
 
 ### 成本、资源与门禁
 

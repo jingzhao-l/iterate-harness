@@ -4,6 +4,94 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-10-24
+
+### Added
+
+- **团队名单：`ih iterate agents` + WebUI「团队」页（`GET /api/v1/agents`，快捷键 `g a`）。**
+  引擎其实一直在同时跑着三类工人——子进程 teammate、进程内 teammate、普通 Shell 任务——
+  它们全都往同一个 `BackgroundTaskManager` 里登记记录，但那个 store 外面**一个调用方都没有**：
+  `list_teammates` / `get_teammate_status` / `active_agents` / `shutdown_all` 四个方法写了却没人用，
+  CLI 与 WebUI 都看不到"现在到底有哪些子代理在跑、跑了多久、最后说了什么"，
+  更没法停掉其中一个。卡住的那一轮只能翻整份终端输出。
+  新增 `swarm/roster.py` 作为纯聚合层：每行带 `agent_id` / `team` / `kind`（进程内 / 子进程 /
+  Shell）/ `backend` / `duration_s` / `output_bytes` / 有上限的输出尾部 / `return_code`，
+  排序是"在跑的在前、跑得最久的在前"，让眼睛直接落在活着的工人身上。
+  - **CLI**：`ih iterate agents` 输出表格，`--json` 给脚本、`--tail/--status/--limit/--max-lines`
+    控制体积，`--stop <id> --confirm` 停掉一个（不带 `--confirm` 只提示要确认，不改任何东西）。
+    退出码 0/1/2 区分"空名单 / 部分失败 / 用法错误"。
+  - **WebUI**：侧栏新增「团队」，KPI 卡（在跑 / 失败 / 已停 / 完成 / 在册）+ 状态筛选 +
+    全文搜索（跨身份、团队、任务类型、描述、输出）+ 逐行展开（完整元数据与输出尾部）；
+    「在跑」的行走 5 秒轮询，全员终态或名单为空时自动停轮（空的控制台不该一直占着连接）。
+    停止按钮走二次确认弹窗，并在后端审计日志里留一条 `agent.shutdown`。
+  - **停止是同一套语义**：`stop_agent()` 按"任务 id → 子代理 `name@team`"解析，
+    路由到 `BackgroundTaskManager.stop_task`，返回结构化结果
+    `stopped | not_found | already_terminal | error | invalid` 而不是抛异常——
+    "找不到"是"它已经退出了"的实话，不该报成 500。
+  - 名单是**进程内**快照：任务记录只存在该进程的内存里（输出文件才落盘），
+    所以「团队」页显示的是**正在为你服务的这个 harness 进程**跑的工人。
+    这一点写进了接口文档，避免被读成跨进程全局视图。
+  34 条 roster 单测 + 14 条路由测 + 13 条 CLI 测 + 3 条真实子进程集成测
+  （真 `sleep` 子进程、真读回输出、真杀掉进程组）+ 前端 21 条 vitest。
+- **`KNOWN_STATUSES` 单一事实来源。** CLI 的 `--status` 与路由的 `?status=` 此前各自维护一份
+  合法值集合，两边已经不一致（路由收到 `status=exploding` 时回 200 空列表，
+  而 CLI 同样输入报用法错误）。现在两处都从 `roster.KNOWN_STATUSES` 取，
+  输错一个字母，两个入口拿到同一个 422 / 用法错误，而不是一个安静地给你空页。
+
+### Fixed
+
+- **`engine/query.py`：并行工具调用不再把 `CancelledError` 吞成一条"工具报错"。**
+  多工具分支用 `asyncio.gather(..., return_exceptions=True)`，注释里也写明了为什么
+  （单个工具失败不能把兄弟协程一起取消掉，否则 Anthropic 会因为缺 `tool_result` 拒掉下一请求）。
+  但 `CancelledError` 在 3.11 里是 `BaseException`，同样被收进列表当"数据"返回，
+  于是它被包成一个 `is_error=True` 的 `ToolResultBlock`。结果：**操作者按下的"停止运行"
+  变成了一个没人在意的小红点，循环照样进入下一次模型调用。**
+  现在先判 `CancelledError` 并原样抛出——停止就是停止。真正的工具异常仍然走原来的
+  `is_error` 分支，未回复的 `tool_use` 配对语义没有改变。
+- **`tasks/manager.py`：跨事件循环的停止请求不再报失败、也不再让进程活着。**
+  `BackgroundTaskManager` 是**进程**单例，键是 tasks 目录而不是事件循环——
+  所以同进程里第二次 `serve()`、`--reload`、或任何在新 loop 上调用的代码，
+  拿到的都是一堆"属于死循环的 future"。`stop_task` 里有三处这样的 await：
+  `process.wait()`、`stdin.wait_closed()`、watcher drain。
+  跨循环时它们抛 `RuntimeError: ... attached to a different loop` / `Event loop is closed`，
+  停止请求因此返回失败，而**进程已经被 SIGTERM 打掉了**——也就是"活儿干了但报告失败"。
+  新增 `_wait_for_exit()`：等待 future 失败时退回到用 `os.kill(pid, 0)` 向内核确认进程是否还在
+  （只探测、不发信号）；`_close_process_stdin()` 把 `stdin.close()` 也一并包进容错范围
+  （原来只有 `wait_closed()` 在 try 里，`close()` 自己就会抛）；watcher drain 对
+  "watcher 属于别的 loop"这种永远排不空的情况降级为 debug 日志。
+  新增真实子进程集成用例：跨 loop 停止后断言 OS 进程确实消失。
+- **`tasks/manager.py`：watcher drain 不再吞掉 `CancelledError`。** 原来
+  `except (asyncio.TimeoutError, asyncio.CancelledError)` 把两者一视同仁地记 debug 然后返回。
+  但"这个停止请求本身被取消了"就是操作者的停止信号——正常返回会把一个没走完的停止
+  报成成功，并把第二次停止掩盖掉。现在超时仍降级，取消则记录后原样抛出。
+- **`tasks/manager.py::read_task_output`：大于 12KB 的日志读不出来了。**
+  旧实现对**文本模式**的 handle 做 `seek(-max_bytes, os.SEEK_END)`——
+  Python 直接抛 `io.UnsupportedOperation: can't do nonzero end-relative seeks`，
+  也就是说任何超过 12KB 的任务日志，尾部读取一律失败。改为按二进制 seek+read 再
+  `decode(replace)`。`roster._read_output_tail` 用同一套写法，并在截断处打一行
+  `… earlier output truncated (N bytes)` 标记，让操作者知道看到的是片段而不是全部。
+- **`web/events.py`：仪表盘上"零成本"被永久钉在旧值上。** `_build_status_payload` 用
+  `as_float(report["totalCostUsd"]) or checkpoint["cost_usd"]` 做回落，
+  于是任何合法的**零**成本 / 零 token 报告都被判为假值，退回到检查点的陈旧数字——
+  米表从此不再动。改为存在性判断（与 `status.py` 里写对了的 `_budget_view` 一致），
+  两侧都过 `as_finite()`。
+- **`web/security.py`：审计日志不再在每次仪表盘心跳时读整个 append-only 文件。**
+  `AuditLog.entries` 被 SSE 状态推送反复调用，文件只增不减，读取成本线性增长。
+  新增 `_AUDIT_TAIL_BYTES = 1 MiB`，只扫尾部；若 seek 落在行中间，丢弃那半行头部
+  而不是把它当一条记录。
+- **前端 `formatBytes()` 的假安全写法。** `Number.isFinite(bytes ?? 0) ? (bytes as number) : 0`
+  里那个 `as number` 并没有把 `undefined` 变成数字，于是所有比较静默为假，
+  缺省体积渲染成 `"NaNMB"` 而不是 `"0B"`。改为先归一化再判断，并用测试钉住
+  （`undefined` / `null` / 负数都要落到 `0B`）。顺带全文扫了同类模式，其余三处
+  （`Dashboard.formatTokens` / `formatUsd`、`BudgetRate.formatTokens`、`RunStatusCard`）
+  都是先判后用的正确写法。
+
+### Changed
+
+- `pyproject.toml` / `src/iterate_harness/__init__.py` / `npm/package.json` /
+  `frontend/web/package.json`（+ lock）对齐到 2.10.0；`frontend/web/dist` 重新构建
+  （hatch 是 force-include 打包它，只改源码会发出旧控制台）。
+
 ## [2.9.0] - 2026-10-23
 
 ### Added

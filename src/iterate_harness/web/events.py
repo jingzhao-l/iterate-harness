@@ -94,19 +94,33 @@ def _build_status_payload(project_root: Path) -> dict[str, Any]:
     converged = report_data.get("converged")
     if converged is None:
         converged = checkpoint_converged
-    # ``or`` keeps the "report missing/present-but-zero → use checkpoint"
-    # fallback, but a NaN cost is truthy and would otherwise win; sanitize
-    # non-finite values to 0.0 so the SSE payload stays valid JSON.
-    cost_usd = as_float(report_data.get("totalCostUsd")) or as_float(
-        checkpoint.get("cost_usd", 0.0)
-    )
+    # "Report missing" and "report present with a 0 value" are different
+    # questions. A finished run that genuinely consumed 0 tokens (a local
+    # model, or a run that hit nothing billable) must NOT be overlaid with the
+    # checkpoint's pre-run usage: with an ``or`` fallback the zero was
+    # falsy, so the checkpoint value won and the dashboard meter sat on a
+    # stale number for the rest of the session — the REST budget view already
+    # distinguishes them, and the SSE delta is what the Dashboard merges over
+    # that snapshot.
+    if "totalTokens" in report_data:
+        total_tokens = as_int(report_data.get("totalTokens"))
+    else:
+        total_tokens = as_int(checkpoint.get("input_tokens", 0)) + as_int(
+            checkpoint.get("output_tokens", 0)
+        )
+    # A NaN cost is truthy and would otherwise win over the checkpoint;
+    # sanitise non-finite values to 0.0 so the SSE payload stays valid JSON.
+    if "totalCostUsd" in report_data:
+        cost_usd = as_finite(as_float(report_data.get("totalCostUsd")))
+    else:
+        cost_usd = as_finite(as_float(checkpoint.get("cost_usd", 0.0)))
     payload = {
         "entryCount": len(entries),
         "latestRound": latest_round,
         "checkpointExists": bool(checkpoint),
         "checkpointRound": as_int(checkpoint.get("round")) if checkpoint else 0,
-        "totalTokens": as_int(report_data.get("totalTokens")) or as_int(checkpoint.get("input_tokens", 0)),
-        "totalCostUsd": as_finite(cost_usd),
+        "totalTokens": total_tokens,
+        "totalCostUsd": cost_usd,
         "converged": converged,
         "timestamp": time.time(),
     }

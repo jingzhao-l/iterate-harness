@@ -276,7 +276,67 @@ class RunDriver(BaseModel):
     """Unix seconds when that process took the lease."""
 
 
+#: One row of the agent roster — one worker the harness is currently
+#: tracking, from any backend.
+class AgentRow(BaseModel):
+    """A single tracked worker (subprocess teammate, in-process teammate,
+    or shell task) plus a bounded tail of what it last emitted."""
+
+    id: str
+    agent_id: str = ""
+    """Swarm identity (``name@team``); empty for plain shell tasks."""
+    team: str = ""
+    kind: str = "other"
+    """``subprocess`` / ``in_process`` / ``shell`` / ``other``."""
+    backend: str = "subprocess"
+    task_type: str = ""
+    status: str = "unknown"
+    running: bool = False
+    description: str = ""
+    status_note: str = ""
+    progress: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    duration_s: float = 0.0
+    return_code: int | None = None
+    output_bytes: int = 0
+    tail: str = ""
+    cwd: str = ""
+
+
+class AgentsView(BaseModel):
+    """Roster of every worker the harness is tracking (design §17.3 P9)."""
+
+    generated_at: str = ""
+    total: int = 0
+    truncated: bool = False
+    running: int = 0
+    failed: int = 0
+    killed: int = 0
+    completed: int = 0
+    agents: list[AgentRow] = Field(default_factory=list)
+
+
+#: Outcomes of a stop request. ``not_found`` / ``already_terminal`` are
+#: truthful operator-facing answers, not server failures; ``error`` means the
+#: manager raised, with the real exception in ``message``.
+StopStatus = Literal["stopped", "not_found", "already_terminal", "error"]
+
+
+class StopAgentResult(BaseModel):
+    """Result of stopping one agent from the console."""
+
+    status: StopStatus
+    message: str
+    id: str | None = None
+    agent_id: str = ""
+    status_now: str | None = None
+    return_code: int | None = None
+
+
 __all__ = [
+    "AgentRow",
+    "AgentsView",
     "ChatMessage",
     "ChatRunStatus",
     "CheckpointView",
@@ -292,6 +352,8 @@ __all__ = [
     "SendMessageRequest",
     "SelectOption",
     "StartRequest",
+    "StopAgentResult",
+    "StopStatus",
     "StatusResponse",
     "TimelineEntry",
     "WaitingKind",

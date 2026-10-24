@@ -2,6 +2,7 @@
 // No UI framework, no axios — plain fetch with JSON handling + error decode.
 
 import type {
+  AgentsView,
   ChatMessage,
   ChatRunStatus,
   CheckpointView,
@@ -13,6 +14,7 @@ import type {
   RunSummary,
   StartRequest,
   StatusResponse,
+  StopAgentResult,
   TimelineEntry,
   TrendReport,
   TriageDecision,
@@ -214,6 +216,32 @@ export const api = {
   ): Promise<TrendReport> =>
     request<TrendReport>(
       `/trend${buildQuery(projectRoot, { top, history })}`,
+    ),
+
+  // Team roster: one row per worker the harness is tracking. Read-only, so it
+  // is safe to poll while a loop is running. `tail=0` returns sizes without
+  // payloads — used by the header counters so they stay cheap.
+  agents: (
+    projectRoot?: string,
+    opts: { tail?: number; status?: string; limit?: number } = {},
+  ): Promise<AgentsView> =>
+    request<AgentsView>(
+      `/agents${buildQuery(projectRoot, {
+        tail: opts.tail,
+        status: opts.status,
+        limit: opts.limit,
+      })}`,
+    ),
+
+  // Stop one worker. Mutating and audited: the `confirm` flag is the UI's
+  // secondary-confirmation contract, not a server-side formality.
+  shutdownAgent: (
+    agentId: string,
+    projectRoot?: string,
+  ): Promise<StopAgentResult> =>
+    request<StopAgentResult>(
+      `/agents/shutdown${buildQuery(projectRoot, { agent_id: agentId, confirm: "true" })}`,
+      { method: "POST" },
     ),
 
   reportPreview: (name: string, projectRoot?: string): Promise<ReportPreview> =>

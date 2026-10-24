@@ -850,7 +850,7 @@ app = typer.Typer(
 
 auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
-iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
+iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
 web_app = typer.Typer(name="web", help="WebUI management console")
 
 app.add_typer(auth_app)
@@ -1613,6 +1613,111 @@ def iterate_trend(
             failed = True
     if failed:
         raise typer.Exit(1)
+
+
+@iterate_app.command("agents")
+def iterate_agents(
+    as_json: bool = typer.Option(False, "--json", help="Emit the roster as JSON"),
+    tail: int = typer.Option(
+        2000, "--tail", min=0, max=20000, help="Bytes of output tail per worker (0 = omit tails)"
+    ),
+    status: str = typer.Option(
+        "", "--status", help="Filter by status: running | completed | failed | killed"
+    ),
+    limit: int = typer.Option(200, "--limit", min=1, max=500, help="Max workers to list"),
+    max_lines: int = typer.Option(
+        200, "--max-lines", min=1, max=1000, help="Cap on printed roster lines"
+    ),
+    stop: str = typer.Option(
+        "",
+        "--stop",
+        help="Stop one worker by task id or swarm identity (name@team) instead of listing",
+    ),
+    confirm: bool = typer.Option(
+        False, "--confirm", help="Really stop the worker named by --stop"
+    ),
+) -> None:
+    """List every worker the harness is tracking — or stop one of them.
+
+    The roster is built from the task manager, the one store every backend
+    writes to: subprocess teammates, in-process teammates and shell tasks
+    all appear as rows with their own status, elapsed time, output size and
+    the tail of what they last said. Sorted running first, longest-running
+    first, so a hung worker is the first row instead of the last.
+
+    ``--stop ID --confirm`` is the same stop path the engine's own tooling
+    uses (process-group signal for subprocesses, graceful cancellation for
+    in-process teammates). Without ``--confirm`` a stop is refused: a
+    mistyped id must not be one keystroke from killing a worker.
+
+    Exit codes: 0 on success, 1 when a stop was requested and could not be
+    carried out, 2 for a missing ``--confirm``.
+    """
+    import asyncio
+
+    from iterate_harness.swarm import roster
+
+    as_json = _typer_flag(as_json)
+    tail = _typer_int(tail)
+    limit = _typer_int(limit)
+    max_lines = _typer_int(max_lines)
+    stop_key = (stop or "").strip()
+    confirm = _typer_flag(confirm)
+
+    if stop_key:
+        if not confirm:
+            print(
+                f"refusing to stop {stop_key!r} without --confirm",
+                file=sys.stderr,
+            )
+            raise typer.Exit(2)
+        outcome = asyncio.run(roster.stop_agent(stop_key))
+        state = str(outcome.get("status") or "error")
+        message = str(outcome.get("message") or "")
+        if as_json:
+            print(json.dumps(outcome, ensure_ascii=False, indent=2))
+        else:
+            print(message or state)
+        if state in ("stopped", "not_found", "already_terminal"):
+            raise typer.Exit(0)
+        raise typer.Exit(1)
+
+    selected = (status or "").strip().lower() or None
+    if selected is not None and selected not in roster.KNOWN_STATUSES:
+        raise typer.BadParameter(
+            f"unknown status {status!r}; expected one of "
+            + "|".join(sorted(roster.KNOWN_STATUSES))
+        )
+
+    view = roster.build_roster(tail_bytes=tail, max_agents=limit, status=selected)
+    if as_json:
+        print(roster.roster_as_json(view))
+    else:
+        if not view["agents"]:
+            print("没有正在运行或记录在册的子代理。")
+        else:
+            print(
+                "在跑 %s / 失败 %s / 已停止 %s / 完成 %s（共 %s 条）"
+                % (
+                    view["running"],
+                    view["failed"],
+                    view["killed"],
+                    view["completed"],
+                    view["total"],
+                )
+            )
+            print()
+            print(roster.render_roster_text(view, max_lines=max_lines))
+            for agent in view["agents"][:10]:
+                if agent.get("tail"):
+                    print(f"\n[{agent['id']}] {agent.get('description') or agent.get('agent_id')}")
+                    for line in agent["tail"].splitlines()[:8]:
+                        print(f"    {line}")
+        if view["truncated"]:
+            print(
+                f"（还有 {view['total'] - len(view['agents'])} 条未显示，用 --limit 调大）",
+                file=sys.stderr,
+            )
 
 
 @iterate_app.command("report")

@@ -1,15 +1,15 @@
 // App shell — sidebar navigation + routed pages + toast host + live SSE feed
-// (design §17.3 P1–P7). The SSE subscription is started once per project root
+// (design §17.3 P1–P9). The SSE subscription is started once per project root
 // and torn down on unmount to avoid leaked EventSource connections. Every
 // routed page is wrapped in an ErrorBoundary so a render crash never blanks
 // the whole console. Keyboard shortcuts (design §17 UX):
-//   - "g" then "d/r/w/c/b/p/g/t": jump to Dashboard / Runs / Workspaces /
-//     Checkpoints / Budget / Config / Reports / Trend (g-buffer navigation)
+//   - "g" then a buffer letter jumps to that page (see G_BUFFER_ROUTES)
 //   - "/" or Cmd/Ctrl+K: toggle the human-in-the-loop chat panel
 
 import { useEffect, useRef, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import { subscribeToStatus, useWebUi } from "./store";
+import Agents from "./pages/Agents";
 import ChatPanel from "./components/ChatPanel";
 import ErrorBoundary from "./components/ErrorBoundary";
 import ThemeToggle from "./components/ThemeToggle";
@@ -26,6 +26,7 @@ const NAV_ITEMS = [
   { to: "/", label: "仪表盘", end: true },
   { to: "/runs", label: "迭代详情", end: false },
   { to: "/workspaces", label: "工作区", end: false },
+  { to: "/agents", label: "团队", end: false },
   { to: "/checkpoints", label: "检查点", end: false },
   { to: "/budget", label: "预算与限流", end: false },
   { to: "/config", label: "配置", end: false },
@@ -38,6 +39,7 @@ const G_BUFFER_ROUTES: Record<string, string> = {
   d: "/",
   r: "/runs",
   w: "/workspaces",
+  a: "/agents",
   c: "/checkpoints",
   b: "/budget",
   p: "/config",
@@ -215,6 +217,7 @@ export default function App(): React.JSX.Element {
             <Route path="/" element={<Dashboard />} />
             <Route path="/runs" element={<Runs />} />
             <Route path="/workspaces" element={<Workspaces />} />
+            <Route path="/agents" element={<Agents />} />
             <Route path="/checkpoints" element={<Checkpoints />} />
             <Route path="/budget" element={<BudgetRate />} />
             <Route path="/config" element={<ConfigPage />} />

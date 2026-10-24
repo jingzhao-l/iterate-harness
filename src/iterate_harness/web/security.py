@@ -37,6 +37,12 @@ _LOOPBACK_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 AUDIT_DIR = ".iterate"
 AUDIT_FILE = "web-audit.jsonl"
 
+#: How many trailing bytes of the audit journal :meth:`AuditLog.entries`
+#: scans. The file is append-only and never rotated, and every dashboard tick
+#: reads it — so a whole-file read makes each tick O(total history). One MiB
+#: of JSON lines comfortably holds the default 200 newest entries.
+_AUDIT_TAIL_BYTES = 1024 * 1024
+
 #: Key *words* that mark a value as a credential. Matched on token boundaries
 #: (underscore / camelCase / dot), not as a raw substring: the previous
 #: ``"key" in lowered`` test redacted ``tokenBudget``, ``maxTokens``,
@@ -310,16 +316,34 @@ class AuditLog:
             log.warning("web audit write failed: %s", exc)
 
     def entries(self, limit: int = 200) -> list[dict[str, Any]]:
-        """Return the most recent audit entries (oldest first, capped)."""
+        """Return the most recent audit entries (oldest first, capped).
+
+        The journal is append-only and never rotated, so a whole-file read
+        would cost O(file size) on every dashboard tick. Only the last
+        ``_AUDIT_TAIL_BYTES`` is ever scanned; ``limit`` entries always fit
+        inside that tail at the default cap, so the answer is unchanged for
+        the callers that use it (``/status`` reads the 10 newest).
+        """
         path = self.path
         if not path.exists():
             return []
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            size = path.stat().st_size
+            with path.open("r", encoding="utf-8") as handle:
+                if size > _AUDIT_TAIL_BYTES:
+                    handle.seek(size - _AUDIT_TAIL_BYTES)
+                    tail = handle.read()
+                    # The seek lands mid-line: drop the partial head so it
+                    # can never parse as a truncated audit record.
+                    tail = tail[tail.find("\n") + 1 :] if "\n" in tail else ""
+                else:
+                    tail = handle.read()
         except OSError:
             return []
         parsed: list[dict[str, Any]] = []
-        for line in lines[-limit:]:
+        for line in tail.splitlines()[-max(0, limit) :]:
+            if not line.strip():
+                continue
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError:

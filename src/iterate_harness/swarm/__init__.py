@@ -5,6 +5,14 @@ from __future__ import annotations
 from importlib import import_module
 
 from iterate_harness.swarm.registry import BackendRegistry, get_backend_registry
+from iterate_harness.swarm.roster import (
+    DEFAULT_TAIL_BYTES,
+    MAX_AGENTS,
+    build_roster,
+    render_roster_text,
+    roster_as_json,
+    stop_agent,
+)
 from iterate_harness.swarm.subprocess_backend import SubprocessBackend
 from iterate_harness.swarm.types import (
     BackendType,
@@ -35,6 +43,9 @@ _LAZY_EXPORTS = {
 __all__ = [
     "BackendRegistry",
     "BackendType",
+    "DEFAULT_TAIL_BYTES",
+    "KNOWN_STATUSES",
+    "MAX_AGENTS",
     "MailboxMessage",
     "SpawnResult",
     "SubprocessBackend",
@@ -45,6 +56,7 @@ __all__ = [
     "TeammateMailbox",
     "TeammateMessage",
     "TeammateSpawnConfig",
+    "build_roster",
     "create_idle_notification",
     "create_permission_request",
     "create_shutdown_request",
@@ -54,8 +66,11 @@ __all__ = [
     "get_team_dir",
     "handle_permission_request",
     "poll_permission_response",
+    "render_roster_text",
+    "roster_as_json",
     "send_permission_request",
     "send_permission_response",
+    "stop_agent",
 ]
 
 

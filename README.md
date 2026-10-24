@@ -269,6 +269,16 @@ ih iterate report --html  # single-file HTML report (convergence curve, diffs, s
 ih iterate doctor         # skill↔harness dimension-system consistency check
 ```
 
+### Team & live workers
+
+```bash
+ih iterate agents           # every worker the harness is tracking, running first
+ih iterate agents --json    # machine-readable roster (id/team/kind/status/duration/output)
+ih iterate agents --tail 0  # sizes only, no output payloads (cheap for polling)
+ih iterate agents --status running --limit 50
+ih iterate agents --stop reviewer@team1 --confirm   # stop one worker by task id or name@team
+```
+
 ### Batch & scheduling
 
 ```bash
@@ -301,6 +311,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Breakpoint resume** — the TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings.
 - **Finding trend library** — every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `ih iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs.
 - **Per-run trend history** — `ih iterate trend` reconstructs every finished run from the decision log and shows what that run **added, fixed, or regressed**, plus open/stubborn findings; `--fail-on-regression` / `--fail-on-new <severity>` turn it into a CI gate. The same view is a page in the WebUI (see below).
+- **Team roster & stop channel** — `ih iterate agents` is the one place that could answer "which worker is stuck and why": subprocess teammates, in-process teammates and plain shell tasks all register the same task-manager store, and the roster is that store's projection — running first, with kind/backend, elapsed time, output size and a bounded output tail. `--stop <id> --confirm` is the matching intervention channel (task id or `name@team`, audited server-side). The WebUI has the same view as a live page.
 
 ### Reports & integration
 
@@ -317,11 +328,16 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
-Workspaces, Checkpoints, Budget & Rate, Config, Reports. The **Trend** page
-(`g t` shortcut) renders the same per-run new/fixed/regressed history and
+Workspaces, **Team**, Checkpoints, Budget & Rate, Config, Reports. The **Trend**
+page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
 entries arrive — no terminal needed to tell whether a loop is actually
-converging.
+converging. The **Team** page (`g a`) shows every worker the serving process is
+running right now — subprocess teammates, in-process teammates and shell tasks
+side by side, with elapsed time, output size and the last thing each one said —
+and is the only way to stop a single stuck worker from the browser (二次确认 +
+audited); it polls while any worker is live and stops polling once the roster is
+quiet.
 
 ### Cost, resources & gates
 

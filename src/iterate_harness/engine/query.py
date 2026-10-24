@@ -1151,6 +1151,15 @@ async def run_query(
             tool_results = []
             for tc, loop_result in zip(tool_calls, raw_results):
                 if isinstance(loop_result, BaseException):
+                    # A CancelledError is not a tool failure — it is a stop
+                    # request (or an outer timeout). Gathering with
+                    # return_exceptions=True puts it in the list as *data*
+                    # instead of unwinding, so without this check a "stop the
+                    # run" would be swallowed into an is_error tool_result and
+                    # the loop would quietly go on to the next model call,
+                    # turning an operator's stop into a no-op.
+                    if isinstance(loop_result, asyncio.CancelledError):
+                        raise loop_result
                     log.exception(
                         "tool execution raised: name=%s id=%s",
                         tc.name,

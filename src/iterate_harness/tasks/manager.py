@@ -92,6 +92,55 @@ def _signal_process_tree(
                 log.debug("Could not signal task process %s: %s", pid, exc)
 
 
+async def _wait_for_exit(process: asyncio.subprocess.Process, *, timeout: float) -> None:
+    """Await ``process`` exiting, tolerating a manager that outlived its loop.
+
+    ``process.wait()`` returns a future bound to the loop the transport was
+    created on. The task manager is a *process* singleton keyed on the tasks
+    directory, not a loop singleton — so a second ``serve()`` in one process,
+    a TestClient block, or any caller on a fresh loop would await a future
+    owned by a dead loop and get ``RuntimeError: Task ... attached to a
+    different loop``. That turns a stop request into an error while leaving
+    the process running, which is precisely the failure this helper exists to
+    prevent: fall back to synchronous polling instead.
+    """
+    try:
+        await asyncio.wait_for(asyncio.shield(process.wait()), timeout=timeout)
+        return
+    except RuntimeError as exc:
+        # Any loop ownership mismatch: the future may belong to a closed loop
+        # or to a live loop we are not running on. Both message variants mean
+        # "this future can never resolve from here", so fall through to the
+        # kernel probe rather than failing the stop.
+        if "loop" not in str(exc).lower():
+            raise
+    # Cross-loop: the transport's exit callback is bound to a loop we are not
+    # on, so ``process.returncode`` will never be published — but the child
+    # watcher has already waitpid()'d it, so ask the kernel whether the pid
+    # still exists. ``os.kill(pid, 0)`` sends nothing; it only probes.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(process.pid):
+            return
+        await asyncio.sleep(0.05)
+    raise asyncio.TimeoutError(f"process {process.pid} did not exit in {timeout}s")
+
+
+def _pid_alive(pid: int | None) -> bool:
+    """Return True while ``pid`` still exists; never raises."""
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # PermissionError means the pid exists but is ours to refuse to kill;
+        # treat it as alive rather than declaring the stop a success.
+        return True
+    return True
+
+
 def _safe_output_size(path: Path) -> int:
     """Return a task's output file size, never raising on a missing file."""
     try:
@@ -364,10 +413,10 @@ class BackgroundTaskManager:
 
         _signal_process_tree(process, _terminate_signal())
         try:
-            await asyncio.wait_for(asyncio.shield(process.wait()), timeout=_STOP_GRACE_SECONDS)
+            await _wait_for_exit(process, timeout=_STOP_GRACE_SECONDS)
         except asyncio.TimeoutError:
             _signal_process_tree(process, signal.SIGKILL, ignore_missing=True)
-            await process.wait()
+            await _wait_for_exit(process, timeout=_STOP_GRACE_SECONDS)
         await _close_process_stdin(process)
 
         # Let the watcher publish the final record (return_code + listeners)
@@ -378,8 +427,28 @@ class BackgroundTaskManager:
                 await asyncio.wait_for(
                     asyncio.shield(waiter), timeout=_WATCHER_DRAIN_SECONDS
                 )
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+            except asyncio.TimeoutError:
                 log.debug("Task %s watcher did not settle in time after stop", task_id)
+            except asyncio.CancelledError:
+                # Never swallow cancellation here. A stop request being cancelled
+                # *is* the operator's stop signal; returning normally would report
+                # a half-finished stop as a success and mask the second stop.
+                log.debug(
+                    "stop for task %s cancelled while draining its watcher", task_id
+                )
+                raise
+            except RuntimeError as exc:
+                # The watcher task was created on a loop that is no longer ours,
+                # so it can never settle from here. The process is already gone
+                # and the record is already marked killed above — failing the
+                # stop for an unrecoverable drain would report a stop that
+                # *did* happen as a failure, so degrade instead.
+                log.debug(
+                    "Task %s watcher belongs to another event loop; skipping "
+                    "drain: %s",
+                    task_id,
+                    exc,
+                )
         return self._require_task(task_id)
 
     async def write_to_task(self, task_id: str, data: str) -> None:
@@ -638,12 +707,20 @@ class BackgroundTaskManager:
             return ""
         if size == 0:
             return ""
-        with task.output_file.open("r", encoding="utf-8", errors="replace") as handle:
-            if size > max_bytes:
-                handle.seek(-max_bytes, os.SEEK_END)
-                # The seek may land mid-UTF-8-sequence; 'replace' handles it.
-                return handle.read()
-            return handle.read()
+        # Read the last ``max_bytes`` as *bytes*, not text. A text-mode handle
+        # rejects a nonzero end-relative seek (``can't do nonzero end-relative
+        # seeks``), so the previous ``seek(-max_bytes, SEEK_END)`` raised
+        # ``io.UnsupportedOperation`` on any log larger than ``max_bytes`` —
+        # which is exactly the workers this tail is meant to summarize. A
+        # decode with ``errors="replace"`` tolerates landing mid-sequence.
+        start = 0 if size <= max_bytes else max(0, size - max_bytes)
+        try:
+            with task.output_file.open("rb") as handle:
+                handle.seek(start)
+                raw = handle.read()
+        except OSError:
+            return ""
+        return raw.decode("utf-8", errors="replace")
 
     def register_completion_listener(self, listener: CompletionListener) -> Callable[[], None]:
         """Register a callback fired whenever a task reaches a terminal state."""
@@ -1068,11 +1145,18 @@ def _task_id(task_type: TaskType) -> str:
 
 
 async def _close_process_stdin(process: asyncio.subprocess.Process) -> None:
+    """Close a task's stdin without ever failing a stop.
+
+    ``wait_closed()`` is bound to the loop the transport was created on, so a
+    manager that outlived its loop would raise ``RuntimeError`` here and turn
+    a stop that already signalled the process into a reported failure. Stdin
+    closing is cleanup, not the stop itself.
+    """
     stdin = process.stdin
     if stdin is None or stdin.is_closing():
         return
-    stdin.close()
     try:
+        stdin.close()
         await stdin.wait_closed()
-    except (BrokenPipeError, ConnectionResetError):
+    except (BrokenPipeError, ConnectionResetError, RuntimeError):
         pass

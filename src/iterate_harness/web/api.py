@@ -205,6 +205,7 @@ def create_app(
     app.include_router(route_modules.reports.router, prefix=API_PREFIX)
     app.include_router(route_modules.workspaces.router, prefix=API_PREFIX)
     app.include_router(route_modules.trend.router, prefix=API_PREFIX)
+    app.include_router(route_modules.agents.router, prefix=API_PREFIX)
     app.include_router(route_modules.chat.router, prefix=API_PREFIX)
     app.include_router(events_module.router, prefix=API_PREFIX)
 

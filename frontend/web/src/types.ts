@@ -322,3 +322,63 @@ export interface ProgressUpdateEvent {
   converged?: boolean;
   mode?: string;
 }
+
+// ---- Agent roster (design §17.3 P9) ----
+// One row per worker the harness is tracking. Every backend writes the same
+// store, so a subprocess teammate, an in-process teammate and a plain shell
+// task all show up here — which is what the page exists to make visible.
+
+export type AgentStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "killed"
+  | "unknown";
+
+export interface AgentRow {
+  id: string;
+  agent_id: string;
+  team: string;
+  kind: string;
+  backend: string;
+  task_type: string;
+  status: AgentStatus;
+  running: boolean;
+  description: string;
+  status_note: string;
+  progress: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_s: number;
+  return_code: number | null;
+  output_bytes: number;
+  tail: string;
+  cwd: string;
+}
+
+export interface AgentsView {
+  generated_at: string;
+  total: number;
+  truncated: boolean;
+  running: number;
+  failed: number;
+  killed: number;
+  completed: number;
+  agents: AgentRow[];
+}
+
+export type StopOutcome =
+  | "stopped"
+  | "not_found"
+  | "already_terminal"
+  | "error";
+
+export interface StopAgentResult {
+  status: StopOutcome;
+  message: string;
+  id: string | null;
+  agent_id: string;
+  status_now: string | null;
+  return_code: number | null;
+}
