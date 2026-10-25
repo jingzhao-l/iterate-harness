@@ -46,6 +46,7 @@ jobs:
       - name: Build web frontend (editable install requires frontend/web/dist)
         working-directory: frontend/web
         run: |
+          set -euo pipefail
           npm ci
           npm run build
 
@@ -60,27 +61,54 @@ jobs:
         run: uv run pytest --collect-only -q
 
       - name: Run test suite
-        # Four runs in a row died the same way on this step: the step started, no further output
-        # reached the log, and the job was killed 45 minutes after it began with the annotation "The
-        # hosted runner lost communication with the server" — and because the runner died, NO LOG WAS
-        # UPLOADED (`--log-failed` says `log not found`; `runs/{id}/logs` contains only the three
-        # successful jobs). Measured: 40167475388, 40168346235, 40103418285 (v2.10.0), and 40171467085
-        # — the last of those already carried `faulthandler_timeout=300 + faulthandler_exit_on_timeout`
-        # and died at 07:05→07:50 exactly like the other three, still with no log.
-        # Two causes fit, and the first iteration could not tell them apart:
-        #   (a) a real wait — something in the suite blocks forever on ubuntu (it cannot be reproduced
-        #       here: the same suite finishes on macOS, no docker/podman/colima on this machine);
-        #   (b) the suite is simply slower than the runner's silence window — **measured locally
-        #       2026-10-25: `pytest -q tests` took 2187.62s (36m27s) for 3083 tests**, so a runner
-        #       that gets no output for 45 minutes is not proof of a hang at all.
-        # `-v` is the change that serves both: one line per test keeps the log channel open (so a slow
-        # suite finishes and reports, and a hung one leaves the last name printed as the place it
-        # stopped), and faulthandler adds a full-thread stack if a *single* test passes 300s.
-        # remedy if this goes red: the dump or the last `-v` line names where it waits — fix that
-        # wait, or split the suite if the answer is "this phase is legitimately long". Do NOT raise
-        # faulthandler_timeout to make red disappear, do NOT mark anything skip, and do NOT take `-v`
-        # out to shorten the log: the per-test line is the only reason this step is findable.
-        run: uv run pytest -v -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true
+        # Five runs in a row died the same way on this step: the step started, no further output
+        # reached the log, and the job was killed **exactly 45 minutes** after it began with the
+        # annotation "The hosted runner lost communication with the server" — and because the runner
+        # died, NO LOG WAS UPLOADED (`--log-failed` says `log not found`; `runs/{id}/logs` contains
+        # only the successful jobs). Measured end-to-end, both matrix legs each time, to the second:
+        # 40103418285 (v2.10.0) 14:38→15:23/15:24, 40167475388 05:59→06:44, 40168346235 06:13→06:58,
+        # 40171467085 07:05→07:50, 40179763746 09:13:44→**09:58:45**.
+        # Two iterations of instrumentation, each of which falsified the theory before it:
+        #   - `faulthandler_timeout=300 + faulthandler_exit_on_timeout` (40171467085): died anyway at
+        #     45:00, still no log. That plugin only dumps while a **test call** is running.
+        #   - `-v` (a line per test, so the channel cannot sit silent) + a separate `--collect-only`
+        #     step (40179763746): `Collect the suite` finished in **13 seconds** — so import-time and
+        #     collection blocking is ruled out — and the job died at 45:00 anyway.
+        # And two local measurements kill the two easy explanations:
+        #   - **the suite is not slow**: idle, `pytest -q tests` = **115.59s** for 3089 collected
+        #     (6 failed / 3077 passed / 6 skipped, the known本机-environment six); under heavy
+        #     contention the same tree measured 4m20s and once 36m27s.
+        #   - **it is not memory**: `/usr/bin/time -l` on that run reports
+        #     **286,605,312 bytes maximum resident set** — 273 MB against a 7 GB runner, so the
+        #     OOM-killed-runner story is out.
+        # What that leaves is a wall, not a wait. Every theory that predicted it from our own
+        # configuration is now measured false:
+        #   - `timeout-minutes: 90` was set on this job and the run still ended at **45:01**
+        #     (40179763746, 09:13:44 → 09:58:45) — so the cut is not this workflow's setting, and
+        #     both matrix legs ended at the *same second*, which a per-test wait would not do.
+        #   - log volume does not drive it either: the `-v` run died exactly like the `-q` runs.
+        #   - it is not slowness (115s idle locally) and not memory (273 MB peak locally).
+        # So the working hypothesis is an account/plan-side ceiling around 45 minutes, plus a suite
+        # that on a 2-core runner takes longer than that (locally the same tree measured 4m20s and
+        # 36m27s under load, so >45 min on shared hardware is credible).
+        # The `timeout` wrapper below is the probe that separates the two remaining readings, and it
+        # is chosen because a *graceful* exit uploads its log: if the step now dies at 20 minutes
+        # with a summary line at the bottom, the tests finished and the process was waiting on
+        # something at exit; if it dies at 20 minutes mid-list, a named test is the wait; if it still
+        # dies at 45:00 regardless, the ceiling is external and the fix is to shard this step by test
+        # directory so no job needs that much wall clock.
+        # remedy after that run, in that order. Do NOT raise the 20 minutes to make the red disappear,
+        # do NOT mark anything skip, and do NOT take `-v` or the collect step out — those two produced
+        # every ruling above.
+        env:
+          PYTEST_HARD_STOP: "1200"
+        run: |
+          set -euo pipefail
+          rc=0
+          timeout --kill-after=60 "$PYTEST_HARD_STOP" \
+            uv run pytest -v -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true || rc=$?
+          echo "pytest_hard_stop_exit=$rc (124 = the 20-minute ceiling fired; read the last lines above)"
+          exit "$rc"
 
       - name: Check the vendored kernel corpus against the published package
         # tests/kernel_fixtures/ is a sha256-pinned copy of the contract published
@@ -118,6 +146,7 @@ jobs:
       - name: Build web frontend (editable install requires frontend/web/dist)
         working-directory: frontend/web
         run: |
+          set -euo pipefail
           npm ci
           npm run build
 

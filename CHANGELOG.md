@@ -4,6 +4,26 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
+- **改 CI 注释时我自己把 `ci.yml` 的一个 step 写出了两个 `run:` 键，而 PyYAML 不报错——它取最后一
+  个。** 于是那一步实际跑的是旧的单行命令，上面新加的 `timeout` 硬停块只是**看起来**像交付了的
+  行为。这条被 `tests/test_ci_workflow_shape.py` 抓住（新文件，8 条），它判重的地方是
+  **compose 出来的节点树**而不是 parse 出来的 dict——dict 里重复键早就没了，`set(keys)` 数一遍是
+  假绿（这正是本仓上一次"用 YAML 解析器数键查重复＝假绿"的同一个坑）。四条反向变异各点名变红：
+  重插重复 `run:` 键 → 三条判据全红；抽掉 `timeout` → 那条"这一步还带着哪些探针"的红；
+  把多行 `run:` 的 `set -euo pipefail` 去掉 → pipefail 那条红；把收集步改名让它脱离前缀 → 收集步
+  那条红。变异用备份 + sha256 核回（`0d536303…`），battery_rc=0。
+  顺手把同一个文件里两处 `npm ci` / `npm run build` 的多行体补上 `set -euo pipefail`（父仓的
+  `check-workflows` 就是这条规则，本仓此前没人管）。
+- **那条 45 分钟那一格的第二次仪表也没能救它，于是两条简单解释都被量掉了。**
+  `timeout-minutes: 90` 是我这一轮加的，job 仍在 **45:01** 结束（40179763746 09:13:44→09:58:45），
+  两条 matrix 同一秒——所以切断不是本工作流的设置，也不是某条用例里的等待；`-v` 那一版照样死，
+  所以"通道沉默"也不是原因。本机另两个读数把剩下两条也容易解释掉了：**这套并不慢**（空闲
+  `pytest -q tests` = **115.59s** / 3089 条收集，6 failed 是已知环境组）、**也并不吃内存**
+  （`/usr/bin/time -l` 报 maximum resident set **286,605,312 字节** ≈ 273 MB，对面是 7 GB 的
+  runner，OOM 说不过去）。剩下的工作是那条新加的 `timeout --kill-after=60 1200` 硬停探针该给出的
+  三种读数哪一种（测试跑完了卡在退出＝日志底部会有 summary；某条用例卡住＝名单断在中途；
+  仍在 45:00 整断＝上限在外面，那就得把这步按目录拆）。判据与禁忌都写在 step 注释里。
+
 - **④ 的闸答多了一条操作者验收：`scripts/check_gate_answer_reader.py`。** 它验的不是形状而是
   "装好的那份读得回来"：跑一轮真通过的项目（`spawned=False` + `reason='the invariant report passed…'`），
   要求台账里恰好一行 `kind: recipe-gate`，再用 subprocess 问发布出去的 `ih iterate gate` 把答案打出来。
