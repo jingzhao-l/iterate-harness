@@ -493,6 +493,77 @@ def test_a_hanging_test_is_bounded_by_pytest_itself_not_by_the_step(tmp_path: Pa
     )
 
 
+def test_the_wedged_step_has_a_channel_that_leaves_the_machine() -> None:
+    """A step that never ends has no log, no annotation and no artifact — so one channel must not need it.
+
+    The recorder is also a permission: `contents: write` on the test job. That is why this test pins
+    its *shape* rather than just its presence — what is authorized is one branch name per matrix leg,
+    written from a scratch clone, by commands that cannot fail the step:
+
+    - the ref is `diagnostics/<run>-<version>-<bucket>` and nothing else is ever pushed;
+    - it works in `$RUNNER_TEMP`, never in the checkout, because several tests assert on
+      `git status` and a recorder that dirties the tree would change the thing it is measuring;
+    - every `git` call carries `|| true` — an instrument that can fail the step is worse than none
+      (measured: `ps --ww` did exactly that to ten passing legs);
+    - the ref is deleted on the path where the artifact will ship, and kept only on the path where
+      it is the only copy of the evidence.
+    """
+    job = _load("ci.yml")["jobs"][TEST_JOB]
+    assert job.get("permissions") == {"contents": "write"}, (
+        f"the recorder needs exactly this and nothing wider, found {job.get('permissions')!r}"
+    )
+    suite = [s for s in _steps_of(job) if s.get("name") == SUITE_STEP]
+    assert len(suite) == 1
+    run = _commands_of(str(suite[0].get("run", "")))
+
+    assert "REC_PUSH=0" in run and '[ -n "${GITHUB_TOKEN:-}" ]' in run, (
+        "the recorder must be inert where it has no credentials, and `set -u`-safe: a bare"
+        " `$GITHUB_RUN_ID` was measured aborting this step with 'unbound variable'"
+    )
+    assert 'REC_BRANCH="diagnostics/${GITHUB_RUN_ID:-local}-${REC_PY:-x}-${REC_BUCKET:-x}"' in run, (
+        "the recorder has to own a deterministic per-leg ref: no collision between matrix legs, "
+        "and nothing that could name a protected branch"
+    )
+    pushes = [line for line in run.splitlines() if "git push" in line]
+    assert len(pushes) == 2, f"one push of the log, one deletion of the ref; found {pushes}"
+    assert any("HEAD:refs/heads/${REC_BRANCH}" in line and "--force" in line for line in pushes), (
+        "the only force-push is of the recorder's own ref"
+    )
+    assert any(line.strip().startswith("git push --force") and ":refs/heads/${REC_BRANCH}" in line
+               for line in pushes), "a finished leg must delete its diagnostics ref"
+    assert 'echo "recorder started: enabled=$REC_PUSH' in run, (
+        "the step says out loud whether the channel is live, so a red leg is not read as a silent recorder"
+    )
+    assert all(("|| true" in line) or ("\\" in line) for line in pushes), (
+        f"a push that can fail the step is not an instrument — a redirect hides the message, it does "
+        f"not remove the failure: {pushes}"
+    )
+
+    assert 'REC_DIR="$SUITE_DIR/recorder"' in run, (
+        "the scratch clone lives under RUNNER_TEMP; recording into the checkout would be observed "
+        "by the very tests that check the tree is clean"
+    )
+    assert 'WORK_DIR="$PWD"' in run and '"$WORK_DIR/$name"' in run, (
+        "the logs are read from the checkout and copied out — `$PWD` inside the recorder's own "
+        "subshell is its scratch dir, which is the wrong place to look"
+    )
+    assert 'touch "$REC_DIR/stop"' in run, "the recorder must be stopped, not orphaned"
+    assert 'if [ "$stopped" = finished ]' in run, (
+        "deleting the ref is conditional on the artifact actually being available"
+    )
+
+
+def test_the_recorder_does_not_run_the_suite_or_gate_it() -> None:
+    """It copies two files and pushes them; if it ever grows a `pytest` or a `test` of its own, say why."""
+    job = _load("ci.yml")["jobs"][TEST_JOB]
+    run = _commands_of(str([s for s in _steps_of(job) if s.get("name") == SUITE_STEP][0]["run"]))
+    recorder_block = run[run.index("REC_DIR="): run.index('recorder_pid=$!')]
+    assert "pytest " not in recorder_block, "the recorder must not launch, restart or wrap the suite"
+    assert "test $" not in recorder_block and "[ $" not in recorder_block, (
+        "no assertion inside the recorder: it reports, it does not judge"
+    )
+
+
 @pytest.mark.parametrize("name", _workflow_names())
 def test_a_workflow_file_is_readable_at_all(name: str) -> None:
     """The precondition for every assertion above: a guard that cannot read the file is not a guard."""

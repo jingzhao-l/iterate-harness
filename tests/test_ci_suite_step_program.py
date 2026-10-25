@@ -149,6 +149,11 @@ def _run_body(
             "STUB_RC": rc,
         }
     )
+    # The flight recorder inside this step pushes when it has credentials. A test that executes the
+    # step must therefore *remove* them rather than inherit them: otherwise a developer's exported
+    # GITHUB_TOKEN turns a unit test into a real push into a real repository.
+    for name in ("GITHUB_TOKEN", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"):
+        env.pop(name, None)
     return subprocess.run(
         ["/bin/bash", str(script)],
         cwd=tmp_path,
@@ -169,6 +174,9 @@ def test_a_passing_bucket_ends_the_step_with_pytest_status_zero(tmp_path: Path) 
     result = _run_body(tmp_path, _suite_step_body(), budget="30")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "pytest_exit=0 stopped=finished" in result.stdout, result.stdout
+    assert "recorder started: enabled=0" in result.stdout, (
+        "the recorder must be inert here; any other reading means this test could have pushed"
+    )
     argv = (tmp_path / "argv.txt").read_text(encoding="utf-8").splitlines()
     assert argv[:1] == ["run"], argv
     assert "tests/test_a.py" in argv and "tests/test_b.py" in argv, argv

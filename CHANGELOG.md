@@ -215,6 +215,31 @@ All notable changes to iterate-harness should be recorded in this file.
   不会伪绿）。同时两条拒绝分支也实测能红：变量缺失 ⇒ 不上弦（正常运行 rc=0、无 armed 字样），
   `not-a-number`／`-5`／`0` ⇒ 具名拒绝并退出。
   本机整树：`3120 passed, 6 skipped in 127.16s`；ruff 与 mypy 绿；判据 37 条全过。
+- **挂起那一格剩下的唯一出路：一条不需要步骤结束就能离开机器的通道（flight recorder）。**
+  六把表都不响之后，事实是：日志、annotation、artifact 这三条通道全都要等步骤先结束，而这条
+  等待本身不会发生。所以 `Run test suite` 里加了一个记录器——每 60 秒把 `pytest-ci.log` 与
+  `pytest-watchdog.log` 的当前内容推到 `refs/heads/diagnostics/<run-id>-<版本>-<桶>`，
+  job 因此需要 `permissions: contents: write`，而这条权限被逐条判据钉在自己的用途上：
+  ① 只推那一个具名前缀（`REC_BRANCH` 由 run id + matrix 决定，桶之间不撞名，也永远够不到
+  `refs/heads/main`；仓里的 ruleset 另外单独保护 main）；② 工作目录在 `RUNNER_TEMP`，
+  **绝不在 checkout 里**——本套件有好几条用例是拿 `git status` 判事的，把记录器写进树里就是让它
+  改变被测量的东西；③ 每个 git 调用都 `|| true`（"仪器不能变成故障"这条上一笔刚量过）；
+  ④ 没有凭据就**原地失效**并打印 `recorder started: enabled=$REC_PUSH`——第一版没这条门，
+  `set -u` 下裸 `$GITHUB_RUN_ID` 直接被实测成 `unbound variable`，把整个步骤打死在启动之前；
+  ⑤ 用例桶正常跑完时删掉那个 ref（那时 artifact 才是权威副本），只有预算耗尽的腿把 ref 留下——
+  也就是"除了这条路没有别的证据"的那种腿。
+  本机两处实测把上面两条钉成事实而非愿望：`tests/test_ci_suite_step_program.py` 现在**显式清掉**
+  子进程环境里的 `GITHUB_TOKEN/GITHUB_REPOSITORY/GITHUB_RUN_ID` 并断言 `enabled=0`
+  （否则谁导出过一个 token，单元测试就会往真仓库推真分支）；`tests/test_ci_workflow_shape.py` 新增
+  两条判据管通道的形状与"记录器不许启动/包装/判断套件"。电池里跟着加四发：
+  `N-1` 拆掉凭据门、`N-2` 把记录器搬进 checkout、`N-3` 摘掉 push 的 `|| true`、
+  `N-4` 让它不再自报开关状态，各自点名变红；电池共 33 条，全 RED-AS-SPECIFIED。
+  判据一处也修窄了：原先"带 `>/dev/null 2>&1` 就算安全"的说法是错的——重定向只是把消息藏起来，
+  失败仍然失败。现在要求 `|| true`（或续行）。
+  README（双语）同步补上"CI 不再把整套当一个进程跑"、四道上限的嵌套次序、`ITERATE_TEST_WATCHDOG`
+  这颗可调的表，以及**按实测写明的已知问题**：`bucket 06` 那 31 个模块在 ubuntu 上让 runner
+  结束不了那一步，本机因缺 docker/node 不可复现。
+
 ### Documentation
 
 - **「🔬 GlassPane integration / 与 GlassPane 的集成」四句按代码改写。** 全新眼界的复审读的是代码而不是

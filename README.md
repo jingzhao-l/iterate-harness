@@ -476,7 +476,32 @@ Run the tests:
 ```bash
 python -m pytest tests/test_iterate -q   # semantic layer + kernel integration
 python -m pytest -q                      # full suite
+
+# the same process watchdog CI arms, for hanging a run on purpose:
+ITERATE_TEST_WATCHDOG=420 python -m pytest -q
 ```
+
+CI does not run the suite as one process. `scripts/split_suite.py` turns
+`pytest --collect-only -q` into buckets of whole test modules (first-fit-decreasing) and the
+`Python tests` job fans out as `python-version × bucket`, so each leg is small enough to *end* —
+which is the precondition for its log existing at all. The split cannot quietly shrink coverage:
+the script refuses unless pytest's own printed total equals the node ids it parsed, each bucket
+re-collects and checks its count against its plan row (`--expect-total`), and more buckets than
+modules is a refusal rather than a green job that tests nothing.
+
+Four bounds nest, innermost first: a **test** (`timeout` in `pyproject.toml`) < the **process
+watchdog** (`ITERATE_TEST_WATCHDOG`, unset locally, 420 s in CI) < the **step budget**
+(`PYTEST_HARD_STOP`) < the **job ceiling**. `tests/test_ci_workflow_shape.py`,
+`tests/test_split_suite.py`, `tests/test_ci_suite_step_program.py` and `tests/test_test_watchdog.py`
+pin that shape — the last one runs the CI step's own bash against stubbed `setsid`/`uv`/`ps`, and the
+one before it hangs a test on purpose to prove the watchdog names it.
+
+Known open issue, stated as measured: on `ubuntu-latest` the `bucket 06` legs (31 modules, the
+spawn-heavy ones: `tests/test_swarm/test_worktree.py`, `tests/test_services/test_cron_scheduler.py`,
+`tests/test_ui/test_react_backend.py`, `tests/test_tools/test_remote_trigger_tool.py`, …) leave the
+runner unable to complete the step. No bound *inside* the step or *inside* pytest has ended it, and
+the per-test timer never fires, so the wait is after the last test. The modules are skipped on macOS
+(no docker/node), so this does not reproduce locally.
 
 ## 🚑 Troubleshooting
 

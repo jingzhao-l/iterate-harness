@@ -134,6 +134,14 @@ jobs:
     # remedy if a bucket ever hits it: the log names the files, act on those; do not raise the
     # number and do not mark anything skip.
     timeout-minutes: 20
+    # `contents: write` is for ONE thing: the flight recorder inside `Run test suite`, which pushes a
+    # log tail to a `diagnostics/*` ref while the step is still hung. It exists because the measured
+    # failure mode erases every other channel — a job's log appears only after the job ends, and an
+    # `if: always()` upload is a step behind the one that never finishes. It can only ever write
+    # `refs/heads/diagnostics/<run>-<version>-<bucket>` in practice: the recorder force-pushes that one
+    # name and nothing else, and the repository ruleset protects `refs/heads/main` separately.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -293,6 +301,9 @@ jobs:
           PYTEST_HARD_STOP: "600"
           PYTHONUNBUFFERED: "1"
           BUCKET_PATHS: ${{ matrix.bucket.paths }}
+          REC_PY: ${{ matrix.python-version }}
+          REC_BUCKET: ${{ matrix.bucket.id }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           start=$(date +%s)
@@ -326,6 +337,55 @@ jobs:
             echo 'fix that here, not in the suite.'
             exit 1
           fi
+          # The flight recorder. Six bounds were tried inside the step and none of them could end it,
+          # and every channel a step owns (log line, annotation, artifact) needs the step to finish
+          # first. So one channel has to leave the machine *while* the step is hung: a copy of the log
+          # tail pushed from a scratch clone in `RUNNER_TEMP` — never from the checkout, so a test that
+          # inspects `git status` (several do) cannot see this, and the suite's own tree stays clean.
+          # It is deliberately loud about failure: every git call is `|| true`, because an instrument
+          # that can fail the step is worse than no instrument (that was measured the hard way with
+          # `ps --ww`).
+          WORK_DIR="$PWD"
+          REC_DIR="$SUITE_DIR/recorder"
+          # The recorder is inert unless it can actually reach a repository, and it says so on the
+          # channel: `${VAR:-}` everywhere because this step runs under `set -u`, and a bare
+          # `$GITHUB_RUN_ID` was measured killing it with "unbound variable" the first time the local
+          # tests executed this body. An instrument that needs credentials to be *harmless* is not an
+          # instrument; it is a failure waiting for a different environment.
+          REC_PUSH=0
+          if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
+            REC_PUSH=1
+          fi
+          REC_BRANCH="diagnostics/${GITHUB_RUN_ID:-local}-${REC_PY:-x}-${REC_BUCKET:-x}"
+          REC_URL="https://x-access-token:${GITHUB_TOKEN:-}@github.com/${GITHUB_REPOSITORY:-none}.git"
+          rm -rf "$REC_DIR"; mkdir -p "$REC_DIR"
+          (
+            cd "$REC_DIR"
+            git init -q
+            git config user.email "ci@invalid"
+            git config user.name "suite flight recorder"
+            while [ ! -e "$REC_DIR/stop" ]; do
+              for name in pytest-ci.log pytest-watchdog.log; do
+                test -f "$WORK_DIR/$name" && cp "$WORK_DIR/$name" "$REC_DIR/$name"
+              done
+              git add -A >/dev/null 2>&1 || true
+              git commit -q -m "rec $(date -u +%H:%M:%S)" >/dev/null 2>&1 || true
+              if [ "$REC_PUSH" = 1 ]; then
+                git push -q --force "$REC_URL" "HEAD:refs/heads/${REC_BRANCH}" >/dev/null 2>&1 || true
+              fi
+              # Ticked in 5 s slices so the stop marker takes effect promptly: a 60 s sleep would
+              # hold the step for a minute after pytest had already finished, and the local tests
+              # that run this body would pay it four times over.
+              ticks=0
+              while [ "$ticks" -lt 12 ] && [ ! -e "$REC_DIR/stop" ]; do
+                sleep 5
+                ticks=$((ticks + 1))
+              done
+            done
+          ) > "$REC_DIR/recorder.out" 2>&1 &
+          recorder_pid=$!
+          echo "recorder started: enabled=$REC_PUSH branch=${REC_BRANCH} dir=${REC_DIR}"
+
           rc=""
           stopped=finished
           while true; do
@@ -345,6 +405,18 @@ jobs:
             fi
             sleep 5
           done
+          touch "$REC_DIR/stop"
+          wait "$recorder_pid" 2>/dev/null || true
+          if [ "$stopped" = finished ] && [ "$REC_PUSH" = 1 ]; then
+            # The suite ended, so the artifact step below will ship the real log: no diagnostic ref
+            # needs to survive. A leg that exhausted its budget keeps its ref — that is the whole
+            # point, and the only branch that can accumulate is one this run could not otherwise read.
+            git push --force "$REC_URL" ":refs/heads/${REC_BRANCH}" >/dev/null 2>&1 \
+              && echo "recorder ref deleted (the artifact carries the log)" \
+              || echo "recorder ref delete refused (harmless; the branch is diagnostics/* only)"
+          else
+            echo "recorder ref kept: refs/heads/${REC_BRANCH} — the log tail is there, not here"
+          fi
           {
             echo "--- processes still alive when the step returned ($stopped) ---"
             ps -eo pid,ppid,pgid,sess,stat,etime,args || true

@@ -426,7 +426,29 @@ src/iterate_harness/
 ```bash
 python -m pytest tests/test_iterate -q   # 语义层 + 内核集成
 python -m pytest -q                      # 全量
+
+# CI 上那颗进程看门狗，想故意把一次运行挂住时可以用：
+ITERATE_TEST_WATCHDOG=420 python -m pytest -q
 ```
+
+CI 不再把整套当**一个进程**跑。`scripts/split_suite.py` 把 `pytest --collect-only -q` 的输出切成
+以完整测试模块为单位的桶（first-fit-decreasing），`Python tests` 这个 job 展开成
+`python-version × bucket` 的矩阵——每桶小到**能结束**，而"结束"是它的日志存在的先决条件。
+拆分不会悄悄少跑：脚本要求 pytest 自己打印的总数等于解析到的 node id 数；每桶跑前重新收集并用
+`--expect-total` 对上计划里那一行的数字；桶数多于模块数是拒绝，而不是一条什么都不测的绿色 job。
+
+四道上限由内到外嵌套，判据钉住这个次序：**一条用例**（`pyproject.toml` 里的 `timeout`）＜
+**进程看门狗**（`ITERATE_TEST_WATCHDOG`，本机不设、CI 设 420 s）＜ **步骤预算**
+（`PYTEST_HARD_STOP`）＜ **job 上限**。判据在 `tests/test_ci_workflow_shape.py`、
+`tests/test_split_suite.py`、`tests/test_ci_suite_step_program.py`（用 stub 把 CI 那段 bash 当程序跑）
+与 `tests/test_test_watchdog.py`（故意挂一条用例，证明看门狗会把它的名字打出来）。
+
+按实测写明的已知问题：在 `ubuntu-latest` 上，`bucket 06` 那两条腿（31 个模块，都是会 spawn 进程的那批：
+`tests/test_swarm/test_worktree.py`、`tests/test_services/test_cron_scheduler.py`、
+`tests/test_ui/test_react_backend.py`、`tests/test_tools/test_remote_trigger_tool.py` 等）会让 runner
+**结束不了那一步**。步骤内的上限、脱离会话后的有界轮询、`gh run cancel`、进程级看门狗都没能结束它，
+而逐条表的 240 s 从不响 ⇒ 等待发生在最后一条用例之后。这些模块在本机（缺 docker/node）整体跳过，
+所以本机不可复现。
 
 ## 🚑 故障排查
 
