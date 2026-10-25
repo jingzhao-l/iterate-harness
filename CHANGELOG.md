@@ -23,6 +23,18 @@ All notable changes to iterate-harness should be recorded in this file.
   runner，OOM 说不过去）。剩下的工作是那条新加的 `timeout --kill-after=60 1200` 硬停探针该给出的
   三种读数哪一种（测试跑完了卡在退出＝日志底部会有 summary；某条用例卡住＝名单断在中途；
   仍在 45:00 整断＝上限在外面，那就得把这步按目录拆）。判据与禁忌都写在 step 注释里。
+- **那次探针跑完了，它答的是第四种：硬停没能硬停。** run 40184095706 里这一步跑到 **27 分钟仍在继续**
+  ——比它自己的 1200 s 上限晚 7 分钟，`--kill-after=60` 更是早过完了。GNU `timeout` 只能给它新建的
+  那个进程组发信号，所以**能把 step 拖住的存活者按构造在组外**：本套件有多处在
+  `start_new_session=True` 下起孩子（`tasks/manager.py`、`tools/bash_tool.py`、`hooks/executor.py`、
+  `services/cron_scheduler.py`、`tools/remote_trigger_tool.py`——设计上就是"别让 Ctrl-C 顺手杀掉它"），
+  这样一个会话领导者活过 pytest、并且**一直握着它继承去的那根 Actions stdout 管道**，于是步骤永远不
+  结束、runner 在第 45 分钟被判失联、日志跟着一起没了。**这才是"六次同一分钟、日志从来没有"的机制**，
+  而它一次都没在这台机器上现形：本机同一套 115.59s 跑完并退出。
+  修法跟着机制走：**把 pytest 与这根管道隔开**——输出写文件再 `cat`，孤儿继承的是文件 fd，
+  步骤会在 pytest 结束时结束、日志一定会上传；硬停保留（它现在管的是"跑飞了也要交卷"）。
+  产品里早就认了这个形状：`tasks/manager.py` 的 `_OUTPUT_DRAIN_SECONDS` 就是给"daemonized 孙进程
+  继承 stdout 把 task 永久卡在 running"设的上限——只有测试套件此前没有这道上限。
 
 - **④ 的闸答多了一条操作者验收：`scripts/check_gate_answer_reader.py`。** 它验的不是形状而是
   "装好的那份读得回来"：跑一轮真通过的项目（`spawned=False` + `reason='the invariant report passed…'`），

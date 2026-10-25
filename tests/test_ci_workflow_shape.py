@@ -99,6 +99,11 @@ def test_the_suite_step_keeps_the_probe_that_makes_a_death_findable() -> None:
         "the step must hard-stop pytest: a process that exits on its own uploads its log, and the "
         "whole investigation died because the runner was killed and took the log with it"
     )
+    assert "> pytest-ci.log" in run and "cat pytest-ci.log" in run, (
+        "pytest's output must go to a file that is printed afterwards: a detached child spawned with "
+        "`start_new_session=True` inherits the step's stdout and never EOFs it, which is why the job "
+        "ignored even its own SIGKILL ceiling and why no log archive ever contained that job"
+    )
     assert "-v" in run, (
         "one line per test is what let us rule out import-time and collection blocking; without it "
         "the log is silent by default and the death is unattributable"

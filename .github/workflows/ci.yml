@@ -91,23 +91,47 @@ jobs:
         # So the working hypothesis is an account/plan-side ceiling around 45 minutes, plus a suite
         # that on a 2-core runner takes longer than that (locally the same tree measured 4m20s and
         # 36m27s under load, so >45 min on shared hardware is credible).
-        # The `timeout` wrapper below is the probe that separates the two remaining readings, and it
-        # is chosen because a *graceful* exit uploads its log: if the step now dies at 20 minutes
-        # with a summary line at the bottom, the tests finished and the process was waiting on
-        # something at exit; if it dies at 20 minutes mid-list, a named test is the wait; if it still
-        # dies at 45:00 regardless, the ceiling is external and the fix is to shard this step by test
-        # directory so no job needs that much wall clock.
-        # remedy after that run, in that order. Do NOT raise the 20 minutes to make the red disappear,
-        # do NOT mark anything skip, and do NOT take `-v` or the collect step out — those two produced
-        # every ruling above.
+        # The probe ran, and it answered with something nobody had written down: on run 40184095706
+        # this step was **still going 27 minutes in** — 7 minutes past its own 1200 s ceiling with
+        # `--kill-after=60` long expired — and a *cancelled* run of the same job still ships a log
+        # archive containing **only the three successful jobs** (measured: `runs/40184095706/logs`
+        # lists npm wrapper / Python quality / Frontend typecheck). So the Python job's output never
+        # existed anywhere, and SIGKILL of the process group did not end the step.
+        # Both facts point at file descriptors rather than at pytest:
+        #   • why nothing ended the step: something holds the **write end of the Actions log pipe**
+        #     after the group is killed. This suite spawns children with `start_new_session=True`
+        #     (`tasks/manager.py`, `tools/bash_tool.py`, `hooks/executor.py`,
+        #     `services/cron_scheduler.py`, `tools/remote_trigger_tool.py`) — deliberately, so a
+        #     Ctrl-C does not kill them — and such a session leader inherits stdout and is outside
+        #     any group `timeout` can signal. The runner waits for EOF on a pipe that a corpse holds.
+        #   • why there was never a log: pytest's own output is **block-buffered** when stdout is not
+        #     a TTY (measured locally, `-v` piped: 0 bytes at 12 s, 519 at 24 s — the first flush
+        #     costs ~68 finished tests). On a 2-core runner with 3089 tests, 45 minutes can pass
+        #     without a single flush, and a runner that has said nothing for 45 minutes is declared
+        #     gone — with its unflushed buffer, which is why the annotation is "lost communication"
+        #     and the archive is empty. That also retires my earlier "the account caps jobs at 45
+        #     minutes": the ceiling is real, but it is a *silence* ceiling, not a wall-clock one.
+        # The fix follows that mechanism instead of guessing again: **take pytest off the pipe.**
+        # Output goes to `pytest-ci.log`, which is `cat`-ed afterwards — an orphan then inherits a
+        # *file* descriptor, and the burst at the end guarantees the agent is told something, so the
+        # job ends when the suite ends and the log exists whatever it says. Keep `-v` and keep the
+        # collect step: they are what produced every ruling recorded above.
+        # remedy if it still goes red: read `pytest-ci.log` above — it is now guaranteed to arrive,
+        # and the last line names where the suite stopped. Do NOT raise the ceiling to make the red
+        # disappear, do NOT mark anything skip. Longer term the suite should also reap what it
+        # detaches: the product already bounds exactly this wait (`_OUTPUT_DRAIN_SECONDS` in
+        # `tasks/manager.py`, because a daemonised grandchild holding the inherited pipe used to
+        # strand task records as "running") while the test suite has no such bound.
         env:
           PYTEST_HARD_STOP: "1200"
         run: |
           set -euo pipefail
           rc=0
           timeout --kill-after=60 "$PYTEST_HARD_STOP" \
-            uv run pytest -v -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true || rc=$?
-          echo "pytest_hard_stop_exit=$rc (124 = the 20-minute ceiling fired; read the last lines above)"
+            uv run pytest -v -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true \
+            > pytest-ci.log 2>&1 || rc=$?
+          cat pytest-ci.log
+          echo "pytest_exit=$rc (124 = the ceiling fired; 0 = the suite really finished)"
           exit "$rc"
 
       - name: Check the vendored kernel corpus against the published package
