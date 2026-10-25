@@ -15,7 +15,16 @@ All notable changes to iterate-harness should be recorded in this file.
 （语料清单的 pin 从 0.1.9 追到 0.1.10，10 份文件逐字节实测一致，两模式各跑一遍）。所以不是
 patch（有新能力），也不是 major（没有破坏任何东西）。
 
+### Documentation
 
+- **README 双语新增「🔬 GlassPane integration / 与 GlassPane 的集成」一节**（目录各补一条锚点）：
+  四条能力各自写清"谁生产、谁消费、拒绝时长什么样"——证据链与跨账本链接、维度声明与见证互斥、
+  只读重验的工具白名单、修复配方的三件实测与两条读门——并把边界写在同一段里：应用做了什么由
+  GlassPane 判，那一轮算不算已验证由本 harness 判，两边都没有配方执行器。
+  顺带清掉两处过期枚举：`/iterate` 的子命令清单在两处被写成六条（实际 16 条），改成"不带参数执行
+  `/iterate` 会打印当前清单"——抄来的清单每加一条子命令就漂一次。
+  主仓库 README（双语）里那句"GlassPane 是相关项目、刻意独立"下面补了这一段：独立不等于不往来，
+  并指到本 README 那一节。
 
 ### Added — 场景④ 第一次可执行：配方交接、判定闸、跨账本佐证
 

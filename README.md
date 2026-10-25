@@ -68,6 +68,7 @@ The harness has been through two major version lines:
 - [📖 Daily usage](#-daily-usage)
 - [✨ Iterate features](#-iterate-features)
 - [🔧 The seven iterate tools](#-the-seven-iterate-tools)
+- [🔬 GlassPane integration](#-glasspane-integration)
 - [🧭 Architecture](#-architecture)
 - [📦 Install & tests](#-install--tests)
 - [🚑 Troubleshooting](#-troubleshooting)
@@ -293,8 +294,8 @@ ih iterate cron start|stop|status|history  # manage the background cron schedule
 ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 ```
 
-> TUI equivalents: `/iterate` slash commands (status / review / run / log /
-> config / validate) expose the same loops through different entries.
+> TUI equivalents: `/iterate` slash commands expose the same loops through
+> different entries; `/iterate` with no argument prints the current list.
 
 ---
 
@@ -377,8 +378,48 @@ quiet.
 - `iterate_context` — SKILL.md / ITERATE.md / personalization context
 - `iterate_triage` — interactive y/n/a findings triage with `known_intentional` persistence
 
-Slash command `/iterate` (status / review / run / log / config / validate) and
-the bundled `iterate` skill provide the same loops through different entries.
+Slash command `/iterate` and the bundled `iterate` skill provide the same loops through different
+entries — `/iterate` with no argument prints the current subcommand list (status, config, onboard,
+personalize, review, run, resume, log, trend, gate, glasspane-ledger, report, init, doctor,
+dimensions, validate).
+
+## 🔬 GlassPane integration
+
+When the code under review is a GUI app, "the tests pass" says nothing about whether the interface
+changed. [GlassPane](https://github.com/jingzhao-l/GlassPane) answers that on macOS, and this harness
+is its counterpart on the review side. The two exchange **verifiable records** rather than prose,
+through the same published contract layer (`iterate-kernel`):
+
+- **Evidence lands in an audit chain.** Each `gp_*` call answers with an evidence pack, and the
+  harness around it appends a hash-chained ledger entry per recorded decision. `fix_proof` reads such
+  a chain through the kernel's verifier — this project's `.iterate/decision-log.jsonl`, or GlassPane's
+  own ledger, named once with `ih iterate glasspane-ledger <absolute path>`
+  (`/iterate glasspane-ledger <path>` in a session). The link is written only after the whole chain
+  verifies, and it pins the chain's first entry: a ledger that was replaced rather than extended
+  stops qualifying. A broken chain is refused with the line number where it breaks — there is no
+  lenient fallback for the question "is this claim verifiable".
+- **A review dimension travels with the call.** The run's plan is published to
+  `.iterate/run-plan.json` (and `GLASSPANE_RUN_PLAN` for an explicit hand-off), `dimension` is
+  declared on the verification calls that accept it, and what the engine echoed back is witnessed.
+  A decision naming a different dimension for an operation id that was already witnessed under one is
+  refused (`KERNEL_E_DIMENSION_CONTEST`) instead of becoming a second, contradictory record — and the
+  loop's own coverage accounting reports an unverified dimension as unverified.
+- **A failing check re-verifies rather than re-guesses.** A round whose invariant re-check fails
+  publishes a kernel-built re-verification request over the host's MCP transport, restricted to
+  read-only tools (`gp_probe_status` / `gp_observe` / `gp_diagnose` / `gp_last_evidence` /
+  `gp_recent_reports`), and every answer is classified per content item. A request is built from a
+  *failing* report only — so a passing round sends nothing, and says why.
+- **A fix is gated, not taken on trust.** Before a repair recipe may advance, the loop reads three
+  measured things: this round's invariant verdict, the project's recipe
+  (`recipeConfigPath` from the tool surface's project registry, or `GLASSPANE_RECIPE`), and a
+  chain-verified ledger line recording a passing outcome against an operation id. Anything absent or
+  unmeasured is refused by name (`RECIPE_GATE_E_*`), the answer is written into that round's ledger
+  line, and both doors read it back: `/iterate gate` in a session, `ih iterate gate` in a terminal.
+
+The division of labour is the point: GlassPane decides what the application did, this harness decides
+whether a round may treat that as verified, and neither judges the other's evidence. The gate reports
+and withholds — it does not execute a recipe, because neither side ships a recipe executor; the
+progress pointer is written by whoever performs the fix.
 
 ## 🧭 Architecture
 

@@ -58,6 +58,7 @@ harness 已走过两条大版本主线：
 - [📖 日常使用](#-日常使用)
 - [✨ Iterate 特性](#-iterate-特性)
 - [🔧 七个 iterate 工具](#-七个-iterate-工具)
+- [🔬 与 GlassPane 的集成](#-与-glasspane-的集成)
 - [🧭 架构](#-架构)
 - [📦 安装与测试](#-安装与测试)
 - [🚑 故障排查](#-故障排查)
@@ -267,8 +268,8 @@ ih iterate cron start|stop|status|history  # 管理执行定时任务的后台 c
 ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交门禁
 ```
 
-> TUI 等价入口：`/iterate` 斜杠命令（status / review / run / log / config /
-> validate）以不同入口提供同样的闭环。
+> TUI 等价入口：`/iterate` 斜杠命令以不同入口提供同样的闭环；不带参数执行 `/iterate`
+> 会打印当前的子命令清单。
 
 ---
 
@@ -340,8 +341,40 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 - `iterate_context` — SKILL.md / ITERATE.md / 个性化上下文
 - `iterate_triage` — 交互式 y/n/a findings 分诊，`a` 持久化 known_intentional
 
-`/iterate` 斜杠命令（status / review / run / log / config / validate）与
-内置 `iterate` skill 提供同样闭环的不同入口。
+`/iterate` 斜杠命令与内置 `iterate` skill 提供同样闭环的不同入口——不带参数执行 `/iterate`
+会打印当前的子命令清单（status、config、onboard、personalize、review、run、resume、log、trend、
+gate、glasspane-ledger、report、init、doctor、dimensions、validate）。
+
+## 🔬 与 GlassPane 的集成
+
+被审的代码是图形界面应用时，"测试过了"说明不了界面到底变没变。
+[GlassPane](https://github.com/jingzhao-l/GlassPane) 在 macOS 上回答这个问题，本 harness 是它在
+审查这一侧的对应物。两边交换的是**可核验的记录**而不是文字，走的是同一份发布出去的契约层
+（`iterate-kernel`）：
+
+- **证据落进哈希链账本。** 每次 `gp_*` 调用回一份证据包，围着它的那一侧为每条记下的决定追加一条
+  哈希链账本条目。`fix_proof` 用内核的链校验器读这样一条链——本项目的 `.iterate/decision-log.jsonl`，
+  或 GlassPane 自己那本，一次性用 `ih iterate glasspane-ledger <绝对路径>`（session 里
+  `/iterate glasspane-ledger <路径>`）记下来。链接只可能在整链验通之后落笔，并钉住链的首条：被
+  **替换**而不是被延长的账本因此不再够格。断链会被拒绝并说清断在第几行——"这条主张可不可验"这个问题
+  没有宽松回退可读。
+- **审查维度跟着调用走。** 这次运行的计划发布在 `.iterate/run-plan.json`（显式交接走
+  `GLASSPANE_RUN_PLAN`），接受 `dimension` 的那些验证调用把维度声明带上，引擎回显什么就被记成见证。
+  同一个 operationId 已经在一个维度下有见证、却要按另一个维度记决定，会被拒
+  （`KERNEL_E_DIMENSION_CONTEST`），而不是留下两份互相矛盾的记录——而且回路自己的维度账会把"没验过
+  的维度"报成没验过。
+- **复核失败是去重验，不是回去猜。** 一轮 invariant 复核失败时，回路通过宿主的 MCP 通道发出由内核
+  构造的重验请求，工具面限制在只读那五个（`gp_probe_status` / `gp_observe` / `gp_diagnose` /
+  `gp_last_evidence` / `gp_recent_reports`），回包逐 content item 分类。请求只从**失败**的报告里生成
+  ——判定通过的轮次什么都不发，并且说清它为什么什么都没发。
+- **修复要过闸，不代理自称。** 一份修复配方要推进之前，回路读三件实测：本轮的 invariant 判定、项目的
+  配方（工具面项目注册表里的 `recipeConfigPath`，或 `GLASSPANE_RECIPE`），以及一条链可验、按
+  operationId 记着通过结果的账本行。缺任何一件或判定是"未量到"都具名拒绝（`RECIPE_GATE_E_*`），答案
+  随它那一轮的账本行一起落盘，两扇门都读得回来：session 里 `/iterate gate`，终端里 `ih iterate gate`。
+
+分工正是这件事的重点：应用做了什么由 GlassPane 判，一轮可不可以把那件事当成已验证由本 harness 判，
+谁都不替对方判证据。那道闸只报与拦——它不执行配方，两边都没有配方执行器；进度指针由真正动手修的
+那一侧写进账本。
 
 ## 🧭 架构
 
