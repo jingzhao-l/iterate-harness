@@ -49,6 +49,12 @@ from iterate_harness.iterate.settings import (
 
 _LOG = logging.getLogger(__name__)
 
+# No timestamp is formatted here: the ③ link's `linkedAt` shape lives in
+# `iterate.glasspane_recipe.link_ledger_now`, which both this slash surface and `ih iterate
+# glasspane-ledger` call. (An earlier revision of this file imported `datetime.UTC` for it —
+# 3.11-only, caught by `tests/test_py310_compat.py`, and the real fix was to give the stamp one
+# home rather than to keep re-deriving it per call site.)
+
 if TYPE_CHECKING:
     # Imported lazily to avoid a registry ⇄ iterate-handler import cycle.
     from iterate_harness.commands.registry import CommandContext, CommandResult
@@ -373,6 +379,25 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
     if sub == "trend":
         return _result(message=trend_store.render_trend_summary(trend_store.summarize(cwd)))
 
+    if sub == "glasspane-ledger":
+        # ③'s last mile: link the ledger the *other* harness wrote, once per project, so a fix can be
+        # cited from a chain this run never wrote without exporting an environment variable by hand.
+        from iterate_harness.iterate import glasspane_recipe
+
+        if rest and rest[0] not in ("--show", "show"):
+            try:
+                link_text = glasspane_recipe.render_link_success(cwd, Path(rest[0]).expanduser())
+            except glasspane_recipe.RecipeError as error:
+                return _result(message=glasspane_recipe.format_recipe_error(error))
+            return _result(message=link_text)
+        return _result(message=glasspane_recipe.render_ledger_link(cwd))
+
+    if sub == "gate":
+        # ④ needs a reader that is not a test: what did the last round decide about the recipe.
+        from iterate_harness.iterate import glasspane_recipe
+
+        return _result(message=glasspane_recipe.render_gate_state(cwd))
+
     if sub == "report":
         entries = decision_log.read_entries(cwd)
         report_entry = ci_report.latest_report_entry(entries)
@@ -527,7 +552,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
 
     return _result(
         message=(
-            "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|report|init|doctor|dimensions|validate]\n"
+            "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|gate|glasspane-ledger|report|init|doctor|dimensions|validate]\n"
             "- status|config: effective config summary\n"
             "- onboard [goal]: model-driven project scan that writes ITERATE.md\n"
             "- personalize: directional-key 9-category wizard (or terminal: `ih iterate personalize`)\n"
@@ -537,6 +562,10 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             "- resume: continue the last finished run from its decision log\n"
             "- log [n]: tail the decision log (or `log trend`)\n"
             "- trend: cross-run finding trend (new/fixed/stubborn)\n"
+            "- gate: the last recipe-gate answer this project recorded (scenario 4; terminal: `ih iterate gate`)\n"
+            "- glasspane-ledger [<path>]: show which decision log the fix evidence is read from, "
+            "or link the one the GlassPane harness wrote (absolute path; terminal: "
+            "`ih iterate glasspane-ledger <path>`)\n"
             "- report [--html|--serve]: render the final report from the decision log\n"
             "  --html writes .iterate/report.html; --serve also writes .iterate/replay.html\n"
             "  and starts a local HTTP server that opens in the browser\n"

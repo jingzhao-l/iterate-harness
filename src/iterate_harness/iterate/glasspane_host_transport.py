@@ -57,7 +57,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from ..mcp.client import McpServerTimeoutError
-from .glasspane_reverification import READ_ONLY_TOOLS
+from .glasspane_reverification import CONFIG_READ_TOOLS, READ_ONLY_TOOLS
 from .reverify_trigger import GLASSPANE_ACALL_KEY, GLASSPANE_TRANSPORT_ABSENT_KEY, GLASSPANE_TRANSPORT_KEY
 
 log = logging.getLogger(__name__)
@@ -111,6 +111,26 @@ def _read_only_remedy() -> str:
         + " — a tool that moves the app belongs behind the host's permission prompt, "
         "not inside an error path"
     )
+
+
+def _config_read_remedy() -> str:
+    return (
+        "the only registry read this channel makes is "
+        + ", ".join(CONFIG_READ_TOOLS)
+        + ", which answers what the other product has configured; anything that answers it "
+        "by moving the app is not a configuration read"
+    )
+
+
+def _channel_allowed(tool: str) -> bool:
+    """Whether this transport may send ``tool`` at all.
+
+    Two sets, both named where they are defined: the re-verification reads (what the app did) and
+    the one registry read (what the run is configured with). Listing them separately here is the
+    point — a call that never touches the app must not look like a re-verification target, and
+    ``plan_calls`` keeps iterating only :data:`READ_ONLY_TOOLS`.
+    """
+    return tool in READ_ONLY_TOOLS or tool in CONFIG_READ_TOOLS
 
 
 def _loop_is_running() -> bool:
@@ -211,13 +231,13 @@ def make_host_transport(manager: object, server_name: str, *, timeout: float | N
     window = HOST_TRANSPORT_TIMEOUT_SECONDS if timeout is None else timeout
 
     def call_tool(tool: str, arguments: dict[str, Any]) -> object:
-        if tool not in READ_ONLY_TOOLS:
+        if not _channel_allowed(tool):
             # Before the coroutine exists: a refused call must be a call that never was.
             return _refusal(
                 WRITE_TOOL_CODE,
                 f"the re-verification transport does not send {tool!r}; it is not one of the "
                 "engine's read-only tools",
-                _read_only_remedy(),
+                f"{_read_only_remedy()} | registry reads: {_config_read_remedy()}",
             )
         if _loop_is_running():
             return _refusal(
@@ -256,13 +276,13 @@ def make_host_acall(manager: object, server_name: str) -> GlasspaneAsyncTranspor
     """
 
     async def acall_tool(tool: str, arguments: dict[str, Any]) -> object:
-        if tool not in READ_ONLY_TOOLS:
+        if not _channel_allowed(tool):
             # Before the await: the session is never touched by a tool this channel may not send.
             return _refusal(
                 WRITE_TOOL_CODE,
                 f"the re-verification transport does not send {tool!r}; it is not one of the "
                 "engine's read-only tools",
-                _read_only_remedy(),
+                f"{_read_only_remedy()} | registry reads: {_config_read_remedy()}",
             )
         parts = getattr(manager, "call_tool_parts", None)
         if not callable(parts):

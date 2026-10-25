@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "glasspane.recipe/0.1-draft",
+  "name": "smoke-check-submit",
+  "steps": [
+    {
+      "kind": "act",
+      "params": {
+        "selector": {
+          "role": "button",
+          "title": "Submit"
+        },
+        "action": "press"
+      }
+    },
+    {
+      "kind": "observe",
+      "params": {
+        "maxDepth": 4
+      }
+    },
+    {
+      "kind": "assert",
+      "params": {
+        "selector": {
+          "role": "button",
+          "title": "Submit"
+        },
+        "property": "enabled",
+        "expected": true
+      }
+    },
+    {
+      "kind": "diagnose",
+      "params": {}
+    }
+  ]
+}

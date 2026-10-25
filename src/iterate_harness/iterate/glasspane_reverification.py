@@ -52,6 +52,15 @@ READ_ONLY_TOOLS = ("gp_probe_status", "gp_observe", "gp_diagnose", "gp_last_evid
 #: Tools that would mutate. Named so the refusal is testable rather than implied by absence.
 MUTATING_TOOLS = ("gp_act", "gp_snapshot", "gp_restore", "gp_attach", "gp_export_evidence")
 
+#: Registry reads, kept separate from :data:`READ_ONLY_TOOLS` on purpose. Those five are what a
+#: re-verification may *ask about the app*; this one asks what the other product has configured,
+#: and a call that never touches the app must not quietly join the set the relay iterates over —
+#: ``plan_calls`` would then be naming a tool it was never meant to send. ``gp_project_list``
+#: takes no arguments and reads the registry file, so it reports what has been written;
+#: ``gp_project_get`` is excluded because it needs a projectId, and guessing which project a run
+#: belongs to is the invention this channel exists to avoid.
+CONFIG_READ_TOOLS = ("gp_project_list",)
+
 EngineCall = tuple[str, dict[str, Any]]
 
 
@@ -523,6 +532,7 @@ async def run_reverification_async(
 
 
 __all__ = [
+    "CONFIG_READ_TOOLS",
     "MUTATING_TOOLS",
     "READ_ONLY_TOOLS",
     "DeferredTarget",

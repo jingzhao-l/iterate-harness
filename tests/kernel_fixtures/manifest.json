@@ -1,6 +1,6 @@
 {
   "package": "iterate-kernel",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "sourceRepo": "jingzhao-l/iterate-skill",
   "sourcePath": "kernel/fixtures",
   "comment": "Vendored half of a cross-language contract. Each fixture carries the rules it asserts, written so a second implementation can be coded from the file alone; this directory is that second implementation's anchor. The bytes here are deliberately NOT generated from the kernel: they are a copy pinned by sha256, so a change to the published contract shows up here as a red hash check rather than as a silent re-generation. test_kernel_fixtures.py enforces (1) vendor == manifest, (2) every entry names a consumer test that exists, (3) when KERNEL_FIXTURES_DIR points at a live kernel checkout, its bytes must match the pin too. Update procedure: bump kernel, npm pack iterate-kernel@<new>, copy the file, re-record sha256 here, then the consumer test must still pass \u2014 if it does not, the two implementations genuinely diverge and the kernel change is the bug, not this file.",
@@ -80,6 +80,15 @@
         "tests/test_iterate/test_provider_registry.py",
         "tests/test_iterate/test_provider_producers.py",
         "scripts/diff_kernel_implementations.py"
+      ]
+    },
+    {
+      "path": "recipe-config.ok-01.json",
+      "sha256": "68613bcabf45cf059d7086ead38c099ef0dd9b678bb67d5a5e31da77b6ca3549",
+      "bytes": 628,
+      "consumedBy": [
+        "src/iterate_harness/iterate/glasspane_recipe.py",
+        "tests/test_iterate/test_glasspane_recipe.py"
       ]
     },
     {

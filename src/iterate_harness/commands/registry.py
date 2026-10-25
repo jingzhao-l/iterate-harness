@@ -1942,7 +1942,7 @@ def create_default_command_registry(
     registry.register(
         SlashCommand(
             "iterate",
-            "Iterate review loop: status|config|review|run|log|validate",
+            "Iterate review loop; `/iterate` with no argument prints the current command list",
             iterate_command_handler,
         )
     )

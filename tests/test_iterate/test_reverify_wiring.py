@@ -37,10 +37,16 @@ from iterate_harness.iterate.decision_log import (
     make_entry,
     read_entries,
 )
-from iterate_harness.iterate.glasspane_reverification import plan_calls
+from iterate_harness.iterate.glasspane_reverification import (
+    CONFIG_READ_TOOLS,
+    READ_ONLY_TOOLS,
+    plan_calls,
+)
 from iterate_harness.iterate.loop_gates import GATE_KEYS, measured_gates
 from iterate_harness.iterate.reverify_trigger import (
     GLASSPANE_TRANSPORT_KEY,
+    RECIPE_GATE_STATE_KEY,
+    REGISTRY_READ_TOOL,
     REVERIFICATION_STATE_KEY,
     trigger_reverification,
 )
@@ -172,10 +178,18 @@ async def test_a_failed_invariant_verdict_spawns_exactly_one_reverification_run(
     digest = request["trigger"]["reportDigest"]
     assert len(digest) == 67 and digest.startswith("iv_") and digest[3:] == digest[3:].lower()
 
-    # The calls the engine got are precisely the ones plan_calls produced for that request.
+    # The re-verification calls the engine got are precisely the ones plan_calls produced for that
+    # request. ④'s registry read rides the same channel and is filtered out here rather than folded
+    # in: a read of what the other product *configured* must never be counted as an answer about
+    # the app, and the assertion that keeps the two apart is what this line is for.
     expected, _deferred = plan_calls({"targets": request["targets"]})
-    assert asked == expected, "the round must send the planned read-only calls, no more and none less"
-    assert {tool for tool, _args in asked} == {"gp_last_evidence", "gp_diagnose"}
+    reverified = [call for call in asked if call[0] in READ_ONLY_TOOLS]
+    assert reverified == expected, "the round must send the planned read-only calls, no more and none less"
+    assert {tool for tool, _args in reverified} == {"gp_last_evidence", "gp_diagnose"}
+    assert [call[0] for call in asked if call[0] in CONFIG_READ_TOOLS] == [REGISTRY_READ_TOOL], (
+        "the recipe hand-off is exactly one registry read per round, on the read set that cannot "
+        "move the app — any more than one is a channel the round does not own"
+    )
 
     from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
 
@@ -199,7 +213,14 @@ async def test_the_verdict_that_passes_never_reaches_the_sender(
     result, context = await _aggregate(tmp_path, kernel, transport)
     assert result.is_error is False
     assert sender == [], "a passing invariant report must not call run_reverification at all"
-    assert asked == [], "and it must not touch the engine channel either"
+    # The control's claim is about the send, not about the socket: a pass spends no re-verification
+    # call at all. What a pass does spend is ④'s single registry read for the recipe — a read of
+    # configuration, which is why it is named here instead of being swallowed by a blanket "asked
+    # nothing" that would have to be weakened the first time ④ grew a producer.
+    assert [call for call in asked if call[0] != REGISTRY_READ_TOOL] == [], (
+        "a passing report must not touch the engine with a re-verification call"
+    )
+    assert asked == [(REGISTRY_READ_TOOL, {})], "and exactly one registry read, not a per-target spray"
     assert len(read_entries(tmp_path)) == 1, "only the seeded operation entry; nothing was recorded as sent"
 
     from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
@@ -207,6 +228,13 @@ async def test_the_verdict_that_passes_never_reaches_the_sender(
     published = context.metadata[ITERATE_STATE_KEY][REVERIFICATION_STATE_KEY]
     assert published["spawned"] is False
     assert "passed" in published["reason"]
+    gate = published[RECIPE_GATE_STATE_KEY]
+    assert gate["allowed"] is False and gate["invariantState"] == "pass"
+    assert gate["refusal"]["code"] == "RECIPE_E_READ", (
+        "this transport answers the registry read with an evidence frame, which is not a "
+        "{projects: [...]} document: ④ refuses the unreadable reply instead of reading it as "
+        "'no recipe is configured' — the two sentences mean different things to whoever runs next"
+    )
 
 
 async def test_no_verdict_sends_nothing_and_claims_nothing(

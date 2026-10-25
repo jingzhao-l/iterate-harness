@@ -50,6 +50,7 @@ from iterate_harness.iterate.glasspane_host_transport import (
     make_host_transport,
 )
 from iterate_harness.iterate.glasspane_reverification import (
+    CONFIG_READ_TOOLS,
     MUTATING_TOOLS,
     READ_ONLY_TOOLS,
     relay_answer,
@@ -555,7 +556,10 @@ def test_an_explicitly_bound_transport_wins_and_is_left_alone(tmp_path: Path) ->
     assert bind_host_transport(metadata) == {}
     payload = _send(tmp_path, kernel, metadata)
     assert payload is not None and payload["attempted"] is True
-    assert seen == ["gp_last_evidence", "gp_diagnose"], "the host's own transport must be the one called"
+    # The host's own transport must be the one called — for ④'s registry read as much as for the
+    # two re-verification reads, which is why the config read is pinned in position rather than
+    # merely tolerated: a host that bound its channel must not have it bypassed for the recipe.
+    assert seen == ["gp_project_list", "gp_last_evidence", "gp_diagnose"]
     assert metadata[MCP_MANAGER_METADATA_KEY].frames == [], (
         "the run's client was driven anyway; a bound transport must not double-send"
     )
@@ -650,8 +654,15 @@ def test_the_host_transport_is_reachable_from_the_publish_site_metadata(tmp_path
     )
     assert [answer["tool"] for answer in published["answers"]] == ["gp_last_evidence", "gp_diagnose"]
     assert [answer["state"] for answer in published["answers"]] == ["answered", "answered"]
-    # The frames went through the item-preserving path, never the join.
-    assert [tool for tool, _ in client.frames] == ["gp_last_evidence", "gp_diagnose"]
+    # The frames went through the item-preserving path, never the join. ④'s registry read rides the
+    # same session — pinned here in its place, and separated from the re-verification set two ways:
+    # the answers above never contain it, and the frames that *are* re-verification reads are still
+    # exactly the planned pair. Folding the config read into that claim would be the drift.
+    assert [tool for tool, _ in client.frames] == ["gp_project_list", "gp_last_evidence", "gp_diagnose"]
+    assert [tool for tool, _ in client.frames if tool not in CONFIG_READ_TOOLS] == [
+        "gp_last_evidence",
+        "gp_diagnose",
+    ]
     assert client.joined_calls == []
     diagnose = next(answer for answer in published["answers"] if answer["tool"] == "gp_diagnose")
     assert UPDATE_BLOCK in diagnose["annotations"] and PROVIDER_LINE in diagnose["annotations"]

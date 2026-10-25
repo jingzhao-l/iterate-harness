@@ -4,6 +4,161 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
+（空。2.11.0 收口后没有未归号的条目。）
+
+## [2.11.0] - 2026-10-25
+
+**版本判断：minor。** 判据是加法语义那一条：本版**只新增用户可见能力、不动任何已有形状**——
+④ 第一次可执行（配方交接 + 判定闸 + 闸随它那一轮的账本行落盘）、③ 的跨账本链接（对面那本可被
+项目记为默认）、两条读门（`/iterate gate` 与 `ih iterate gate`、`ih iterate glasspane-ledger`）、
+`requires-python >= 3.10` 未动、CLI 既有参数与退出码集合未动、内核仍是 `iterate-kernel@0.1.10`
+（语料清单的 pin 从 0.1.9 追到 0.1.10，10 份文件逐字节实测一致，两模式各跑一遍）。所以不是
+patch（有新能力），也不是 major（没有破坏任何东西）。
+
+
+
+### Added — 场景④ 第一次可执行：配方交接、判定闸、跨账本佐证
+
+综述 §8.5 row 4（"GlassPane 修复完成 → 配方下一步挂接 iterate invariant 复核，通过后才进入重验"）
+此前在本仓**没有任何落点**：`reverify_trigger` 拒绝产出 `recipeSteps`，理由写在它自己的 docstring
+里——"a step is something the engine's own recipe carries, and this harness has never held one"。
+本批不新增内核 API、不发明配方执行器，只把现有契约能承担的部分落成可执行、可拒、可红的东西。
+
+- **`iterate/glasspane_recipe.py`（新）**：配方从两个真实生产者取得——`GLASSPANE_RECIPE`
+  （与 `GLASSPANE_RUN_PLAN` 同一套交接纪律）或 `gp_project_list` 报出的 `recipeConfigPath`。
+  文档按 `glasspane.recipe/0.1-draft` 校验，这是该契约的第二份实现，语料钉在
+  `tests/kernel_fixtures/recipe-config.ok-01.json`（sha256 `68613bca…`，`check_kernel_fixtures.py`
+  两模式实测 10 个文件逐字节一致）；摘要取 `rc_` + canonical sha256，是本地出处凭据而非契约字段
+  （内核没有配方摘要）。两个生产者各说一套 → `RECIPE_E_CONTEST`，不挑一个顺眼的用；registry 回包
+  认不出形状 → `RECIPE_E_READ`，**不降级成"没有配方"**；多项目各配一份 → 拒绝，因为"这次评审属于
+  哪个项目"不是本模块能猜的。
+- **判定闸 `recipe_step_gate`**：按固定次序读三件实测——本轮 invariant 判定、配方、一条**链可验**的
+  账本行。`unmeasured` 与缺席判定都不算 pass；缺任何一件都具名拒绝（六个码）。
+- **③ 的账本第一次有对面读者**：`fix_proof` 走内核链校验器（`read_decision_log`），既能读工程自己的
+  `.iterate/decision-log.jsonl`，也能读 `GLASSPANE_DECISION_LOG` 递进来的**另一个 harness 写的**账本。
+  断链拒绝并说停在第几行；pre-chain 的旧形状另给一句"这是历史不是篡改"。
+- **`recipeSteps` 不进出站请求**，这条是本批第二版才定下来的。第一版让①的失败请求带上配方步骤，
+  读起来像"④  closed"，实际违反 ④ 自己要的那件事：复核没通过时不许让对面重跑步骤。而契约在这一层
+  没有缺口可钻——`reVerificationRequestFrom` 两份实现对 pass 一律返回 null（失败才生成请求），所以
+  "带权限的请求"按构造不存在。于是本模块把这条写成**禁令**而不是能力：`reverification_targets` 没有
+  收配方的参数，`test_targets_never_carry_recipeSteps_however_the_recipe_looks` 同时钉住返回值与
+  函数签名（参数回来就得红）。配方本身仍被读、被校验、被摘要——它以 `recipeStepGate.steps` 出现在
+  本轮发布里，那是给驱动配方的人看的事实，不是本仓替引擎动手的许可。
+- **发布点接线**：`recipeStepGate` 在**每一条**能发布的路径上一起出去（通过、契约拒绝、以及真正
+  发出的那一轮），不再只挂在 pass 分支——只挂一边的话，`RECIPE_GATE_E_*` 那两条拒绝按构造跑不到，
+  而"跑不到的拒绝分支"在本仓等于没修。sync 与 awaited 两个 sender 仍共用 `_prepare`；新增的唯一一次
+  通道使用是那一次 registry 读，它被 `CONFIG_READ_TOOLS` 与 `READ_ONLY_TOOLS` 分开钉住——**读配置
+  不许冒充一次关于 app 的回答**，`test_reverify_wiring` / `test_host_transport` 各有一条断言把两个
+  集合分开数。
+
+### 实测与反向验证
+
+`pytest tests` 全量 2966 passed；6 条红（`test_tasks/test_manager.py` 三条、
+`test_tools/test_bash_tool.py` 一条、`test_tools/test_integration_flows.py` 一条、
+`test_engine/test_query_engine.py::test_subagent_stop_hook_fires_when_spawned_agent_finishes`）
+在 `d14da4b2` 的**干净基线工作树**上同样红，属本机环境而非本批引入；
+`ruff check src tests scripts` 干净、`mypy --strict src` 267 文件干净。
+新增 62 条用例（`tests/test_iterate/test_glasspane_recipe.py`）。十发反向变异
+（`/var/tmp/it-mutate.sh`，备份 + sha256 核回，全程未用 `git checkout`/`stash`）每发都点名变红：
+unmeasured 当 pass、放行无可验账本、contest 悄悄取一个、多配方取第一个、回包降级成"没有配方"、
+断链改用宽容读法、判定顺序颠倒、发出去的那轮不带闸、未通过也塞 recipeStep、放行面放宽到 `gp_act`。
+闸的六条码里，`RECIPE_GATE_E_NO_VERDICT` 在本轮**发布不到**：无判定的轮次按规则 1 连 `reverification`
+都不发布（`_prepare` 第五个位置此时返回 `None`，不为它编一个没人读的形状），所以这条是给直接调用方的
+契约、由测试钉住形状，不算"产品上会看到的拒绝"。
+
+### Added — ③ 的最后一程（把对面那本账链接进来）与 ④ 的读者
+
+上一条留下的两处"能做但没人配置"，本批各自接到底：
+
+- **`.iterate/glasspane-ledger.json`（`iterate.glasspane-ledger-link/0.1`）**：`fix_proof` 早就能读
+  对面写的链，但"去哪儿读"只剩 `GLASSPANE_DECISION_LOG` 一条环境变量——没配的那台机器上，③ 静默退化成
+  "只读工程自己的台账"，而 GlassPane 修的东西恰恰不在那本里。现在 `link_ledger` 把交接做成一次性的
+  项目动作：先跑内核链校验器**再落笔**（校验不过就一个字节都不写，因为给坏链背书会让之后每一轮都拒绝，
+  而操作者是在最坏的时机——轮次中间——才知道），钉住 `genesisEntryId`，0700 目录里 0600 文件。空台账允许
+  链接，但 genesis 留空＝弱一档的背书，这话写在链接时而不是等读的时候才发现。
+- **解析次序 `env` → `link` → `project`**：显式交接仍然压过记录，操作者必须能在不改文件的前提下临时换一本。
+  genesis 与文件首条不符 ⇒ `LEDGER_LINK_E_STALE`：一条链只会变长，首条换了就是被**替换**了，从替换品里
+  引一条"修复已证"等于引用一条没人见证过的链。截断则先被链校验器抓住（第 1 行）——两条拒绝指向不同地方，
+  所以次序是量出来的而不是随手写的。
+- **④ 的闸有了不是测试的读者**：`recipeStepGate` 现在随它那一轮的账本行一起落盘，`/iterate gate`
+  把"上一轮答了什么"读回来。读法故意与 `fix_proof` 不同——用宽容投影器，因为它答的是"这一轮发布了什么"，
+  这个问号在别处断链时也必须还能答。没有记录时它说"那是缺席，不是通过"，不打印一个绿色的默认值。
+- **`/iterate glasspane-ledger [<路径>]`**：带路径就链接（把对面打印的绝对路径贴进来），不带就打印当前
+  是哪一本、链的是谁、链不链得通。两条子命令都进了 usage 文本——发现不了等于没有。
+
+### Fixed — 三条自己写出来的、形状已知的缺陷（复核时抓到，不是别人报的）
+
+- `LINK_E_SCHEMA` **声明了却没人举**，而 `read_ledger_link` 把手写过/半写的链接当"没有链接"，悄悄退回
+  工程自己的台账。那不是"降级"，是给错的文件作背书：操作者以为读的是对面那本，代码读的是另一本。
+  现在只有"文件不存在"才回 `None`，不合形状/不是 JSON/读不到各自具名拒绝。
+- `os.open` 在 `try` **外面**：链接路径被一个目录占住时抛裸 `IsADirectoryError`，而闸的调用方只处理
+  `RecipeError`。两处 OSError 出口现在都包进同一条 `LEDGER_LINK_E_READ`。
+- 两条从未被 raise 的码（`LEDGER_LINK_E_STATE_ROOT`、`LEDGER_LINK_E_LEDGER_EMPTY`）删掉——本仓的规矩是
+  声明一个不存在的拒绝＝给不存在的能力作背书。
+- **`from datetime import UTC` 是 3.11 的**，我把它写进了 `commands/iterate.py`，`tests/test_py310_compat.py`
+  当场红（本包 `requires-python >= 3.10`）。改成仓内既有的 `from datetime import datetime, timezone`
+  形式；下一笔又把时间戳整个搬进 `glasspane_recipe.link_ledger_now`，所以 `commands/` 里现在**根本不出现**
+  时间戳格式（有一条用例数着全仓 `isoformat(timespec="milliseconds")` 只出现 1 次）。
+  顺着这条把闸本身也修了：它此前只扫 `src/`，而一个测试文件里的 3.11-only 名字在 3.10 上是**收集期**
+  ImportError——整文件用例静默消失，本机 3.13 上永远看不见。**这条仓的 CI 分布是量出来的，不是想象的**：
+  父仓 `iterate-skill` 的 push CI（`Python tests (3.10…3.13)` 那份矩阵）跑的是根上的 `pytest tests/ -q`
+  ——实测 1865 passed，那是 **skill 自己的套件**，碰不到 `harness/iterate-harness/tests/`；harness 套件
+  的 3.10 覆盖在 `harness/iterate-harness/.github/workflows/ci.yml`（`uv run pytest -q`），而那份工作流
+  只有 **subtree push 到 `jingzhao-l/iterate-harness` 之后**才作为该仓根工作流执行。也就是说：一个坏掉的
+  测试导入在本仓 push 上是**静默**的，要等搬运之后才红。静态闸把 `tests/` 纳进扫描面之后，任何一次跑
+  harness 套件（本机也算）都能看见它——这才是这条修法的价值所在。
+  同时给"整模块导入"补了 guarded-import 豁免（`try: import tomllib / except ModuleNotFoundError:
+  import tomli as tomllib` 是本仓已有写法，误报会逼人删掉兜底换绿）；豁免只到整模块导入为止，
+  `from datetime import UTC` 那种"名字"包在 try 里不豁免——那正是 2.5.0 事故的形状：3.10 的失败落在
+  `try` 内、被 handler 咽掉，代码安静降级。
+
+### Fixed — 语料清单的 `version` 从 0.1.9 追到 0.1.10（并两次实测它是同一份字节）
+
+`tests/kernel_fixtures/manifest.json` 的 pin 停在 `iterate-kernel@0.1.9`，而对面那条线（harness 的
+`contracts/kernel-pin.json`）早已吃 0.1.10——"两仓吃同一份内核"这句话此前靠一个说 0.1.9 的标签撑着。
+先证明字节没漂，再动标签：`scripts/check_kernel_fixtures.py --source <0.1.10 安装产物的 fixtures/>` 与
+registry 模式（`npm pack` 真包）**各跑一次，10 份文件逐字节对上**。0.1.10 那版内核动的只有 `zod`，
+契约语料未变，所以这是一次追标签而不是迁移。
+
+### Added — 那两个读者要有第二扇门：`ih iterate gate` / `ih iterate glasspane-ledger`
+
+上一条把读者写成了"只有 session 里 `/iterate …` 敲得动"。拿真 `ih` 一试，终端回的是
+`No such command 'gate'`——Typer 那面给 `status`/`log`/`trend`/`agents` 都配了孪生命令，我新加的这两条
+没有。一个只能从代理里问的读者，仍然是一个读者，但操作者坐在终端前问不到，就等于他手上没有这个数。
+
+- 两条 Typer 命令落进 `cli.py`，与 slash 面共用同一批函数；**退出码按面分**（终端拒绝退 1，
+  session 里把拒绝当答案返回），**措辞按面统一**（同一个 `format_recipe_error` / `render_link_success`）。
+- `linkedAt` 的格式从 `commands/` 搬进 `glasspane_recipe.link_ledger_now`：上一条刚把那里的
+  `datetime.UTC` 修成 `timezone.utc`，而真正的病是"每个调用点各排一次时间戳"——两个面各排一次，
+  就是两份会各自漂的格式。现在 `isoformat(timespec="milliseconds")` 在全仓出现 1 次，由一条用例数着。
+- registry 里 `/iterate` 那条描述此前抄了一份六条的命令清单（实际 14 条，`gate` 与
+  `glasspane-ledger` 都不在内）。改成指向 usage 文本："不带参数就打印当前清单"——这句抄不旧。
+- 两面一致性由三条用例钉住（同一条项目、同一个 cwd，终端输出与 slash 输出逐字相等，只豁免
+  `linkedAt` 那个墙钟字段），拒绝那条另断言 `exit_code == 1` 且**没有留下链接文件**。
+
+### 实测与反向验证（本批）
+
+`pytest tests` 全量 3067 passed / 6 failed / 6 skipped。红的那 6 条就是上一条目里已经在
+`d14da4b2` 干净基线上复现过的那一组（`test_engine/test_query_engine.py` 一条、`test_tasks/test_manager.py`
+三条、`test_tools/test_bash_tool.py` 一条、`test_tools/test_integration_flows.py` 一条），本批没碰它们
+指向的面，本轮未重跑基线；本批**新**红的那条 `test_py310_compat` 已修，见上。
+`ruff check src tests scripts` 0、`mypy --strict src` 269 文件 0 问题；
+`tests/test_iterate/test_glasspane_ledger_link.py` 现有 28 条（本批 +5）+ `tests/test_py310_compat.py` 补 2 条。
+十五发反向变异每发**具名**变红并按 sha256 逐字核回（`glasspane_recipe.py` `043471f1…`、
+`reverify_trigger.py` `5e287f84…`、`cli.py` `4b7d4f61…`、`commands/iterate.py` `362be1ed…`；
+全程自带备份 `cp`，未用 `git checkout`/`stash`——并行会话正在用主树）：链接前先验链被去掉、
+genesis 不钉、轮换后的台账照样被引用、环境变量不再压过链接、坏 JSON 与错形状各自被悄悄忽略、
+`os.open` 的 OSError 不再被包、闸的读者读错 key、闸不落进账本行、闸自身另外两发（豁免放宽到
+`ImportFrom`、扫描退回单根），再加这一批的门：终端自己编一句拒绝、终端自己编一句缺席、slash 自己
+重排成功文本（**只改一个句号也红**）、拒绝不再让 shell 非零退出。
+
+真机读数（`ih`，隔离项目目录，被链接的链取 `tests/fixtures/glasspane_chain_ts_written.jsonl`
+那份**真内核字节**）：未链接时打印三条来源与 `0 entries`；链接后 `resolved from: link` +
+`chain: verified, 3 entries, 1 of them a passing outcome carrying an operation id` +
+`genesis pinned: dl_AAAA…`；`gate` 答的是"那是缺席，不是通过"；被改过一个字段的链拒绝并退 **1**、
+点名 `LEDGER_LINK_E_LEDGER_CHAIN`、报出断在第 2 行，而 `.iterate/` **一个文件都没留下**；
+落盘的链接文件 `0600`，父目录 `0700`。
+
 ## [2.10.0] - 2026-10-24
 
 ### Added

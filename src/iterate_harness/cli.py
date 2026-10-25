@@ -1615,6 +1615,48 @@ def iterate_trend(
         raise typer.Exit(1)
 
 
+@iterate_app.command("gate")
+def iterate_gate() -> None:
+    """The last recipe-gate answer this project recorded (two-way scenario ④).
+
+    Reads this project's decision log, not the engine: the question is "what did the loop publish",
+    and it has to keep answering after a chain break somewhere else. The in-session `/iterate gate`
+    calls the same function, so the two surfaces cannot answer differently — and a project that has
+    never run such a round is told that is absence, not a pass.
+    """
+    from iterate_harness.iterate import glasspane_recipe
+
+    print(glasspane_recipe.render_gate_state(Path.cwd()))
+
+
+@iterate_app.command("glasspane-ledger")
+def iterate_glasspane_ledger(
+    ledger_path: str = typer.Argument(
+        "",
+        help="Absolute path of the decision log the GlassPane harness wrote, to link it as this "
+        "project's fix evidence. Leave it empty to only show where fix evidence is read from today.",
+    ),
+) -> None:
+    """Show — or record — which decision log this project's fix evidence is cited from (scenario ③).
+
+    With a path it links that ledger, but only after the whole chain verifies: a hand-off that is
+    stored first would turn every later round into a refusal, and the operator would hear about it
+    mid-run. A refusal exits 1 here (a terminal needs the shell's own signal) while the in-session
+    `/iterate glasspane-ledger` returns the same wording as an answer.
+    """
+    from iterate_harness.iterate import glasspane_recipe
+
+    if not ledger_path.strip():
+        print(glasspane_recipe.render_ledger_link(Path.cwd()))
+        return
+    try:
+        answer = glasspane_recipe.render_link_success(Path.cwd(), Path(ledger_path).expanduser())
+    except glasspane_recipe.RecipeError as error:
+        print(glasspane_recipe.format_recipe_error(error), file=sys.stderr)
+        raise typer.Exit(1) from error
+    print(answer)
+
+
 @iterate_app.command("agents")
 def iterate_agents(
     as_json: bool = typer.Option(False, "--json", help="Emit the roster as JSON"),
