@@ -123,7 +123,14 @@ jobs:
     # tests in six buckets of 519/519/519/519/518/518, the whole suite 141.89 s here (3,106 passed,
     # 6 skipped), so 30 minutes is not a guess at the cost — it is room for the worst shared runner. remedy if a bucket ever hits it: the log names the files, act on
     # those; do not raise the number and do not mark anything skip.
-    timeout-minutes: 30
+    # 12, and above the step's own 600 s budget rather than below it: a job that ends is the
+    # precondition for its log existing, but GitHub's timeout is the last line, not the instrument
+    # - measured, a leg that outran its step budget was cut at job start + 35 min (30 + grace) and
+    # that cut uploads nothing. Cost basis: ten of twelve legs on run 40200818814 finished in about
+    # a minute each (checkout, uv sync, collect, 520 tests), and the whole suite is 123.69 s here.
+    # remedy if a bucket ever hits it: the log names the files, act on those; do not raise the
+    # number and do not mark anything skip.
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
@@ -267,7 +274,14 @@ jobs:
         # before and after the kill, which names whatever was still alive — act on that. Do NOT raise
         # the budget to make the red disappear and do NOT mark anything skip.
         env:
-          PYTEST_HARD_STOP: "1200"
+          # 600, deliberately BELOW the job ceiling. Measured on runs 40199977015 and 40200818814: the
+          # two bucket-06 legs sat in this step past a 1,200 s budget, and the only thing that ever ended
+          # them was GitHub's job timeout plus a ~5-minute grace (job start 13:58:00 -> cut 14:33:00 =
+          # exactly 35 min), which uploads no artifact and leaves no log. A budget the ceiling cannot
+          # outrun is the discriminator: if this step's own poll works, the log arrives with it; if it
+          # does not, the runner-side stall is the finding. Headroom is ~40x the measured cost of a
+          # bucket (520 of 3,119 tests; the whole suite is 123.69 s on this machine).
+          PYTEST_HARD_STOP: "600"
           PYTHONUNBUFFERED: "1"
           BUCKET_PATHS: ${{ matrix.bucket.paths }}
         run: |

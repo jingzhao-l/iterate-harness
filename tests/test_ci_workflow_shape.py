@@ -204,6 +204,15 @@ def test_the_suite_step_keeps_the_probe_that_makes_a_death_findable() -> None:
     assert 'kill -9 -- -"$suite_pid"' in run, (
         "the kill must target the whole session, not the process `timeout` would have signalled"
     )
+    budget = str(suite[0].get("env", {}).get("PYTEST_HARD_STOP", ""))
+    assert budget.isdigit(), f"the step's budget must be a readable number, got {budget!r}"
+    ceiling = str(_load("ci.yml")["jobs"][TEST_JOB].get("timeout-minutes", ""))
+    assert ceiling.isdigit() and int(budget) < 60 * int(ceiling), (
+        f"the step's own budget ({budget} s) has to end the step before the job ceiling "
+        f"({ceiling} min) does - otherwise the only thing that ever finishes the step is GitHub "
+        "killing the runner, which uploads nothing (measured: job start 13:58:00, cut 14:33:00, "
+        "artifacts stayed 11, so the two wedged legs left no log anywhere)"
+    )
     assert '"$PYTEST_HARD_STOP"' in run, (
         "the budget is the step's own bound: without it the step waits for a process that may never"
         " end, and a job that never ends has no log at all"
@@ -354,10 +363,12 @@ def test_the_test_job_is_a_matrix_of_buckets_that_cannot_start_without_a_plan() 
     """
     job = _load("ci.yml")["jobs"][TEST_JOB]
     assert job.get("needs") == PLAN_JOB, "the bucket jobs must consume the plan, not a hand-written list"
-    assert job.get("timeout-minutes") == 30, (
+    assert job.get("timeout-minutes") == 12, (
         "the ceiling exists so a bucket ENDS — a job that ends is the precondition for its log "
-        "existing (measured: an in-progress job's log endpoint answers HTTP 404); 30 minutes is room "
-        "for 519 of 3,112 tests, which take 141.89 s together here, not a guess to be nudged up"
+        "existing (measured: an in-progress job's log endpoint answers HTTP 404) — and it must stay "
+        "ABOVE the step's own budget, because GitHub's timeout is the last line, not the instrument: "
+        "measured, a step that outran its 1,200 s budget was only ended by the job ceiling plus a "
+        "5-minute grace, and a runner killed that way uploads no artifact at all"
     )
     matrix = job["strategy"]["matrix"]
     versions = matrix["python-version"]
