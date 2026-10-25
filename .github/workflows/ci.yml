@@ -123,14 +123,17 @@ jobs:
     # tests in six buckets of 519/519/519/519/518/518, the whole suite 141.89 s here (3,106 passed,
     # 6 skipped), so 30 minutes is not a guess at the cost — it is room for the worst shared runner. remedy if a bucket ever hits it: the log names the files, act on
     # those; do not raise the number and do not mark anything skip.
-    # 12, and above the step's own 600 s budget rather than below it: a job that ends is the
+    # 20 — and at least double the step's own 600 s budget, because the setup before that step is
+    # 3.5 minutes of checkout + uv sync + collect: measured on run 40206085949 a 12-minute ceiling
+    # landed *before* the step's budget could, which made the experiment inconclusive rather than
+    # answered. A job that ends is the
     # precondition for its log existing, but GitHub's timeout is the last line, not the instrument
     # - measured, a leg that outran its step budget was cut at job start + 35 min (30 + grace) and
     # that cut uploads nothing. Cost basis: ten of twelve legs on run 40200818814 finished in about
     # a minute each (checkout, uv sync, collect, 520 tests), and the whole suite is 123.69 s here.
     # remedy if a bucket ever hits it: the log names the files, act on those; do not raise the
     # number and do not mark anything skip.
-    timeout-minutes: 12
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

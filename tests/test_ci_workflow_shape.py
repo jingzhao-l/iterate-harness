@@ -207,11 +207,14 @@ def test_the_suite_step_keeps_the_probe_that_makes_a_death_findable() -> None:
     budget = str(suite[0].get("env", {}).get("PYTEST_HARD_STOP", ""))
     assert budget.isdigit(), f"the step's budget must be a readable number, got {budget!r}"
     ceiling = str(_load("ci.yml")["jobs"][TEST_JOB].get("timeout-minutes", ""))
-    assert ceiling.isdigit() and int(budget) < 60 * int(ceiling), (
-        f"the step's own budget ({budget} s) has to end the step before the job ceiling "
-        f"({ceiling} min) does - otherwise the only thing that ever finishes the step is GitHub "
-        "killing the runner, which uploads nothing (measured: job start 13:58:00, cut 14:33:00, "
-        "artifacts stayed 11, so the two wedged legs left no log anywhere)"
+    assert ceiling.isdigit() and 60 * int(ceiling) >= 2 * int(budget), (
+        f"the job ceiling ({ceiling} min) must be at least double the step budget ({budget} s): the "
+        "setup ahead of this step costs ~3.5 minutes of checkout + uv sync + collect, and a ceiling "
+        "set to 12 minutes was measured landing *before* the budget could fire (run 40206085949) — "
+        "that makes the run inconclusive rather than answered. The ceiling still has to stay above "
+        "the budget, because GitHub's timeout proves only that a runner died; it uploads no artifact "
+        "(measured: job start 13:58:00, cut 14:33:00, artifacts stayed 11, so the wedged legs left no "
+        "log anywhere)"
     )
     assert '"$PYTEST_HARD_STOP"' in run, (
         "the budget is the step's own bound: without it the step waits for a process that may never"
@@ -363,10 +366,11 @@ def test_the_test_job_is_a_matrix_of_buckets_that_cannot_start_without_a_plan() 
     """
     job = _load("ci.yml")["jobs"][TEST_JOB]
     assert job.get("needs") == PLAN_JOB, "the bucket jobs must consume the plan, not a hand-written list"
-    assert job.get("timeout-minutes") == 12, (
+    assert job.get("timeout-minutes") == 20, (
         "the ceiling exists so a bucket ENDS — a job that ends is the precondition for its log "
         "existing (measured: an in-progress job's log endpoint answers HTTP 404) — and it must stay "
-        "ABOVE the step's own budget, because GitHub's timeout is the last line, not the instrument: "
+        "ABOVE (and by the rule below, at least double) the step's own budget, because GitHub's "
+        "timeout is the last line, not the instrument: "
         "measured, a step that outran its 1,200 s budget was only ended by the job ceiling plus a "
         "5-minute grace, and a runner killed that way uploads no artifact at all"
     )
