@@ -131,6 +131,13 @@ GLASSPANE_ACALL_KEY = "glasspane_reverify_acall"
 LEDGER_DECISION_TYPE = "decision"
 LEDGER_DATA_KIND = "reverification"
 
+#: ④'s answer for a round that sent **nothing** is filed under its own data kind — same chain,
+#: same verifier, different sentence: a send records what the engine answered, a no-send records
+#: what the gate withheld and why. Both are found by :func:`~.glasspane_recipe.render_gate_state`
+#: through the ``recipeStepGate`` key rather than through this string, and neither is fix evidence:
+#: ``fix_proof`` needs a passing outcome plus an operation id, and a gate row carries neither.
+LEDGER_GATE_DATA_KIND = "recipe-gate"
+
 #: How many recorded operations one round re-asks. The cap is the ledger's own: one entry has to
 #: carry the citation of every answer it relays under ``PAYLOAD_MAX_CANONICAL_LENGTH``, and
 #: asking without saying so is the lie — the remainder is counted in the published payload.
@@ -378,6 +385,83 @@ def record_reverification_run(
     return None
 
 
+def _no_send_reason(outcome: Mapping[str, Any]) -> str:
+    """Why this round sent nothing, in the sentence the outcome already tells.
+
+    Read, never invented: the passing branch carries ``reason``, a contract refusal carries its
+    ``code``. Falling back to a literal is for the shape nobody produces, and saying "unknown"
+    would be the ledger guessing about its own history.
+    """
+    reason = outcome.get("reason")
+    if isinstance(reason, str) and reason:
+        return reason
+    refusal = outcome.get("refusal")
+    if isinstance(refusal, Mapping) and refusal.get("code"):
+        return str(refusal["code"])
+    return "no re-verification sent"
+
+
+def _answered_by_passing_round(outcome: Mapping[str, Any]) -> bool:
+    """Whether this no-send outcome is the loop **answering** rather than **refusing**.
+
+    The two read differently at the ledger. A contract refusal (``refusal`` present) says the loop
+    could not build a request at all — Requirement C pins that path to zero ledger bytes, because a
+    decision that was never made must not become an audit entry
+    (``test_host_transport.test_a_refusal_path_writes_zero_ledger_bytes``). The passing branch is the
+    opposite: a verdict was measured, the kernel declined to build a request *because nothing was
+    broken*, and ④ answered the question that a pass actually raises — may the recipe move now? That
+    answer is a decision this round made, so it is the one worth a line.
+    """
+    return "refusal" not in outcome
+
+
+def record_gate_without_send(
+    project_root: Path | str,
+    round_number: int,
+    outcome: Mapping[str, Any],
+    gate: StepGate | None,
+) -> str | None:
+    """Append ④'s answer for a round that passed its invariants and sent nothing; never raise.
+
+    WHY THIS EXISTS. :func:`_prepare` computes the gate for every outcome a round can publish, but
+    until now only a **send** wrote a ledger line, and the two doors (``/iterate gate`` in a session,
+    ``ih iterate gate`` in a terminal) read the ledger. So the answer that matters most — "the
+    invariant passed: may the recipe move?" — lived only in that round's transient payload: a project
+    could run ten passing rounds and the terminal door would still say *no recipe gate recorded yet*.
+    A published state whose reader cannot reach it is the failure shape this repo keeps getting fined
+    for. Refusal branches stay byte-free (see :func:`_answered_by_passing_round`), the send still
+    records exactly one row (``test_a_failed_invariant_verdict_spawns_exactly_one_reverification_run``
+    counts them), and the row is deliberately not fix evidence — a gate row has neither a passing
+    outcome nor an operation id, which is what ``fix_proof`` requires.
+
+    Mirrors :func:`record_reverification_run`'s error contract: a ledger that will not take the entry
+    does not cancel the round's publish, and it is not swallowed either — the caller puts the returned
+    text into the payload as ``ledgerError``.
+    """
+    if gate is None:
+        return None
+    data: dict[str, object] = {
+        "kind": LEDGER_GATE_DATA_KIND,
+        "summary": f"recipe gate answered without a send: {_no_send_reason(outcome)}",
+        "spawned": False,
+        "invariantState": outcome.get("invariantState"),
+        RECIPE_GATE_STATE_KEY: gate.to_payload(),
+    }
+    try:
+        append_entry(
+            project_root,
+            make_entry(
+                entry_type=LEDGER_DECISION_TYPE,
+                round_number=round_number,
+                data=data,
+            ),
+        )
+    except (OSError, *DECISION_LOG_REFUSALS) as error:
+        log.warning("iterate recipe gate could not be logged: %s", error, exc_info=True)
+        return f"{getattr(error, 'code', type(error).__name__)}: {error}"
+    return None
+
+
 def _prepare(
     *,
     project_root: Path | str,
@@ -585,7 +669,13 @@ def trigger_reverification(
         planned_dimensions=planned_dimensions,
         read=read,
     )
-    if request is None or outcome is not None:
+    if outcome is not None:
+        if _answered_by_passing_round(outcome):
+            gate_error = record_gate_without_send(project_root, round_number, outcome, gate)
+            if gate_error is not None:
+                outcome["ledgerError"] = gate_error
+        return outcome
+    if request is None:
         return outcome
     run = run_reverification(
         request,
@@ -639,7 +729,13 @@ async def trigger_reverification_async(
         planned_dimensions=planned_dimensions,
         read=read,
     )
-    if request is None or outcome is not None:
+    if outcome is not None:
+        if _answered_by_passing_round(outcome):
+            gate_error = record_gate_without_send(project_root, round_number, outcome, gate)
+            if gate_error is not None:
+                outcome["ledgerError"] = gate_error
+        return outcome
+    if request is None:
         return outcome
     if acall is not None:
         run = await run_reverification_async(request, acall)
@@ -665,10 +761,12 @@ __all__ = [
     "GLASSPANE_TRANSPORT_ABSENT_KEY",
     "GLASSPANE_TRANSPORT_KEY",
     "INVARIANT_GATE_KEY",
+    "LEDGER_GATE_DATA_KIND",
     "MAX_REQUESTED_OPERATIONS",
     "RECIPE_GATE_STATE_KEY",
     "REGISTRY_READ_TOOL",
     "REVERIFICATION_STATE_KEY",
+    "record_gate_without_send",
     "record_reverification_run",
     "recorded_operation_ids",
     "reverification_targets",

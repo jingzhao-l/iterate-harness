@@ -37,6 +37,12 @@ from iterate_harness.iterate.decision_log import (
     make_entry,
     read_entries,
 )
+from iterate_harness.iterate.glasspane_recipe import (
+    GATE_E_UNPROVEN,
+    RecipeError,
+    fix_proof,
+    render_gate_state,
+)
 from iterate_harness.iterate.glasspane_reverification import (
     CONFIG_READ_TOOLS,
     READ_ONLY_TOOLS,
@@ -45,6 +51,7 @@ from iterate_harness.iterate.glasspane_reverification import (
 from iterate_harness.iterate.loop_gates import GATE_KEYS, measured_gates
 from iterate_harness.iterate.reverify_trigger import (
     GLASSPANE_TRANSPORT_KEY,
+    LEDGER_GATE_DATA_KIND,
     RECIPE_GATE_STATE_KEY,
     REGISTRY_READ_TOOL,
     REVERIFICATION_STATE_KEY,
@@ -221,7 +228,11 @@ async def test_the_verdict_that_passes_never_reaches_the_sender(
         "a passing report must not touch the engine with a re-verification call"
     )
     assert asked == [(REGISTRY_READ_TOOL, {})], "and exactly one registry read, not a per-target spray"
-    assert len(read_entries(tmp_path)) == 1, "only the seeded operation entry; nothing was recorded as sent"
+    # Two rows now, and the second one is the point: ④'s answer to a passing round used to live only
+    # in this round's payload, so the two doors — which read the ledger — kept answering "no recipe
+    # gate recorded yet" no matter how many rounds had run. Nothing was *sent* (asserted above);
+    # what is recorded is the answer, not a send.
+    assert len(read_entries(tmp_path)) == 2, "the seeded operation entry plus ④'s answer to the pass"
 
     from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
 
@@ -235,6 +246,94 @@ async def test_the_verdict_that_passes_never_reaches_the_sender(
         "{projects: [...]} document: ④ refuses the unreadable reply instead of reading it as "
         "'no recipe is configured' — the two sentences mean different things to whoever runs next"
     )
+
+
+# ------------------------------------------- ④'s answer surviving a round that sent nothing
+
+
+async def _passing_round(tmp_path: Path, sender: list[dict[str, Any]]) -> dict[str, Any]:
+    """One passing round through the real aggregate call site; returns what it published."""
+    pack = _real_pack()
+    kernel = await _project(tmp_path, ["README.md"])
+    _record_an_operation(tmp_path, pack["operationId"])
+    transport, _asked = _evidence_transport(pack)
+    _result, context = await _aggregate(tmp_path, kernel, transport)
+
+    from iterate_harness.iterate.loop_policy import ITERATE_STATE_KEY
+
+    return context.metadata[ITERATE_STATE_KEY][REVERIFICATION_STATE_KEY]
+
+
+async def test_a_passing_rounds_gate_answer_survives_the_round_it_was_made_in(
+    tmp_path: Path, sender: list[dict[str, Any]]
+) -> None:
+    """The two doors read the ledger, and a pass used to leave nothing there for them to read.
+
+    This is the named red for the defect: with the row unwritten, ``render_gate_state`` answers with
+    its own absence line, so ``ih iterate gate`` reported "no recipe gate recorded yet" for a project
+    that had already answered "may the recipe move now?" in every one of its passing rounds. The
+    transient payload the round published is not a reader — it dies with the round.
+    """
+    await _passing_round(tmp_path, sender)
+    text = render_gate_state(tmp_path)
+    assert "no recipe gate recorded yet" not in text, text
+    assert "round 1: recipe gate — not allowed" in text, text
+    assert "invariant verdict: pass" in text, text
+
+
+async def test_the_recorded_answer_is_a_gate_row_and_not_a_send(
+    tmp_path: Path, sender: list[dict[str, Any]]
+) -> None:
+    """A gate row is filed under its own kind, says it sent nothing, and borrows no send's shape."""
+    await _passing_round(tmp_path, sender)
+    rows = read_entries(tmp_path)
+    kinds = [entry.data.get("kind") for entry in rows]
+    assert kinds.count(LEDGER_GATE_DATA_KIND) == 1, f"exactly one gate row per passing round: {kinds}"
+    assert kinds.count(reverify_trigger.LEDGER_DATA_KIND) == 0, (
+        "a round that sent nothing must not produce a reverification row"
+    )
+    data = [entry.data for entry in rows if entry.data.get("kind") == LEDGER_GATE_DATA_KIND]
+    assert len(data) == 1, f"exactly one gate row, found {len(data)}"
+    assert data[0]["spawned"] is False
+    assert data[0]["invariantState"] == "pass"
+    assert "passed" in str(data[0]["summary"]), data[0]["summary"]
+    assert RECIPE_GATE_STATE_KEY in data[0]
+
+
+async def test_a_gate_row_cannot_be_read_as_the_fix_it_is_talking_about(
+    tmp_path: Path, sender: list[dict[str, Any]]
+) -> None:
+    """The shape of the row is a claim, so it gets pinned here rather than left to chance.
+
+    ``fix_proof`` qualifies a line only with a passing outcome **and** an operation id. If the gate
+    row ever grew either, the gate would open itself: the next round would cite the loop's own
+    answer as evidence that a fix happened. Both halves are asserted, then the refusal is.
+    """
+    await _passing_round(tmp_path, sender)
+    rows = [entry.data for entry in read_entries(tmp_path) if entry.data.get("kind") == LEDGER_GATE_DATA_KIND]
+    assert len(rows) == 1, "the row under test is the one a passing round records"
+    data = rows[0]
+    assert "operationId" not in data, "a gate row must not carry the citation fix_proof looks for"
+    assert "outcome" not in data, "nor the passing outcome it looks for"
+    with pytest.raises(RecipeError) as raised:
+        fix_proof(tmp_path, env={})
+    assert raised.value.code == GATE_E_UNPROVEN
+
+
+async def test_a_ledger_that_will_not_take_the_answer_does_not_cancel_the_round(
+    tmp_path: Path,
+    sender: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same error contract as the send: the round still publishes, and the failure is named in it."""
+
+    def refuse(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("disk is full")
+
+    monkeypatch.setattr(reverify_trigger, "append_entry", refuse)
+    published = await _passing_round(tmp_path, sender)
+    assert published["spawned"] is False, "the round's own answer is not lost with the ledger"
+    assert "disk is full" in published["ledgerError"], published
 
 
 async def test_no_verdict_sends_nothing_and_claims_nothing(
@@ -497,13 +596,38 @@ async def test_compaction_survives_the_published_reverification(tmp_path: Path) 
     assert "converged=True" not in text, "the reviewer's claim is never relayed as a kernel verdict"
 
 
+def test_every_name_the_lazy_export_map_advertises_actually_resolves() -> None:
+    """A string-based loader can advertise a name that no longer exists, and only a reader trips.
+
+    Measured on 2026-10-25: ``MAX_REQUESTED_RECIPE_STEPS`` was still mapped (and still in ``__all__``)
+    after the constant was renamed to ``MAX_REQUESTED_OPERATIONS``, so
+    ``iterate_harness.iterate.MAX_REQUESTED_RECIPE_STEPS`` raised
+    ``AttributeError: module 'iterate_harness.iterate.reverify_trigger' has no attribute …`` — with a
+    fully green suite, because nothing in the suite imported it. Counting static imports cannot see
+    these names, so the map needs its own reachability check: every entry resolves in the module it
+    points at, and every name the package advertises answers.
+    """
+    import importlib
+
+    from iterate_harness import iterate as iterate_pkg
+
+    for name, target in iterate_pkg._EXPORTS.items():  # noqa: SLF001 — the map itself is the subject
+        module = importlib.import_module(f"iterate_harness.iterate.{target.lstrip('.')}")
+        assert hasattr(module, name), f"{name!r} is mapped to {target!r}, which does not define it"
+
+    missing = [name for name in iterate_pkg.__all__ if not hasattr(iterate_pkg, name)]
+    assert missing == [], f"advertised by __all__ but unresolvable: {missing}"
+
+
 def test_the_new_names_resolve_through_the_lazy_export_map() -> None:
     """``iterate/__init__.py`` re-exports lazily; an unregistered name would be invisible."""
     from iterate_harness import iterate as iterate_pkg
 
     for name in (
         "GLASSPANE_TRANSPORT_KEY",
+        "LEDGER_GATE_DATA_KIND",
         "REVERIFICATION_STATE_KEY",
+        "record_gate_without_send",
         "record_reverification_run",
         "recorded_operation_ids",
         "reverification_targets",

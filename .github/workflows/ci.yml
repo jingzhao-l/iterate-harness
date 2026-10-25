@@ -10,6 +10,12 @@ jobs:
   python-tests:
     name: Python tests (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    # A ceiling exists so the run ENDS with an uploaded log instead of a runner that "lost
+    # communication" and takes its log with it (four times in a row). 90 is not a guess at the suite's
+    # cost: `pytest -q tests` was measured at 36m27s for 3083 tests on 2026-10-25, which leaves room
+    # for a slower shared runner. remedy if this ever hits 90: the log now says where it stopped —
+    # act on that, do not raise the number.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -46,22 +52,35 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
+      - name: Collect the suite (a hang here is an import-time block, not a test)
+        # Split out on purpose: `faulthandler_timeout` only dumps while a **test** is running, so a
+        # wait during collection or in a session fixture would produce the same silence it produced
+        # before. This step either finishes — which localises the problem to the run — or it is the
+        # step that dies, which names the module that blocks at import.
+        run: uv run pytest --collect-only -q
+
       - name: Run test suite
-        # Three runs in a row died the same way on this step: `uv run pytest -q` started, produced
-        # no further output, and the job was killed at exactly 45 minutes with the annotation
-        # "The hosted runner lost communication with the server" — and because the runner died,
-        # NO LOG WAS UPLOADED (both `--log-failed` and `runs/{id}/logs` are missing these two jobs).
-        # A silent wait is therefore not just slow, it destroys the evidence of what it waited on:
-        # 40167475388 and 40168346235 (this version) and 40103418285 (v2.10.0) all say the same
-        # nothing. faulthandler is a pytest built-in — no new dependency, no changed expectation —
-        # and at the timeout it prints `Timeout (0:0N:NN)!` plus the stuck test's file, line and
-        # name and every thread's stack, then exits (verified against a deliberately sleeping test:
-        # rc=1 with `File "…/test_hang_probe.py", line 3 in test_hangs`). 300s is far above anything
-        # the suite legitimately takes, so what reaches it is a wait, not a slow test.
-        # remedy if this goes red: the dump names the test — fix the wait that test is stuck in.
-        # Do NOT raise the timeout and do NOT mark the test skip; a hang that is only visible as a
-        # 45-minute runner death is a defect nobody can find.
-        run: uv run pytest -q -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true
+        # Four runs in a row died the same way on this step: the step started, no further output
+        # reached the log, and the job was killed 45 minutes after it began with the annotation "The
+        # hosted runner lost communication with the server" — and because the runner died, NO LOG WAS
+        # UPLOADED (`--log-failed` says `log not found`; `runs/{id}/logs` contains only the three
+        # successful jobs). Measured: 40167475388, 40168346235, 40103418285 (v2.10.0), and 40171467085
+        # — the last of those already carried `faulthandler_timeout=300 + faulthandler_exit_on_timeout`
+        # and died at 07:05→07:50 exactly like the other three, still with no log.
+        # Two causes fit, and the first iteration could not tell them apart:
+        #   (a) a real wait — something in the suite blocks forever on ubuntu (it cannot be reproduced
+        #       here: the same suite finishes on macOS, no docker/podman/colima on this machine);
+        #   (b) the suite is simply slower than the runner's silence window — **measured locally
+        #       2026-10-25: `pytest -q tests` took 2187.62s (36m27s) for 3083 tests**, so a runner
+        #       that gets no output for 45 minutes is not proof of a hang at all.
+        # `-v` is the change that serves both: one line per test keeps the log channel open (so a slow
+        # suite finishes and reports, and a hung one leaves the last name printed as the place it
+        # stopped), and faulthandler adds a full-thread stack if a *single* test passes 300s.
+        # remedy if this goes red: the dump or the last `-v` line names where it waits — fix that
+        # wait, or split the suite if the answer is "this phase is legitimately long". Do NOT raise
+        # faulthandler_timeout to make red disappear, do NOT mark anything skip, and do NOT take `-v`
+        # out to shorten the log: the per-test line is the only reason this step is findable.
+        run: uv run pytest -v -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true
 
       - name: Check the vendored kernel corpus against the published package
         # tests/kernel_fixtures/ is a sha256-pinned copy of the contract published
