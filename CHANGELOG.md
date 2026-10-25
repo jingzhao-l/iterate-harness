@@ -4,7 +4,17 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
-（空。2.11.1 收口后没有未归号的条目。）
+- **④ 的闸答多了一条操作者验收：`scripts/check_gate_answer_reader.py`。** 它验的不是形状而是
+  "装好的那份读得回来"：跑一轮真通过的项目（`spawned=False` + `reason='the invariant report passed…'`），
+  要求台账里恰好一行 `kind: recipe-gate`，再用 subprocess 问发布出去的 `ih iterate gate` 把答案打出来。
+  三条退出码分得很清：0 两头都通；1 落账了却读不回来，**或那行长出了 `operationId`/`outcome`**——那会让
+  闸自己开自己（下一轮把回路自己的答复当成"修复发生过"的证据）；2 什么都没量到（PATH 上没有 `ih`，
+  或给的路径执行不了）。"问不到"与"答案不对"必须分码，否则一台没装 CLI 的机器会被读成一次失败的门禁。
+  反向变异当场验过它能红：把两处 `if _answered_by_passing_round(outcome):` 改成 `if False and …` 后，
+  它按名字报 `expected exactly one recipe-gate row for one passing round, found 0`；变异用备份 +
+  sha256 核回（`d931658b…`），不走 `git checkout`。它是操作者命令、不进 CI——与另外三条
+  `check_glasspane_*` / `check_run_plan_channel` 同一待遇，理由也相同：需要对面在场或需要装好的 CLI 的
+  检查，写成会 skip 的测试就是又一次"没人跑的绿灯"。
 
 ## [2.11.1] - 2026-10-25
 
