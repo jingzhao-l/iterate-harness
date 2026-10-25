@@ -304,6 +304,9 @@ jobs:
           REC_PY: ${{ matrix.python-version }}
           REC_BUCKET: ${{ matrix.bucket.id }}
           GITHUB_TOKEN: ${{ github.token }}
+          # Never let a git call wait on a prompt: a hung prompt is indistinguishable from a hung
+          # suite from the outside, which is the one thing this channel exists to avoid.
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           set -euo pipefail
           start=$(date +%s)
@@ -365,13 +368,17 @@ jobs:
             git config user.email "ci@invalid"
             git config user.name "suite flight recorder"
             while [ ! -e "$REC_DIR/stop" ]; do
+              cp "$SUITE_DIR/gp-poll.heartbeat" "$REC_DIR/poll-heartbeat.txt" 2>/dev/null || true
               for name in pytest-ci.log pytest-watchdog.log; do
                 test -f "$WORK_DIR/$name" && cp "$WORK_DIR/$name" "$REC_DIR/$name"
               done
+              # Every git call bounded: an unbounded `git push` on a flaky proxy parks the recorder
+              # loop forever, and then the absence of new commits proves nothing about the suite.
               git add -A >/dev/null 2>&1 || true
-              git commit -q -m "rec $(date -u +%H:%M:%S)" >/dev/null 2>&1 || true
+              timeout 30 git commit -q -m "rec $(date -u +%H:%M:%S)" >/dev/null 2>&1 || true
               if [ "$REC_PUSH" = 1 ]; then
-                git push -q --force "$REC_URL" "HEAD:refs/heads/${REC_BRANCH}" >/dev/null 2>&1 || true
+                timeout 60 git push -q --force "$REC_URL" "HEAD:refs/heads/${REC_BRANCH}" \
+                  >/dev/null 2>&1 || true
               fi
               # Ticked in 5 s slices so the stop marker takes effect promptly: a 60 s sleep would
               # hold the step for a minute after pytest had already finished, and the local tests
@@ -389,6 +396,11 @@ jobs:
           rc=""
           stopped=finished
           while true; do
+            # The heartbeat is what separates "the step is polling a hung pytest" from "the step is
+            # gone and the runner never noticed" — the two states every earlier reading left open.
+            # It is written every tick, so the recorder ships a moving file even while pytest is stuck.
+            echo "poll elapsed=$(( $(date +%s) - start ))s rc_file=$([ -s "$SUITE_DIR/gp-suite.rc" ] && echo yes || echo no)" \
+              > "$SUITE_DIR/gp-poll.heartbeat"
             if [ -s "$SUITE_DIR/gp-suite.rc" ]; then
               rc=$(cat "$SUITE_DIR/gp-suite.rc")
               break

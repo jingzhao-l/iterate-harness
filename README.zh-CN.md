@@ -447,8 +447,9 @@ CI 不再把整套当**一个进程**跑。`scripts/split_suite.py` 把 `pytest 
 `tests/test_swarm/test_worktree.py`、`tests/test_services/test_cron_scheduler.py`、
 `tests/test_ui/test_react_backend.py`、`tests/test_tools/test_remote_trigger_tool.py` 等）会让 runner
 **结束不了那一步**。步骤内的上限、脱离会话后的有界轮询、`gh run cancel`、进程级看门狗都没能结束它，
-而逐条表的 240 s 从不响 ⇒ 等待发生在最后一条用例之后。这些模块在本机（缺 docker/node）整体跳过，
-所以本机不可复现。
+而这条日志停在 `collecting ...` ⇒ 等待在**收集阶段**，不在任何一条用例里（逐条表从不响也正是这个原因：
+`pytest-timeout` 与 `faulthandler_timeout` 计的是条目，而那时还没有条目）。这些模块在本机
+（缺 docker/node）整体跳过，所以本机不可复现。
 
 ## 🚑 故障排查
 

@@ -2,9 +2,16 @@
 
 WHY THIS FILE EXISTS. Four CI runs (40199977015, 40200818814, 40206085949, 40207198620) showed the same
 thing: bucket 06's legs never ended, and **nothing that is armed per test** ever fired — neither
-`pytest-timeout` (240 s) nor `faulthandler_timeout` (300 s). That puts the wait after the last test, in
-session teardown or interpreter exit, which is a window the per-item timers are structurally blind to.
-The stdlib instrument that does cover it is `faulthandler.dump_traceback_later(..., exit=True)`.
+`pytest-timeout` (240 s) nor `faulthandler_timeout` (300 s). Both of those are per-item, so the first
+thing they are blind to is anything outside an item.
+
+The flight recorder then said where it actually is: on run 40244447182 the bucket's log stopped at
+`collecting ...` and never wrote another byte for 11+ minutes — **collection**, not teardown. An earlier
+draft of this file claimed "after the last test"; that claim is retired by the recorder's own artifact.
+The instrument has to be a timer that is not per-item *and* not SIGALRM-based, because SIGALRM is
+already owned twice over (pytest-timeout's signal method, and pytest's own per-item
+`dump_traceback_later`, which replaces a pending one). So `tests/conftest.py` arms a daemon thread that
+dumps every thread's stack and calls `os._exit(1)`.
 
 A timer that only exists in a docstring is not an instrument, so this file makes it hang on purpose and
 demands that it be named, killed, and red.
@@ -54,6 +61,35 @@ def _run_pytest(tmp_path: Path, watchdog: str, body: str) -> subprocess.Complete
     )
 
 
+def _call_lines(source: str) -> str:
+    """Lines that could be a call site: not comments, and with a statement-shaped head.
+
+    Deliberately narrower than "the file as text". A function's line range *includes* its docstring,
+    so an AST walk cannot exclude prose without more bookkeeping than this is worth — and the prose in
+    this repo's own `conftest.py` quotes `dump_traceback_later(` while explaining why the code no
+    longer uses it, which is exactly the sentence that would satisfy a naive search. So the rule is:
+    only a line that begins with the call (optionally after an assignment target) counts as code.
+    """
+    kept = []
+    for line in source.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if any(stripped.startswith(q) or stripped.endswith(q) for q in TRIPLE):
+            continue  # a docstring boundary or a one-line docstring
+        kept.append(line.split("#", 1)[0])
+    return "\n".join(kept)
+
+
+TRIPLE = ('"""', chr(39) * 3)
+
+
+def _is_call_site(line: str, name: str) -> bool:
+    """True when `line` executes `name(` rather than mentioning it."""
+    head = line.strip()
+    return bool(re.search(rf"^(?:[\w.]+\s*=\s*)?(?:[\w.]+\.)?{re.escape(name)}\(", head))
+
+
 def test_the_watchdog_dumps_names_the_stuck_line_and_exits_red(tmp_path: Path) -> None:
     """A hang in a test *body* is only a proxy for the real case; what is asserted is the mechanism.
 
@@ -69,7 +105,10 @@ def test_the_watchdog_dumps_names_the_stuck_line_and_exits_red(tmp_path: Path) -
     out = result.stdout + result.stderr
     assert result.returncode != 0, out
     assert "watchdog armed" in dump, dump
-    assert "Timeout (" in dump, dump + out
+    # The header differs by mechanism: `dump_traceback_later` prints `Timeout (…)!`, while the thread
+    # watchdog calls `dump_traceback(all_threads=True)` and prints one `Thread 0x…` block per thread.
+    # What is asserted is the part that matters — every thread is listed, and the stuck one is named.
+    assert "Thread 0x" in dump, dump + out
     # The frame has to name *the test*, not just any line of the file: `line 4` in this fixture is the
     # `def`, and `line 5` is the blocked `time.sleep` — the first draft of this assertion hard-coded 4
     # because that is the line number in the standalone experiment, and it was wrong here.
@@ -140,14 +179,23 @@ def test_the_ci_workflow_arms_the_watchdog_below_the_step_budget_above_the_test_
         f"a single test ({per_test.group(1)} s) must not outlive the process watchdog ({watchdog} s)"
     )
 
-    conftest = (REPO / "tests" / "conftest.py").read_text(encoding="utf-8")
-    assert "dump_traceback_later" in conftest and "exit=True" in conftest, (
-        "the conftest hook that reads ITERATE_TEST_WATCHDOG has to dump *and* exit: a dump alone leaves"
-        " the process hanging, which is the state the four measured runs were in"
+    conftest_text = (REPO / "tests" / "conftest.py").read_text(encoding="utf-8")
+    code_lines = _call_lines(conftest_text).splitlines()
+    assert any(_is_call_site(line, "Thread") for line in code_lines), (
+        "the watchdog must be started as a thread in conftest.py"
     )
-    assert "cancel_dump_traceback_later" not in conftest, (
-        "cancelling the watchdog would disarm it for the only window it exists for — teardown and "
-        "interpreter exit, which is where the measured hang lives"
+    assert any(_is_call_site(line, "dump_traceback") for line in code_lines) and any(
+        _is_call_site(line, "_exit") for line in code_lines
+    ), (
+        "the watchdog has to be a thread that dumps every stack and exits. This assertion used to read "
+        "the whole file as text, and after the mechanism moved the old strings were still there — in "
+        "the prose that explains why the code changed. A guard satisfied by a comment is not a guard."
+    )
+    assert not any(_is_call_site(line, "dump_traceback_later") for line in code_lines), (
+        "SIGALRM already has two owners in this process — pytest-timeout's signal method installs its "
+        "handler per item, and pytest's own faulthandler_timeout calls dump_traceback_later per item, "
+        "which replaces a pending one. Measured on run 40244447182: a collection stuck for 11 minutes "
+        "produced no dump at its 420 s deadline."
     )
 
 

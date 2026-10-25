@@ -499,9 +499,10 @@ one before it hangs a test on purpose to prove the watchdog names it.
 Known open issue, stated as measured: on `ubuntu-latest` the `bucket 06` legs (31 modules, the
 spawn-heavy ones: `tests/test_swarm/test_worktree.py`, `tests/test_services/test_cron_scheduler.py`,
 `tests/test_ui/test_react_backend.py`, `tests/test_tools/test_remote_trigger_tool.py`, …) leave the
-runner unable to complete the step. No bound *inside* the step or *inside* pytest has ended it, and
-the per-test timer never fires, so the wait is after the last test. The modules are skipped on macOS
-(no docker/node), so this does not reproduce locally.
+runner unable to complete the step — and the step's own log stops at `collecting ...`, which is where
+the evidence now points: the wait is in **collection**, not in a test. That is also why no per-test
+timer ever fired (`pytest-timeout` and `faulthandler_timeout` time items, and there is no item yet).
+The modules are skipped on macOS (no docker/node), so this does not reproduce locally.
 
 ## 🚑 Troubleshooting
 

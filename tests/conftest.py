@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 
 import pytest_asyncio
 
 from iterate_harness.tasks.manager import shutdown_task_manager
 
 # Held for the life of the process: the descriptor the watchdog writes through must not
-# be closed, and a module-level name is what keeps it referenced.
+# be closed, and a module-level name is what keeps it (and its thread) referenced.
 _WATCHDOG_HANDLE: list = []
+_WATCHDOG_THREAD: list = []
 
 
 def _watchdog_seconds() -> int | None:
@@ -78,11 +81,36 @@ def pytest_configure(config: object) -> None:
     # Opening our own file is the only way the traceback survives being killed.
     path = os.environ.get("ITERATE_TEST_WATCHDOG_FILE", "pytest-watchdog.log")
     handle = open(path, "a", encoding="utf-8")
-    handle.write(f"[conftest] watchdog armed: dump and exit after {seconds}s (teardown and exit too)\n")
+    handle.write(
+        f"[conftest] watchdog armed: dump every thread and exit after {seconds}s"
+        " (collection, teardown and interpreter exit included)\n"
+    )
     handle.flush()
-    faulthandler.dump_traceback_later(seconds, exit=True, file=handle)
-    # `handle` stays referenced for the life of the process on purpose: closing it would kill the dump.
     _WATCHDOG_HANDLE.append(handle)
+
+    # Not `dump_traceback_later`: that mechanism is a `SIGALRM` timer, and SIGALRM has other owners in
+    # this process — `pytest-timeout` with `timeout_method = "signal"` installs its own handler per
+    # item, and pytest's own `faulthandler_timeout` calls `dump_traceback_later` per item too, which
+    # replaces a pending one. A timer armed on top of that is a timer that can be silently cancelled:
+    # measured on run 40244447182, where a collection that had been stuck for 11 minutes produced no
+    # dump at its 420 s deadline. A daemon thread sleeps and then dumps every stack itself, so nothing
+    # else in the process can arm, disarm or outrank it — and unlike the per-item timers it also
+    # covers **collection**, which is where that run actually stopped ("collecting ..." was the last
+    # line the log ever wrote).
+    def _run_watchdog(duration: int, sink: object) -> None:
+        time.sleep(duration)
+        try:
+            faulthandler.dump_traceback(file=sink, all_threads=True)
+            sink.flush()  # type: ignore[union-attr]
+        except Exception:  # a dying process must not be stopped by its own report
+            pass
+        os._exit(1)
+
+    thread = threading.Thread(
+        target=_run_watchdog, args=(seconds, handle), name="iterate-test-watchdog", daemon=True
+    )
+    thread.start()
+    _WATCHDOG_THREAD.append(thread)
 
 
 @pytest_asyncio.fixture(autouse=True)

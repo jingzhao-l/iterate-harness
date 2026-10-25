@@ -240,6 +240,29 @@ All notable changes to iterate-harness should be recorded in this file.
   这颗可调的表，以及**按实测写明的已知问题**：`bucket 06` 那 31 个模块在 ubuntu 上让 runner
   结束不了那一步，本机因缺 docker/node 不可复现。
 
+- **flight recorder 一上线就改写了这一格的诊断：挂的不是用例，是"收集"。**
+  run 40244447182 的 `refs/heads/diagnostics/40244447182-3.11-06` 只有一个 commit（`rec 23:23:13`），
+  里面那份 `pytest-ci.log` 605 字节，最后一行是 `collecting ...`——之后 11 分钟一个字节都没再写。
+  **本会话此前写的"等待在最后一条用例之后（teardown／解释器退出）"这句被它自己的产物推翻**，
+  收回并改成实测：收集期。这一条同时解释了为什么六把表一把都不响：`pytest-timeout` 与
+  `faulthandler_timeout` 都是**逐条**的表，收集阶段根本没有条目可计时。
+  而我那把 `faulthandler.dump_traceback_later(420, exit=True)` 为什么也不响：faulthandler 在一个进程里
+  只有**一个** "later dump" 槽位，pytest 自己在每个条目前后 arm/cancel 的就是这个槽位——最相容的解释是
+  我的表被它悄悄取消了。**注意措辞的边界**：量到的是"420 s 到点没有任何输出"，
+  "被 pytest 取消"是与它最相容的机制，不是被直接观察到的因果。
+- 于是表搬家：`tests/conftest.py` 改用一个**守护线程**睡到点后 `dump_traceback(all_threads=True)` +
+  `os._exit(1)`，不占 SIGALRM、不与他人共享槽位，也因此第一次真正覆盖收集阶段。控制用例同步改
+  （`Thread 0x…` 线程表 + 帧里出现 `in test_sleeps_forever` + 退出码非 0；本机 5.9 s 内杀掉）。
+- 步骤里再加两件让"没有新证据"本身成为证据的东西：**轮询心跳**（每个 tick 由 bash 写
+  `$RUNNER_TEMP/gp-poll.heartbeat`，recorder 附带推送）——它是"bash 还在轮询"与"bash 早已退出而
+  runner 没报"之间唯一缺的判别；以及 recorder 的每个 git 调用都 `timeout` 包一层并置
+  `GIT_TERMINAL_PROMPT=0`，否则一次卡在代理上的 push 会让"ref 没有新 commit"什么都不能说明。
+- 判据自身也修了两处假绿，都来自同一种病：**按物理行断言**。记录器的 push 跨三行，"这一行有反斜杠"
+  永远为真，于是把 `|| true` 摘掉的变异 `N-3` 照样绿——现在把续行拼成语句再判（`_push_statements`），
+  并要求每个 push 有 `|| ` 兜底（`|| echo` 与 `|| true` 等价，删掉才红）。另一处：看门狗机制搬家之后，
+  断言找的 `dump_traceback_later` / `exit=True` 仍然在文件里——留在解释"为什么不再用它"的散文里；
+  现在用 `_call_lines` + `_is_call_site` 只认**行首是调用**的行。变异 `W-1` 把表换回 SIGALRM 计时器，
+  点名红。电池共 34 条，全部具名变红；本机整树与四条判据文件复跑见下条提交信息。
 ### Documentation
 
 - **「🔬 GlassPane integration / 与 GlassPane 的集成」四句按代码改写。** 全新眼界的复审读的是代码而不是

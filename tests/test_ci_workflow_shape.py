@@ -179,6 +179,27 @@ def _commands_of(run: str) -> str:
     )
 
 
+def _push_statements(run: str) -> list[str]:
+    """Every `git push` in a step body, with shell line continuations joined.
+
+    Judging physical lines is what let a mutation through: the recorder's push spans three lines, so
+    "this line has a backslash" was always true and dropping the `|| true` stayed green. A statement is
+    the unit the shell's error handling applies to, so it is the unit the assertion is written against.
+    """
+    backslash = chr(92)
+    statements: list[str] = []
+    buf = ""
+    for line in _commands_of(run).splitlines():
+        if line.rstrip().endswith(backslash):
+            buf += line.rstrip()[:-1] + " "
+            continue
+        statements.append(buf + line)
+        buf = ""
+    if buf:
+        statements.append(buf)
+    return [s.strip() for s in statements if "git push" in s]
+
+
 def test_the_suite_step_keeps_the_probe_that_makes_a_death_findable() -> None:
     """The parts that turn "the step never ends" into a reading instead of a lost run.
 
@@ -534,9 +555,9 @@ def test_the_wedged_step_has_a_channel_that_leaves_the_machine() -> None:
     assert 'echo "recorder started: enabled=$REC_PUSH' in run, (
         "the step says out loud whether the channel is live, so a red leg is not read as a silent recorder"
     )
-    assert all(("|| true" in line) or ("\\" in line) for line in pushes), (
-        f"a push that can fail the step is not an instrument — a redirect hides the message, it does "
-        f"not remove the failure: {pushes}"
+    assert all("|| " in s for s in _push_statements(run)), (
+        f"every push needs a fallback branch — a redirect hides the message, it does not remove the "
+        f"failure, and `|| echo …` is as protective as `|| true`: {_push_statements(run)}"
     )
 
     assert 'REC_DIR="$SUITE_DIR/recorder"' in run, (
