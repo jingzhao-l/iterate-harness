@@ -7,21 +7,37 @@ on:
   pull_request:
 
 jobs:
-  python-tests:
-    name: Python tests (${{ matrix.python-version }})
+  # WHY THE SUITE IS SPLIT AT ALL. Six runs of the single-job shape ended the same way, and the
+  # seventh (40190097615) is the one that finally measured why no instrument could help:
+  #   • `Python quality` — a job that ENDED — fetched 31,956 bytes of log from
+  #     `actions/jobs/121159060680/logs`. The test leg, in progress at the same moment, answered
+  #     **HTTP 404** at `actions/jobs/{id}/logs`. So a job's log exists only once the job has ended.
+  #   • Therefore `runs/{id}/logs` holding "only the three successful jobs" was never about buffering:
+  #     a step that never ends leaves no log, no annotation body, and no artifact — `if: always()` is
+  #     itself a step, and it is gated behind the step that never finishes. Measured: that run's
+  #     `actions/runs/40190097615/artifacts` count is **0**.
+  #   • The 5-second ceiling control proved the hard stop works on this runner (rc=124, 11:44:23 →
+  #     11:44:28), and `Run test suite` was still reported `in_progress` from ~11:44:41 until the cut
+  #     at ~12:29 — **25 minutes past its own 1,200 s ceiling plus `--kill-after=60`**. So the
+  #     instrument was fine and the thing it was watching refused to be observed.
+  # Nothing observable from outside a wedged runner can separate "a process survived SIGKILL" (this
+  # suite does spawn children with `start_new_session=True`: `tasks/manager.py`, `tools/bash_tool.py`,
+  # `hooks/executor.py`, `services/cron_scheduler.py`, `tools/remote_trigger_tool.py`) from "the
+  # runner stopped reporting and the API is showing a stale state". Both erase the evidence. So the
+  # shape changed: keep the *observations* inside units small enough to end, because ending is the
+  # precondition for a log existing at all.
+  #
+  # What each bucket buys: its own machine (so the 2-core contention that made this suite measure
+  # 36m27s locally cannot stack across buckets), a wall clock far under the ~45-minute cut, and — if
+  # one still wedges — a named file list instead of "one of 3,099". `scripts/split_suite.py` builds
+  # the plan and refuses to emit one that is not an exact partition, so the split cannot quietly turn
+  # CI green over a subset; `tests/test_ci_workflow_shape.py` pins this job's wiring.
+  suite-plan:
+    name: Plan the suite split
     runs-on: ubuntu-latest
-    # A ceiling exists so the run ENDS with an uploaded log instead of a runner that "lost
-    # communication" and takes its log with it (four times in a row). 90 is not a guess at the suite's
-    # cost: `pytest -q tests` was measured at 36m27s for 3083 tests on 2026-10-25, which leaves room
-    # for a slower shared runner. remedy if this ever hits 90: the log now says where it stopped —
-    # act on that, do not raise the number.
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version:
-          - "3.10"
-          - "3.11"
+    timeout-minutes: 30
+    outputs:
+      buckets: ${{ steps.split.outputs.buckets }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +45,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
@@ -50,18 +66,112 @@ jobs:
           npm ci
           npm run build
 
+      # One build, twelve restores: `uv sync` needs `frontend/web/dist`, and building it in every
+      # bucket job would put twelve `npm ci` runs between this suite and a green answer. Tarred so the
+      # directory layout is a fact about the archive rather than a property of an action's version.
+      - name: Ship the frontend build to the bucket jobs
+        run: |
+          set -euo pipefail
+          tar -czf web-dist.tar.gz -C frontend/web dist
+
+      - name: Publish the frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist-tarball
+          path: web-dist.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Collect the suite (a hang here is an import-time block, not a test)
+        # Split out on purpose, and measured: this step answers in 13 s on the runner and 31 s here,
+        # which is what ruled collection/import blocking out of the 45-minute death in its track.
+        run: |
+          set -euo pipefail
+          rc=0
+          timeout --kill-after=60 600 uv run pytest --collect-only -q > collect.txt 2>&1 || rc=$?
+          cat collect.txt
+          echo "collect_exit=$rc"
+          test "$rc" = 0
+
+      - name: Split it into buckets that can each end
+        id: split
+        env:
+          SUITE_BUCKETS: "6"
+        run: |
+          set -euo pipefail
+          uv run python scripts/split_suite.py --buckets "$SUITE_BUCKETS" \
+            --github-output "$GITHUB_OUTPUT" --collect-file collect.txt
+
+      - name: Check the vendored kernel corpus against the published package
+        # tests/kernel_fixtures/ is a sha256-pinned copy of the contract published
+        # inside iterate-kernel. Here the kernel is not in reach, so the pin is
+        # checked against the registry artifact — a stale pin goes red rather than
+        # letting this repo assert bytes the shared kernel no longer uses. It
+        # requires the pinned version to be published; the monorepo CI checks the
+        # same manifest against kernel/fixtures (the source of truth) first.
+        run: uv run python scripts/check_kernel_fixtures.py
+
+  python-tests:
+    name: Python tests (${{ matrix.python-version }} / bucket ${{ matrix.bucket.id }})
+    needs: suite-plan
+    runs-on: ubuntu-latest
+    # 30, not 90: the point of the split is that a bucket ENDS, because a job that ends is the
+    # precondition for its log existing at all (see the note above). A bucket is ~517 of 3,099 tests,
+    # and the whole suite is 115 s idle here, so 30 minutes is not a guess at the cost — it is room
+    # for the worst shared runner. remedy if a bucket ever hits it: the log names the files, act on
+    # those; do not raise the number and do not mark anything skip.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.11"
+        bucket: ${{ fromJson(needs.suite-plan.outputs.buckets) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Restore the frontend build from the plan job
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist-tarball
+
+      - name: Unpack it and prove the editable install's prerequisite is really there
+        # Checked rather than assumed: `uv sync` fails on a missing `frontend/web/dist` with a build
+        # backend message that names neither the artifact nor this step, so a restore that silently
+        # downloaded nothing would surface as a confusing failure twelve times.
+        run: |
+          set -euo pipefail
+          test -f web-dist.tar.gz
+          tar -xzf web-dist.tar.gz -C frontend/web
+          test -d frontend/web/dist
+          echo "restored $(find frontend/web/dist -type f | wc -l | tr -d ' ') file(s) into frontend/web/dist"
+
       - name: Install dependencies
         run: uv sync --extra dev
 
       - name: Prove the ceiling is enforced before trusting it as an instrument
-        # A five-second control, and the only one that answers the question the last two iterations
-        # left open. `timeout 5 sleep 30` either returns in ~5 s with 124 — in which case the ceiling
-        # in the next step is real, and a step that outruns it means something genuinely survived the
-        # signal — or it does not, in which case every conclusion drawn from "the hard stop fired / did
-        # not fire" is void and the investigation is about the runner, not about this suite. It cannot
-        # be checked here: this machine has no `timeout` and no `gtimeout` (measured: both absent, the
-        # same gap that made `timeout` unusable in earlier local scripts), so CI is where this one is
-        # observed — which is also why it echoes its own exit code and elapsed seconds.
+        # A five-second control, kept because it is what made the last question answerable: it proved
+        # `timeout --kill-after` does fire inside this job (rc=124 in 5 s, run 40190097615), which is
+        # what left "something survived the signal, or the runner stopped reporting" as the only pair
+        # of readings standing. It cannot be checked here: this machine has no `timeout` and no
+        # `gtimeout` (measured: both absent), so CI is where this is observed — which is also why it
+        # echoes its own exit code and elapsed seconds. If it ever goes red, every inference of the
+        # form "the ceiling fired / did not fire" is void.
         run: |
           set -euo pipefail
           start=$(date +%s)
@@ -72,101 +182,63 @@ jobs:
           test "$rc" = 124
           test "$((end-start))" -le 10
 
-      - name: Collect the suite (a hang here is an import-time block, not a test)
-        # Split out on purpose: `faulthandler_timeout` only dumps while a **test** is running, so a
-        # wait during collection or in a session fixture would produce the same silence it produced
-        # before. This step either finishes — which localises the problem to the run — or it is the
-        # step that dies, which names the module that blocks at import.
-        run: uv run pytest --collect-only -q
+      - name: Collect this bucket and check it is the bucket the plan promised
+        env:
+          BUCKET_PATHS: ${{ matrix.bucket.paths }}
+          BUCKET_COUNT: ${{ matrix.bucket.count }}
+        # $BUCKET_PATHS is unquoted on purpose: it is a space-separated list of paths produced by
+        # scripts/split_suite.py from this repo's own collection, not input from outside the job.
+        #
+        # This step is the anti-corruption layer for the split. A bucket whose path list resolved to
+        # fewer tests than planned would be a green job over a subset, and nothing else in CI could
+        # see the difference — so the count is re-measured here and checked against the plan by the
+        # same script that has to agree with pytest's own total.
+        run: |
+          set -euo pipefail
+          rc=0
+          timeout --kill-after=60 300 uv run pytest --collect-only -q $BUCKET_PATHS \
+            > bucket-collect.txt 2>&1 || rc=$?
+          cat bucket-collect.txt
+          echo "collect_exit=$rc"
+          test "$rc" = 0
+          uv run python scripts/split_suite.py --buckets 1 \
+            --expect-total "$BUCKET_COUNT" --collect-file bucket-collect.txt
 
       - name: Run test suite
-        # Five runs in a row died the same way on this step: the step started, no further output
-        # reached the log, and the job was killed **exactly 45 minutes** after it began with the
-        # annotation "The hosted runner lost communication with the server" — and because the runner
-        # died, NO LOG WAS UPLOADED (`--log-failed` says `log not found`; `runs/{id}/logs` contains
-        # only the successful jobs). Measured end-to-end, both matrix legs each time, to the second:
-        # 40103418285 (v2.10.0) 14:38→15:23/15:24, 40167475388 05:59→06:44, 40168346235 06:13→06:58,
-        # 40171467085 07:05→07:50, 40179763746 09:13:44→**09:58:45**.
-        # Two iterations of instrumentation, each of which falsified the theory before it:
-        #   - `faulthandler_timeout=300 + faulthandler_exit_on_timeout` (40171467085): died anyway at
-        #     45:00, still no log. That plugin only dumps while a **test call** is running.
-        #   - `-v` (a line per test, so the channel cannot sit silent) + a separate `--collect-only`
-        #     step (40179763746): `Collect the suite` finished in **13 seconds** — so import-time and
-        #     collection blocking is ruled out — and the job died at 45:00 anyway.
-        # And two local measurements kill the two easy explanations:
-        #   - **the suite is not slow**: idle, `pytest -q tests` = **115.59s** for 3089 collected
-        #     (6 failed / 3077 passed / 6 skipped, the known本机-environment six); under heavy
-        #     contention the same tree measured 4m20s and once 36m27s.
-        #   - **it is not memory**: `/usr/bin/time -l` on that run reports
-        #     **286,605,312 bytes maximum resident set** — 273 MB against a 7 GB runner, so the
-        #     OOM-killed-runner story is out.
-        # What that leaves is a wall, not a wait. Every theory that predicted it from our own
-        # configuration is now measured false:
-        #   - `timeout-minutes: 90` was set on this job and the run still ended at **45:01**
-        #     (40179763746, 09:13:44 → 09:58:45) — so the cut is not this workflow's setting, and
-        #     both matrix legs ended at the *same second*, which a per-test wait would not do.
-        #   - log volume does not drive it either: the `-v` run died exactly like the `-q` runs.
-        #   - it is not slowness (115s idle locally) and not memory (273 MB peak locally).
-        # So the working hypothesis is an account/plan-side ceiling around 45 minutes, plus a suite
-        # that on a 2-core runner takes longer than that (locally the same tree measured 4m20s and
-        # 36m27s under load, so >45 min on shared hardware is credible).
-        # The probe ran, and it refused to resolve the question. On run 40184095706 the step was
-        # **still reported `in_progress` 27 minutes in** — 7 minutes past its own 1200 s ceiling with
-        # `--kill-after=60` long expired — and a cancelled run of the same job still shipped a log
-        # archive containing **only the three successful jobs** (`runs/40184095706/logs` lists npm
-        # wrapper / Python quality / Frontend typecheck). Then the next instrument — moving pytest's
-        # output to a file so no orphan can hold the Actions pipe (run 40187109237) — was cancelled at
-        # 27 minutes with the step **still `in_progress`** past the same ceiling.
-        # Read carefully, because it is tempting to over-conclude: a step that is still `in_progress`
-        # past a ceiling it should have honoured is consistent with **two** states we cannot separate
-        # from here — (i) something the step waits on survived the signal (this suite does spawn
-        # children with `start_new_session=True`: `tasks/manager.py`, `tools/bash_tool.py`,
-        # `hooks/executor.py`, `services/cron_scheduler.py`, `tools/remote_trigger_tool.py`), or
-        # (ii) the runner stopped reporting and the API is showing a stale state until the 45-minute
-        # no-communication cut. Nothing observable from outside distinguishes them, and both erase the
-        # log. So the flag-level theories are exhausted: what is missing is an observation that
-        # **leaves the machine**.
-        # So the instrument below is chosen for one property: **its output leaves the machine.**
-        # `pytest-ci.log` is uploaded as an artifact from an `if: always()` step, so the partial log
-        # survives whichever way this job ends — cancellation, a ceiling, or a dead runner — and the
-        # first line of that artifact ("test session starts" … or a per-test list that stops
-        # mid-way) is the observation nobody has had yet.
-        # remedy with that artifact in hand: act on what it names. Do NOT raise the ceiling to make
-        # the red disappear, do NOT mark anything skip, and do NOT take `-v` or the collect step out:
-        # they produced every ruling recorded above (collection answers in 13 s; the suite is 115 s
-        # and 273 MB here, so neither import blocking, slowness nor memory explains a 45-minute death
-        # at the same second on both legs).
+        # `-v` and the two `faulthandler` options stay because they produced rulings, not decoration:
+        # with `-v` on the channel the 45-minute cut could not be a silence timeout, and `faulthandler`
+        # is the only thing that names a test stuck mid-call — measured against a deliberate
+        # `sleep(60)` probe, where it printed the file, line and test name and exited 1.
+        # Output goes through `tee`, so it is both a file the artifact step can ship and a live
+        # channel. (An earlier revision redirected to a file and `cat`-ed it afterwards on the theory
+        # that a detached child holding the Actions pipe was what kept the step alive; run 40187109237
+        # measured that theory false — the step still outran its ceiling with the pipe unheld.)
         env:
           PYTEST_HARD_STOP: "1200"
+          PYTHONUNBUFFERED: "1"
+          BUCKET_PATHS: ${{ matrix.bucket.paths }}
         run: |
           set -euo pipefail
           rc=0
           timeout --kill-after=60 "$PYTEST_HARD_STOP" \
             uv run pytest -v -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true \
-            > pytest-ci.log 2>&1 || rc=$?
-          cat pytest-ci.log
-          echo "pytest_exit=$rc (124 = the ceiling fired; 0 = the suite really finished)"
+            $BUCKET_PATHS \
+            2>&1 | tee pytest-ci.log || rc=$?
+          echo "pytest_exit=$rc (124 = the ceiling fired; 0 = the bucket really finished)"
           exit "$rc"
 
       - name: Upload the suite log (the only thing that survives a dead runner)
-        # `if: always()` because the value of this step is exactly the cases where the job is
-        # already lost: a ceiling, a cancellation, or a runner that stops reporting.
+        # `if: always()` because the value of this step is exactly the failure paths: a ceiling, a
+        # cancellation, a wedged bucket. Honest about its limit, which run 40190097615 measured — if
+        # the bucket job itself wedges, this step never runs and the artifact count stays 0; it ships
+        # the log for every case where pytest stopped but the runner did not.
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-ci-log-${{ matrix.python-version }}
+          name: pytest-ci-log-${{ matrix.python-version }}-${{ matrix.bucket.id }}
           path: pytest-ci.log
           if-no-files-found: warn
           retention-days: 30
-
-      - name: Check the vendored kernel corpus against the published package
-        # tests/kernel_fixtures/ is a sha256-pinned copy of the contract published
-        # inside iterate-kernel. Here the kernel is not in reach, so the pin is
-        # checked against the registry artifact — a stale pin goes red rather than
-        # letting this repo assert bytes the shared kernel no longer uses. It
-        # requires the pinned version to be published; the monorepo CI checks the
-        # same manifest against kernel/fixtures (the source of truth) first.
-        run: uv run python scripts/check_kernel_fixtures.py
 
   python-quality:
     name: Python quality
