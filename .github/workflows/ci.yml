@@ -284,6 +284,12 @@ jobs:
           # outrun is the discriminator: if this step's own poll works, the log arrives with it; if it
           # does not, the runner-side stall is the finding. Headroom is ~40x the measured cost of a
           # bucket (520 of 3,119 tests; the whole suite is 123.69 s on this machine).
+          # The third of four nested bounds: a test (240 s) < this process watchdog (420 s) < the
+          # step's own budget (600 s) < the job ceiling (20 min). The middle one is what covers the
+          # window the other two cannot see — after the last test, in session teardown or interpreter
+          # exit — and `tests/conftest.py` is where it is armed.
+          ITERATE_TEST_WATCHDOG: "420"
+          ITERATE_TEST_WATCHDOG_FILE: pytest-watchdog.log
           PYTEST_HARD_STOP: "600"
           PYTHONUNBUFFERED: "1"
           BUCKET_PATHS: ${{ matrix.bucket.paths }}
@@ -356,7 +362,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pytest-ci-log-${{ matrix.python-version }}-${{ matrix.bucket.id }}
-          path: pytest-ci.log
+          # Both logs, because the watchdog writes to a descriptor it owns rather than to the stream
+          # pytest steals: a run killed by the watchdog has no pytest output at all otherwise.
+          path: |
+            pytest-ci.log
+            pytest-watchdog.log
           if-no-files-found: warn
           retention-days: 30
 

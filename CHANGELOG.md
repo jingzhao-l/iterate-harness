@@ -190,6 +190,31 @@ All notable changes to iterate-harness should be recorded in this file.
   **这条量错反过来定了一个发布判断**：dev 依赖进 METADATA ⇒ 本笔改动**动了发布物**，
   而 CI/`.github`/`scripts`/`tests` 那些路径实测不进 wheel（`unzip -l` 数到 0 条）⇒ 前几笔不需要号，
   这一笔需要。下一次取号 **2.11.2**（patch：发布物字节变了而语义没变）。
+- **上限放对了层：第四条表（进程看门狗）才是看得境 teardown/退出那一段的那把。**
+  run 40207198620 交出第四次同读数：预算 600 s、上限 20 分钟的一次运行里，bucket 06 两条腿仍
+  `in_progress`，最后仍由 GitHub 的 job 超时在 15:52 前后切断（artifact 恒 11 件）。把四次放一起看：
+  `timeout --kill-after` 不能结束步骤、`setsid` 脱离 + 有界轮询不能结束步骤、`gh run cancel` 不能、
+  `pytest-timeout` 的 240 s 逐条表也**从没响过**——最后这条是新信息：逐条表覆盖 setup/call/teardown，
+  它不响就说明等待**不在任何一条用例里**，而在最后一条之后的那段（session teardown 或解释器退出，
+  那里可能挂着非守护线程或自己不肯死的孩子）。
+  因此加上 stdlib 里唯一看得见那段的那把表：`faulthandler.dump_traceback_later(N, exit=True)`，
+  在 `tests/conftest.py:pytest_configure` 里按 `ITERATE_TEST_WATCHDOG` 上弦（CI 设 420 s，本机不设
+  ⇒ 不弦，因为本机整套在负载下量到过 36m27s，一条 7 分钟的进程级看门狗会杀掉一次合法的慢运行）。
+  四道上限现在是嵌套的，并由判据钉住次序：**一条用例 240 s < 进程看门狗 420 s < 步骤预算 600 s
+  < job 上限 20 分钟**。
+  两次自己踩到的坑都写进判据里而不是删掉：**（一）**头两版把 dump 打到 `sys.stderr` 与
+  `sys.__stderr__`，结果整个运行**空输出**——pytest 默认 `capture=fd`，它把 fd 1/2 本身重定向进自己的
+  临时文件，而 `exit=True` 杀进程时那份捕获缓冲根本来不及落盘。修法是自己 `open()` 一个句柄
+  （`ITERATE_TEST_WATCHDOG_FILE`，CI 里是 `pytest-watchdog.log`）并把模块级变量钉住不让它被关；
+  artifact 现在同时上传两份日志。**（二）**第一版控制用例的断言写的是 `line 4`，那是独立实验里
+  `time.sleep` 的行号；在这个夹具里 4 行是 `def`、5 行才是阻塞处——改成要求帧里出现
+  `in test_sleeps_forever`，而不是记一个会从别的文件漂过来的数字。
+  控制实测（本机，`tests/test_test_watchdog.py`）：`ITERATE_TEST_WATCHDOG=4` 下一条 `sleep(120)` 的
+  用例，看门狗文件里是 `Timeout (0:00:04)!` 加上 `File "…test_watchdog_probe.py", line 5 in
+  test_sleeps_forever`，子进程 **退出码非 0**（独立量过一次：`rc=1`，看门狗杀掉是一次红，
+  不会伪绿）。同时两条拒绝分支也实测能红：变量缺失 ⇒ 不上弦（正常运行 rc=0、无 armed 字样），
+  `not-a-number`／`-5`／`0` ⇒ 具名拒绝并退出。
+  本机整树：`3120 passed, 6 skipped in 127.16s`；ruff 与 mypy 绿；判据 37 条全过。
 ### Documentation
 
 - **「🔬 GlassPane integration / 与 GlassPane 的集成」四句按代码改写。** 全新眼界的复审读的是代码而不是
