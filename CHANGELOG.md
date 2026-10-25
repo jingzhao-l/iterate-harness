@@ -19,6 +19,16 @@ All notable changes to iterate-harness should be recorded in this file.
   `rp_68049dadeff6c85c4807448b04f44462c24f069b8936e57b181a667b8f42380e`、两条通道各自
   `channel agrees`、退出 0。
 
+- **CI 的测试套件现在能在挂住时报出自己的名字。** `Run test suite` 步骤此前是
+  `uv run pytest -q`，而它连着三次以同一种死法收场：步骤起跑后再无输出，job 在第 45 分钟整
+  被 "The hosted runner lost communication with the server" 打掉——runner 一死日志就不上传，
+  `--log-failed` 与 `runs/{id}/logs` 里都没有这两条 job（run 40167475388、40168346235、
+  以及 v2.10.0 的 40103418285）。也就是说**沉默不只是慢，它把「在等什么」的证据一起毁掉**。
+  现在加 pytest 自带（零新依赖）的 `faulthandler`：5 分钟不动就打印 `Timeout` + 卡住的
+  文件名/行号/用例名 + 全线程栈，然后退出。控制实测过——对一条故意 `sleep(60)` 的用例，
+  rc=1 且报出 `File "…/test_hang_probe.py", line 3 in test_hangs`。判据写在步骤注释里：
+  红了就按栈修那条等待，**不许**抬 timeout、**不许**改成 skip。
+
 ## [2.11.0] - 2026-10-25
 
 **版本判断：minor。** 判据是加法语义那一条：本版**只新增用户可见能力、不动任何已有形状**——

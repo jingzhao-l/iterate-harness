@@ -47,7 +47,21 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run test suite
-        run: uv run pytest -q
+        # Three runs in a row died the same way on this step: `uv run pytest -q` started, produced
+        # no further output, and the job was killed at exactly 45 minutes with the annotation
+        # "The hosted runner lost communication with the server" — and because the runner died,
+        # NO LOG WAS UPLOADED (both `--log-failed` and `runs/{id}/logs` are missing these two jobs).
+        # A silent wait is therefore not just slow, it destroys the evidence of what it waited on:
+        # 40167475388 and 40168346235 (this version) and 40103418285 (v2.10.0) all say the same
+        # nothing. faulthandler is a pytest built-in — no new dependency, no changed expectation —
+        # and at the timeout it prints `Timeout (0:0N:NN)!` plus the stuck test's file, line and
+        # name and every thread's stack, then exits (verified against a deliberately sleeping test:
+        # rc=1 with `File "…/test_hang_probe.py", line 3 in test_hangs`). 300s is far above anything
+        # the suite legitimately takes, so what reaches it is a wait, not a slow test.
+        # remedy if this goes red: the dump names the test — fix the wait that test is stuck in.
+        # Do NOT raise the timeout and do NOT mark the test skip; a hang that is only visible as a
+        # 45-minute runner death is a defect nobody can find.
+        run: uv run pytest -q -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true
 
       - name: Check the vendored kernel corpus against the published package
         # tests/kernel_fixtures/ is a sha256-pinned copy of the contract published
