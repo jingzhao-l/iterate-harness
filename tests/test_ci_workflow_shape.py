@@ -451,6 +451,44 @@ def test_the_frontend_build_reaches_the_bucket_jobs_by_the_same_name_it_left_wit
     )
 
 
+def test_a_hanging_test_is_bounded_by_pytest_itself_not_by_the_step(tmp_path: Path) -> None:
+    """Three bounds, in order: a test < the step < the job. Only the first one leaves a name.
+
+    Measured across runs 40199977015, 40200818814 and 40203984602: a pytest session that never returns
+    cannot be ended by the step — not by `timeout --kill-after`, not by a detached session with a
+    bounded poll, not by `gh run cancel`; only GitHub's job timeout ended the *job*, and a job killed
+    that way uploads no artifact and leaves no log. So the bound that matters is the one pytest can act
+    on while it is still alive: `pytest-timeout` fails the test by name and the session returns.
+
+    Read from the text, not with `tomllib`: this repo's floor is 3.10, `tomllib` is 3.11+, and a
+    3.11-only import in a test file is a collection-time error on the 3.10 leg — the exact trap
+    `tests/test_py310_compat.py` exists to catch.
+    """
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    # `split("[", 1)` would stop at `testpaths = ["tests"]` and read an empty section — this guard
+    # failed that way first, which is why the note lives here.
+    ini = re.split(r"\n\[", pyproject.split("[tool.pytest.ini_options]", 1)[1], 1)[0]
+    per_test = re.search(r"(?m)^timeout\s*=\s*(\d+)", ini)
+    assert per_test is not None, "no per-test timeout in [tool.pytest.ini_options]"
+    assert re.search(r'(?m)^timeout_method\s*=\s*"signal"', ini), (
+        "the signal method is what interrupts a blocked call in the test body"
+    )
+    dev = re.split(r"\n\[", pyproject.split("[project.optional-dependencies]", 1)[1], 1)[0]
+    assert "pytest-timeout==" in dev, (
+        "pytest-timeout must be pinned in the dev extra like every other dev dependency"
+    )
+
+    step_budget = re.search(
+        r'PYTEST_HARD_STOP: "(\d+)"', (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    )
+    assert step_budget is not None, "the suite step lost its budget"
+    assert int(per_test.group(1)) < int(step_budget.group(1)), (
+        f"a test may not outlive the step that hosts it: {per_test.group(1)} s vs"
+        f" {step_budget.group(1)} s — above the step bound only the runner's own timeout fires, and"
+        " that uploads nothing"
+    )
+
+
 @pytest.mark.parametrize("name", _workflow_names())
 def test_a_workflow_file_is_readable_at_all(name: str) -> None:
     """The precondition for every assertion above: a guard that cannot read the file is not a guard."""

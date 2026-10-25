@@ -59,6 +59,13 @@ dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
+    # Per-test bound, not per-step. Measured on runs 40199977015 / 40200818814 / 40203984602: a step
+    # whose pytest session never returns cannot be ended from inside — a 1,200 s `timeout`, a detached
+    # session with a bounded poll, and `gh run cancel` all left the step `in_progress`, and only
+    # GitHub's own job timeout ended the *job* (uploading nothing). The bound therefore has to live
+    # where pytest can still act on it: a test that outlives it is reported by name and the session
+    # returns, so the step ends and the log survives.
+    "pytest-timeout==2.4.0",
     "ruff==0.16.3",
     "mypy==2.3.1",
 ]
@@ -96,6 +103,15 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# 240 s per test. Basis, measured the same day with `--durations=12`: the slowest single test here is
+# 10.90 s (`tests/test_ci_suite_step_program.py::test_the_control_step_…`), the whole 3,119-test suite
+# is 124.93 s, so 240 s is ~22x the slowest observed test and no legitimate case is near it. It is a
+# hang detector, not a performance budget — do not lower it to make a red go away, and do not mark the
+# timed-out test skip: the fix is the wait it names. Control that it works: a deliberate `sleep(300)`
+# test under `-o timeout=5` fails by name (`Failed: Timeout (>5.0s) from pytest-timeout`) and the
+# session returns in 5.04 s with its neighbour still passing.
+timeout = 240
+timeout_method = "signal"
 # The editable install (`pip install -e`) pins `iterate_harness` to ONE
 # checkout, so a worktree that does not own that path would silently import —
 # and test — the other tree's sources. Putting this tree's `src` first makes

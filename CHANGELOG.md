@@ -168,6 +168,28 @@ All notable changes to iterate-harness should be recorded in this file.
   变异电池加到 29 条：`M-Y` 把预算抬回 1200、`M-Z` 把上限抬回 90、`M-M` 干脆删掉上限，各自点名变红。
   本轮只动工作流与判据，**不涉及发布包内容**：版本号仍停在 2.11.1，独立仓与 tag 不新增。
 
+- **挂住的那一步不能从步骤里结束，所以把上限放到 pytest 自己身上（`pytest-timeout`）。**
+  三条 run 把这件事钉死了：`timeout --kill-after=60 1200`、`setsid` 完全脱离 + 有界轮询 +
+  `kill -9 -- -$pid`、以及 `gh run cancel`——**三种形状都没能让 bucket 06 那一步结束**，步骤状态一路
+  `in_progress`，最后只有 GitHub 自己的 job 上限动刀（实测 30 分钟上限 ⇒ 起于 13:58:00、 cut 于
+  14:33:00＝整 35 分钟＝上限 + 约 5 分钟宽限），而那样的切断**不上传任何 artifact、不留任何日志**
+  （`artifacts.total_count` 恒为 11＝十条绿腿 + tarball）。结论：步骤内的上限只能证明"步骤该结束了"，
+  不能让它真的结束；能命名的只有 pytest 自己还活着时使用的那把表。
+  新增 dev 依赖 `pytest-timeout==2.4.0`，`[tool.pytest.ini_options] timeout = 240 /
+  timeout_method = "signal"`。判据不是拍脑袋：本机 `--durations=12` 实测最慢单条 10.90 s
+  （`tests/test_ci_suite_step_program.py::test_the_control_step_…`）、整套 3,119 条 124.93 s ⇒ 240 s 是
+  最慢用例的约 22 倍。控制实测：对一条故意 `sleep(300)` 的用例，`-o timeout=5` 下它按名字红
+  （`Failed: Timeout (>5.0s) from pytest-timeout`）、隔壁用例照旧过、会话 5.04 s 返回。
+  三道上限现在的次序写进判据：**一条用例 < 一步 < 一个 job**
+  （`test_a_hanging_test_is_bounded_by_pytest_itself_not_by_the_step`），任何一道被抬到上一层之上就红。
+  判据本身先红过一次才修对：我第一版用 `split("[", 1)` 切 `[tool.pytest.ini_options]`，那正好切在
+  `testpaths = ["tests"]` 上，读到空段 ⇒ "没有 per-test timeout"；改成按行首 `[` 切段。同样按实测改掉的
+  还有我自己那条量法：找 `extra == "dev"` 用了双引号，而 hatchling 写的是单引号——**"wheel 里没有 dev
+  依赖"这句是我量错了**，实测 METADATA 里有 7 条 extra 门控的 `Requires-Dist`，其中一条就是
+  `pytest-timeout==2.4.0; extra == 'dev'`。
+  **这条量错反过来定了一个发布判断**：dev 依赖进 METADATA ⇒ 本笔改动**动了发布物**，
+  而 CI/`.github`/`scripts`/`tests` 那些路径实测不进 wheel（`unzip -l` 数到 0 条）⇒ 前几笔不需要号，
+  这一笔需要。下一次取号 **2.11.2**（patch：发布物字节变了而语义没变）。
 ### Documentation
 
 - **「🔬 GlassPane integration / 与 GlassPane 的集成」四句按代码改写。** 全新眼界的复审读的是代码而不是
