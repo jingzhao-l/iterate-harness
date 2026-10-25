@@ -23,56 +23,25 @@ All notable changes to iterate-harness should be recorded in this file.
   runner，OOM 说不过去）。剩下的工作是那条新加的 `timeout --kill-after=60 1200` 硬停探针该给出的
   三种读数哪一种（测试跑完了卡在退出＝日志底部会有 summary；某条用例卡住＝名单断在中途；
   仍在 45:00 整断＝上限在外面，那就得把这步按目录拆）。判据与禁忌都写在 step 注释里。
-- **那次探针跑完了，它答的是第四种：硬停没能硬停。** run 40184095706 里这一步跑到 **27 分钟仍在继续**
-  ——比它自己的 1200 s 上限晚 7 分钟，`--kill-after=60` 更是早过完了。GNU `timeout` 只能给它新建的
-  那个进程组发信号，所以**能把 step 拖住的存活者按构造在组外**：本套件有多处在
-  `start_new_session=True` 下起孩子（`tasks/manager.py`、`tools/bash_tool.py`、`hooks/executor.py`、
-  `services/cron_scheduler.py`、`tools/remote_trigger_tool.py`——设计上就是"别让 Ctrl-C 顺手杀掉它"），
-  这样一个会话领导者活过 pytest、并且**一直握着它继承去的那根 Actions stdout 管道**，于是步骤永远不
-  结束、runner 在第 45 分钟被判失联、日志跟着一起没了。**这才是"六次同一分钟、日志从来没有"的机制**，
-  而它一次都没在这台机器上现形：本机同一套 115.59s 跑完并退出。
-  修法跟着机制走：**把 pytest 与这根管道隔开**——输出写文件再 `cat`，孤儿继承的是文件 fd，
-  步骤会在 pytest 结束时结束、日志一定会上传；硬停保留（它现在管的是"跑飞了也要交卷"）。
-  产品里早就认了这个形状：`tasks/manager.py` 的 `_OUTPUT_DRAIN_SECONDS` 就是给"daemonized 孙进程
-  继承 stdout 把 task 永久卡在 running"设的上限——只有测试套件此前没有这道上限。
-
-- **④ 的闸答多了一条操作者验收：`scripts/check_gate_answer_reader.py`。** 它验的不是形状而是
-  "装好的那份读得回来"：跑一轮真通过的项目（`spawned=False` + `reason='the invariant report passed…'`），
-  要求台账里恰好一行 `kind: recipe-gate`，再用 subprocess 问发布出去的 `ih iterate gate` 把答案打出来。
-  三条退出码分得很清：0 两头都通；1 落账了却读不回来，**或那行长出了 `operationId`/`outcome`**——那会让
-  闸自己开自己（下一轮把回路自己的答复当成"修复发生过"的证据）；2 什么都没量到（PATH 上没有 `ih`，
-  或给的路径执行不了）。"问不到"与"答案不对"必须分码，否则一台没装 CLI 的机器会被读成一次失败的门禁。
-  反向变异当场验过它能红：把两处 `if _answered_by_passing_round(outcome):` 改成 `if False and …` 后，
-  它按名字报 `expected exactly one recipe-gate row for one passing round, found 0`；变异用备份 +
-  sha256 核回（`d931658b…`），不走 `git checkout`。它是操作者命令、不进 CI——与另外三条
-  `check_glasspane_*` / `check_run_plan_channel` 同一待遇，理由也相同：需要对面在场或需要装好的 CLI 的
-  检查，写成会 skip 的测试就是又一次"没人跑的绿灯"。
-
-## [2.11.1] - 2026-10-25
-
-**版本判断：patch。** 这一版没有新增任何用户可见能力，它做的是一件更早的事：2.11.0 的 README 与注册表描述宣称「判定闸的答案随那一轮的账本行落盘，两扇门都读得回来」，而落账的只有「发出去了」那一支——通过轮把答案留在瞬时 payload 里，读台账的两扇门永远读不到。这一版把那条宣称变成事实 (`record_gate_without_send`)，改掉四句与代码不符的文档，并补两把此前不存在的闸（懒加载表可达性、README 清单与 handler 一致）。既有形状一个都没动：`requires-python >= 3.10` 未变、CLI 参数与退出码集合未变、内核仍是 `iterate-kernel@0.1.10`、`.iterate/decision-log.jsonl` 的行格式未变（新增的是一行 `kind: recipe-gate` 的记录，而 `fix_proof` 不会把它当成修复证据——它缺 `fix_proof` 要的两样）。所以不是 minor（没有新能力），也不是 major（没有破坏）。
-
-- **判定闸的答案在"通过所以什么都没发"的那一轮也会落账了——在此之前两扇门永远读不到它。**
-  `_prepare` 每条分支都算 ④ 的闸（通过的、契约拒绝的、发出去的），但落账的只有"发出去"那一条，
-  而 `/iterate gate` 与 `ih iterate gate` 读的是**台账**。于是一个项目跑十轮通过的轮次，终端门
-  仍然回答 "no recipe gate recorded yet"——本轮就实测到了这句：那条通过轮在 `iterate_state` 里
-  明明发布了 `invariantState=pass` 的闸答，账本里却一个字节都没有。瞬时的 payload 不是读者，它随
-  轮次一起蒸发，而"发布了一个没有读者能达到的状态"正是本仓反复被罚的形状。
-  新增 `record_gate_without_send`：只给**做成过决定**的那一条（判定通过、因此什么都没发）落一行
-  （`recipe-gate`），契约拒绝仍一个字都不写——Requirement C 钉着那条路径（
-  `test_a_refusal_path_writes_zero_ledger_bytes`）：一个从未做成的决定不该变成一条审计记录。这行也不是
-  修复证据：它既没有 passing outcome 也没有 operationId，而 `fix_proof` 要的就是这两样，`
-  test_a_gate_row_cannot_be_read_as_the_fix_it_is_talking_about` 把形状本身钉住（给它加 operationId
-  就红）。台账写不进也不取消这一轮：错误文本进 payload 的 `ledgerError`，与发出的那条同一个契约。
-  变异电池 3 组 7 条具名红（撤掉落账 / 懒加载表塞死名 / 给这行加 operationId），逐文件 sha256 核回。
-
-- **懒加载导出表里有两个名字指向不存在的符号，套件全绿。** `iterate/__init__.py` 的 `_EXPORTS` 把
-  `MAX_REQUESTED_RECIPE_STEPS` 交给 `.reverify_trigger`，而那个常量早已改名成 `MAX_REQUESTED_OPERATIONS`；
-  `recipe_steps_not_requested` 则在本轮 ④ 的闸挪位时被删了实现，表和 `__all__` 都没跟。两者实测都是
-  `AttributeError: module 'iterate_harness.iterate.reverify_trigger' has no attribute …`——**数静态
-  import 抓不到这种名字**，字符串加载器只在有人真去取的时候才炸。新增
-  `test_every_name_the_lazy_export_map_advertises_actually_resolves`：逐条 import 目标模块并要求符号存在，
-  再要求 `__all__` 里每个名字都答得出。这两条死名由此被抓出并归位。
+- **两次探针都跑完了，谁也没把机制定下来——于是换一件能"离开机器"的仪器。**
+  run 40184095706 里这一步跑到 **27 分钟仍在继续**（比它自己 1200 s 的上限晚 7 分钟，
+  `--kill-after=60` 早过完）；紧接着 run 40187109237 把"pytest 的输出去到文件、不再占着 Actions
+  管道"这一版也试了，**27 分钟仍然报 `in_progress`**。诚实的读法是：一个过了自身上限还 `in_progress`
+  的步骤，与两种状态都相容——(i) 步骤等的某个东西活过了信号（本套件确实有五处用
+  `start_new_session=True` 起孩子），或 (ii) **runner 已经不报了，API 展示的是陈旧状态**，
+  要等 45 分钟"失联"那一刀才落地。站在外面**没有任何可观测量能把这两者分开**，
+  而两者都会把日志一起带走。所以基于 flag 的理论到此用尽：缺的不是又一个 flag，
+  是一个**跑得出去**的观测。于是加 `actions/upload-artifact` + `if: always()` 把
+  `pytest-ci.log` 传出来——它是这个 job 里唯一一条"输出比 runner 活得久"的通道；
+  拿到它的第一行（是 "test session starts" 之后就没下文，还是逐条名单断在某处）就是所有人
+  还没做过的那一次观测。判据也进了 `tests/test_ci_workflow_shape.py`：那一步必须还在、
+  必须挂 `always()`。
+- **硬停本身也要有对照。** 连着两次"上限过了还 `in_progress`"的唯一解释前提是**那把上限真的会落地**，
+  而这句话此前没人验过。于是加一步 5 秒控制：`timeout 5 sleep 30`，回显自己的退出码与秒数并断言
+  `124` 与 `<=10s`；它排在套件硬停之前，专问"这是不是一把刀"。本机量不了这件事——`timeout` 与
+  `gtimeout` 在这台机器上都不存在（正是以前本地脚本用不了 `timeout` 的同一个坑），所以只能在 runner
+  上观察，也因此它必须把自己的码与秒数打出来。`tests/test_ci_workflow_shape.py` 现在 10 条：控制必须
+  存在、必须排在被它认证的步骤之前、必须用与套件无关的命令、必须回显 exit code。
 
 - **`/iterate` 不带参数打印的是这个项目当前状态，不是子命令清单。** 上一轮我为了"抄来的清单每加一条
   子命令就漂一次"把 README 与注册表描述改成"不带参数会打印当前清单"——这句本身也是一句抄来的话，

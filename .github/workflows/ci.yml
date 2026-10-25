@@ -53,6 +53,25 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
+      - name: Prove the ceiling is enforced before trusting it as an instrument
+        # A five-second control, and the only one that answers the question the last two iterations
+        # left open. `timeout 5 sleep 30` either returns in ~5 s with 124 — in which case the ceiling
+        # in the next step is real, and a step that outruns it means something genuinely survived the
+        # signal — or it does not, in which case every conclusion drawn from "the hard stop fired / did
+        # not fire" is void and the investigation is about the runner, not about this suite. It cannot
+        # be checked here: this machine has no `timeout` and no `gtimeout` (measured: both absent, the
+        # same gap that made `timeout` unusable in earlier local scripts), so CI is where this one is
+        # observed — which is also why it echoes its own exit code and elapsed seconds.
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          rc=0
+          timeout 5 sleep 30 || rc=$?
+          end=$(date +%s)
+          echo "ceiling_control_exit=$rc elapsed=$((end-start))s (want 124 and <=10s)"
+          test "$rc" = 124
+          test "$((end-start))" -le 10
+
       - name: Collect the suite (a hang here is an import-time block, not a test)
         # Split out on purpose: `faulthandler_timeout` only dumps while a **test** is running, so a
         # wait during collection or in a session fixture would produce the same silence it produced
@@ -91,37 +110,32 @@ jobs:
         # So the working hypothesis is an account/plan-side ceiling around 45 minutes, plus a suite
         # that on a 2-core runner takes longer than that (locally the same tree measured 4m20s and
         # 36m27s under load, so >45 min on shared hardware is credible).
-        # The probe ran, and it answered with something nobody had written down: on run 40184095706
-        # this step was **still going 27 minutes in** — 7 minutes past its own 1200 s ceiling with
-        # `--kill-after=60` long expired — and a *cancelled* run of the same job still ships a log
-        # archive containing **only the three successful jobs** (measured: `runs/40184095706/logs`
-        # lists npm wrapper / Python quality / Frontend typecheck). So the Python job's output never
-        # existed anywhere, and SIGKILL of the process group did not end the step.
-        # Both facts point at file descriptors rather than at pytest:
-        #   • why nothing ended the step: something holds the **write end of the Actions log pipe**
-        #     after the group is killed. This suite spawns children with `start_new_session=True`
-        #     (`tasks/manager.py`, `tools/bash_tool.py`, `hooks/executor.py`,
-        #     `services/cron_scheduler.py`, `tools/remote_trigger_tool.py`) — deliberately, so a
-        #     Ctrl-C does not kill them — and such a session leader inherits stdout and is outside
-        #     any group `timeout` can signal. The runner waits for EOF on a pipe that a corpse holds.
-        #   • why there was never a log: pytest's own output is **block-buffered** when stdout is not
-        #     a TTY (measured locally, `-v` piped: 0 bytes at 12 s, 519 at 24 s — the first flush
-        #     costs ~68 finished tests). On a 2-core runner with 3089 tests, 45 minutes can pass
-        #     without a single flush, and a runner that has said nothing for 45 minutes is declared
-        #     gone — with its unflushed buffer, which is why the annotation is "lost communication"
-        #     and the archive is empty. That also retires my earlier "the account caps jobs at 45
-        #     minutes": the ceiling is real, but it is a *silence* ceiling, not a wall-clock one.
-        # The fix follows that mechanism instead of guessing again: **take pytest off the pipe.**
-        # Output goes to `pytest-ci.log`, which is `cat`-ed afterwards — an orphan then inherits a
-        # *file* descriptor, and the burst at the end guarantees the agent is told something, so the
-        # job ends when the suite ends and the log exists whatever it says. Keep `-v` and keep the
-        # collect step: they are what produced every ruling recorded above.
-        # remedy if it still goes red: read `pytest-ci.log` above — it is now guaranteed to arrive,
-        # and the last line names where the suite stopped. Do NOT raise the ceiling to make the red
-        # disappear, do NOT mark anything skip. Longer term the suite should also reap what it
-        # detaches: the product already bounds exactly this wait (`_OUTPUT_DRAIN_SECONDS` in
-        # `tasks/manager.py`, because a daemonised grandchild holding the inherited pipe used to
-        # strand task records as "running") while the test suite has no such bound.
+        # The probe ran, and it refused to resolve the question. On run 40184095706 the step was
+        # **still reported `in_progress` 27 minutes in** — 7 minutes past its own 1200 s ceiling with
+        # `--kill-after=60` long expired — and a cancelled run of the same job still shipped a log
+        # archive containing **only the three successful jobs** (`runs/40184095706/logs` lists npm
+        # wrapper / Python quality / Frontend typecheck). Then the next instrument — moving pytest's
+        # output to a file so no orphan can hold the Actions pipe (run 40187109237) — was cancelled at
+        # 27 minutes with the step **still `in_progress`** past the same ceiling.
+        # Read carefully, because it is tempting to over-conclude: a step that is still `in_progress`
+        # past a ceiling it should have honoured is consistent with **two** states we cannot separate
+        # from here — (i) something the step waits on survived the signal (this suite does spawn
+        # children with `start_new_session=True`: `tasks/manager.py`, `tools/bash_tool.py`,
+        # `hooks/executor.py`, `services/cron_scheduler.py`, `tools/remote_trigger_tool.py`), or
+        # (ii) the runner stopped reporting and the API is showing a stale state until the 45-minute
+        # no-communication cut. Nothing observable from outside distinguishes them, and both erase the
+        # log. So the flag-level theories are exhausted: what is missing is an observation that
+        # **leaves the machine**.
+        # So the instrument below is chosen for one property: **its output leaves the machine.**
+        # `pytest-ci.log` is uploaded as an artifact from an `if: always()` step, so the partial log
+        # survives whichever way this job ends — cancellation, a ceiling, or a dead runner — and the
+        # first line of that artifact ("test session starts" … or a per-test list that stops
+        # mid-way) is the observation nobody has had yet.
+        # remedy with that artifact in hand: act on what it names. Do NOT raise the ceiling to make
+        # the red disappear, do NOT mark anything skip, and do NOT take `-v` or the collect step out:
+        # they produced every ruling recorded above (collection answers in 13 s; the suite is 115 s
+        # and 273 MB here, so neither import blocking, slowness nor memory explains a 45-minute death
+        # at the same second on both legs).
         env:
           PYTEST_HARD_STOP: "1200"
         run: |
@@ -133,6 +147,17 @@ jobs:
           cat pytest-ci.log
           echo "pytest_exit=$rc (124 = the ceiling fired; 0 = the suite really finished)"
           exit "$rc"
+
+      - name: Upload the suite log (the only thing that survives a dead runner)
+        # `if: always()` because the value of this step is exactly the cases where the job is
+        # already lost: a ceiling, a cancellation, or a runner that stops reporting.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-ci-log-${{ matrix.python-version }}
+          path: pytest-ci.log
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Check the vendored kernel corpus against the published package
         # tests/kernel_fixtures/ is a sha256-pinned copy of the contract published

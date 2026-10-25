@@ -162,6 +162,50 @@ def test_multi_line_run_bodies_declare_pipefail() -> None:
                 )
 
 
+def test_the_suite_log_leaves_the_machine() -> None:
+    """The one instrument that survives the failure mode: an artifact uploaded with `if: always()`.
+
+    Every other observation this job can make — log lines, annotations, exit codes — lives in the
+    runner's memory, and the measured failure erases all of them (a cancelled run's log archive
+    contained only the three successful jobs). An artifact is the single channel whose output exists
+    after the runner does, so it must not be dropped quietly.
+    """
+    steps = _steps_of(_load("ci.yml")["jobs"]["python-tests"])
+    uploads = [
+        step
+        for step in steps
+        if "upload-artifact" in str(step.get("uses", ""))
+        and "pytest-ci.log" in str((step.get("with") or {}).get("path", ""))
+    ]
+    assert len(uploads) == 1, f"expected exactly one artifact upload of the suite log, found {len(uploads)}"
+    step = uploads[0]
+    assert str(step.get("if", "")).startswith("always("), (
+        "the upload must run on the failure paths — a ceiling, a cancellation, a dead runner — "
+        "because those are precisely the runs whose log nobody can otherwise read"
+    )
+
+
+def test_the_ceiling_has_its_own_control_step_before_the_suite_runs() -> None:
+    """A hard stop is only an instrument if something proves the stop works.
+
+    This machine cannot: `timeout` and `gtimeout` are both absent here, so the proof has to happen on
+    the runner — which is why the control is a 5-second step that echoes its own exit code and
+    elapsed wall time. If it ever goes red, every inference of the form "the ceiling fired / did not
+    fire, therefore the suite hangs" is void, and that is exactly the class of claim this file's
+    sibling tests were written to stop making.
+    """
+    steps = _steps_of(_load("ci.yml")["jobs"]["python-tests"])
+    names = [str(step.get("name")) for step in steps]
+    control = [i for i, name in enumerate(names) if name.startswith("Prove the ceiling is enforced")]
+    assert len(control) == 1, f"expected exactly one ceiling-control step, found {control}"
+    suite = [i for i, name in enumerate(names) if name == SUITE_STEP]
+    assert len(suite) == 1, f"expected exactly one {SUITE_STEP!r} step"
+    assert control[0] < suite[0], "the control must run before the thing it certifies"
+    body = steps[control[0]]["run"]
+    assert "timeout 5 sleep 30" in body, "the control must be independent of the suite it certifies"
+    assert "ceiling_control_exit=$rc" in body, "it has to report the code, not just pass or fail"
+
+
 def test_the_python_job_declares_a_ceiling_and_both_supported_python_legs() -> None:
     job = _load("ci.yml")["jobs"]["python-tests"]
     assert job.get("timeout-minutes") == 90, (
