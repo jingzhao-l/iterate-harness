@@ -63,8 +63,13 @@ if a[:2] == ["-o", "sess="]:
     out = subprocess.run(["/bin/ps", "-o", "pgid="] + a[2:], capture_output=True, text=True)
     print(out.stdout, end="")
     sys.exit(out.returncode)
-sys.stderr.write("ps-stub: " + " ".join(a) + "\\n")
-sys.exit(0)
+# Every other request goes to the real /bin/ps with the same arguments and the same exit status,
+    # so a format string this image does not accept fails here exactly as it failed on the runner
+    # (`--ww` was one of them) instead of being smoothed over by the stub.
+    out = subprocess.run(["/bin/ps"] + a, capture_output=True, text=True)
+    sys.stdout.write(out.stdout)
+    sys.stderr.write(out.stderr)
+    sys.exit(out.returncode)
 """
 
 

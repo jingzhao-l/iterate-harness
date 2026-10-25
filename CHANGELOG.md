@@ -131,8 +131,8 @@ All notable changes to iterate-harness should be recorded in this file.
   "是不是组长"），跑四条：正常通过；用例红（必须是 `pytest_exit=1 stopped=finished` 而不是 124）；
   预算耗尽（必须在预算 + 轮询间隔之内自己结束，日志里带着杀死前后的 `ps`，且不留残留进程）；
   **守护必须能拒绝**（把 setsid 换成不脱离会话的启动器，步骤要在启动套件之前就停下并说出原因）。
-  这几条自己又被 25 条变异电池管着：`M-T` 把 `exit "$rc"` 改成 `exit 0`、`M-U` 抽掉组杀、`M-V` 把组长
-  守护改成 `if false`，各自把点名的用例打红；25/25 RED-AS-SPECIFIED，变异用备份 + sha256 核回
+  这几条自己又被 27 条变异电池管着：`M-T` 把 `exit "$rc"` 改成 `exit 0`、`M-U` 抽掉组杀、`M-V` 把组长
+  守护改成 `if false`，、`M-W` 摘掉 `ps` 快照的 `|| true`、`M-X` 给它长回一个长选项，各自把点名的用例打红；27/27 RED-AS-SPECIFIED，变异用备份 + sha256 核回
   （`8d2b049d…` 逐字节相等）。
   电池还抓到**我刚写下的一个缺陷**：拒绝消息里用了反引号——双引号里那是命令替换，实测它执行了
   `kill`、`setsid`（无参，IndexError）与 `ps`，把一句本该解释失败原因的话跑成三条随机输出。于是新增
@@ -141,6 +141,14 @@ All notable changes to iterate-harness should be recorded in this file.
   本身是**假绿**的：它找 `"setsid "`，而这一步的注释与 echo 文案里也写着 setsid，于是把启动命令换成
   `timeout` 管道它照样绿——改成行首锚定 + `_commands_of()`（剥掉注释行再断言），M-B 这才红。
   本仓那句老话又应验一次：**注释不能替代码说话**。
+  **而这一步第一次上 runner 就把十条本来全绿的腿打红了**，原因是我自己的仪器：快照写的
+  `ps -eo … --ww` 在 runner 上答 `error: unknown gnu long option`，`set -e` 于是把十条已经打出
+  `520 passed in 9.86s` 的腿判成失败（run 40199977015）。那份 `pytest-ci-log-3.11-01` 的 artifact
+  57,213 字节里就是那句 passing summary——**测试这一轮第一次把结果留在了机器外面**，而它同时也是一面
+  镜子：红不是它的红，是我那一步的红。两处各补 `|| true`（仪器不许变成故障本身；这条现在判据与变异各有
+  一条），并记下为什么本机那五条用例当初没抓住它：**我的 `ps` 桩把一切请求吞成 exit 0**。桩改成真转发
+  （同样的 argv 交给 /bin/ps、同样的退出码还回去），本机于是当场就能拒绝 `--ww`——BSD 的 ps 回
+  `illegal option -- -`，与 runner 上那条 GNU 报错是同一种缺陷的两种说法。
   本机整树复跑 `3113 passed, 6 skipped, 1 warning in 123.69s`，ruff 与 mypy 绿。
   **仍未判死的是"bucket 06 那 31 个模块里谁在 ubuntu 上等"**：新形状的价值不在于它让那一格变绿，而在于
   下一次运行这一步一定会结束、一定会把日志和两份 `ps` 快照交出来——名单停在哪一行、快照里活着的是谁，

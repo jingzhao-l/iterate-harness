@@ -208,9 +208,18 @@ def test_the_suite_step_keeps_the_probe_that_makes_a_death_findable() -> None:
         "the budget is the step's own bound: without it the step waits for a process that may never"
         " end, and a job that never ends has no log at all"
     )
-    assert run.count("ps -eo pid,ppid,pgid,sess,stat,etime,args --ww") == 2, (
-        "one snapshot before the kill and one after: they are what names a survivor instead of"
-        " leaving 'something survived the signal' as an inference"
+    snapshots = [line.strip() for line in run.splitlines() if line.strip().startswith("ps -eo ")]
+    assert len(snapshots) == 2, (
+        f"expected one `ps` snapshot before the kill and one after, found {len(snapshots)}: they are"
+        " what names a survivor instead of leaving 'something survived the signal' as an inference"
+    )
+    assert all(line.endswith("|| true") for line in snapshots), (
+        f"an instrument must not become the failure: {snapshots}"
+    )
+    assert all("--" not in line for line in snapshots), (
+        f"measured on the runner (run 40199977015): this image's ps answers a long option like"
+        f" `--ww` with 'error: unknown gnu long option', which `set -e` then turned into ten red jobs"
+        f" that had each printed their passing summary — {snapshots}"
     )
     assert "pytest_exit=$rc stopped=$stopped" in run, (
         "the step has to distinguish 'pytest finished with a failure' from 'the budget ran out',"

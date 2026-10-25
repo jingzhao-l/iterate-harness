@@ -260,6 +260,9 @@ jobs:
         # `sleep(60)` probe, where it printed the file, line and test name and exited 1. A finished
         # list plus no faulthandler dump is itself a reading: the wait is then in a session fixture or
         # in pytest's own exit, not in any test body.
+        # An instrument must not become the failure. The two `ps` snapshots carry `|| true` because
+        # `--ww` on them was measured (run 40199977015) answering "error: unknown gnu long option" —
+        # and `set -e` turned ten buckets that had each printed `520 passed in 9.86s` into red jobs.
         # remedy when a bucket is red with `pytest_exit=124`: the log carries a `ps` snapshot taken
         # before and after the kill, which names whatever was still alive — act on that. Do NOT raise
         # the budget to make the red disappear and do NOT mark anything skip.
@@ -311,7 +314,7 @@ jobs:
               stopped=budget-exhausted
               {
                 echo "--- budget $PYTEST_HARD_STOP s exhausted; processes still alive BEFORE the kill ---"
-                ps -eo pid,ppid,pgid,sess,stat,etime,args --ww
+                ps -eo pid,ppid,pgid,sess,stat,etime,args || true
               } >> pytest-ci.log
               kill -9 -- -"$suite_pid" 2>/dev/null || true
               rc=124
@@ -321,7 +324,7 @@ jobs:
           done
           {
             echo "--- processes still alive when the step returned ($stopped) ---"
-            ps -eo pid,ppid,pgid,sess,stat,etime,args --ww
+            ps -eo pid,ppid,pgid,sess,stat,etime,args || true
           } >> pytest-ci.log
           echo "pytest_exit=$rc stopped=$stopped elapsed=$(( $(date +%s) - start ))s (0 and finished = the bucket really ended)"
           cat pytest-ci.log
