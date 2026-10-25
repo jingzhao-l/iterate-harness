@@ -82,6 +82,70 @@ All notable changes to iterate-harness should be recorded in this file.
   判据写在步骤注释里：红了按 dump 或最后一条 `-v` 找出等的是谁；不许抬 `faulthandler_timeout` 让红消失、
   不许改成 skip、更不许为了"日志太长"把 `-v` 拿掉——那行逐条输出正是这一步可寻的原因。
 
+- **那一格不是被第五个 flag 解开的，是被"把套件拆成会结束的桶"解开的。** run 40190097615 一次给出
+  三条读数，其中两条把先前的解释判死：① 5 秒上限对照 rc=124、11:44:23→11:44:28——那把
+  `timeout --kill-after=60 1200` 的刀确实会落地；② 同 run 里 `Run test suite` 从约 11:44:41 一路
+  `in_progress` 到 12:29 那一刀，越过它自己的上限 25 分钟，而 `actions/runs/40190097615/artifacts`
+  的 `total_count` = **0**——`if: always()` 的 artifact 步骤排在后面，前面那步永不结束它就轮不到；
+  ③ 同一 run 里**已完成**的 `Python quality` job 用 `actions/jobs/121159060680/logs` 取到
+  **31,956 字节**日志，进行中的测试腿 `actions/jobs/121159060770/logs` 回 **HTTP 404**。所以
+  "runner 死了没上传"这句要换成更硬的一条：**job 的日志只在 job 结束之后才存在**——一个永不结束的
+  step 意味着日志在任何地方都不存在，与 pytest 缓冲、与"管道被谁占着"都无关。
+  另收回一句写进过注释的解释："account/plan 侧的 45 分钟上限"——
+  `gh repo view jingzhao-l/iterate-harness --json visibility` 回 **PUBLIC**，公开仓没有配额上限。
+  新形状：`suite-plan` 收集全量、`scripts/split_suite.py` 按测试模块做 FFD 切 6 桶，`python-tests`
+  变成 `python-version × bucket` 的 matrix；每桶独立机器、独立 30 分钟、按桶命名的 artifact。
+  `uv sync` 需要的 `frontend/web/dist` 只 build 一次、tar 一份、十二个桶各取一次。
+  拆分自己带进来的失效形状是"绿在一个子集上"，于是三道闸写在代码里而不是散文里：脚本要求 pytest
+  自己打印的 `N tests collected` 与解析到的 node id 数相等（`SPLIT_E_COUNT_MISMATCH`）、每桶跑之前
+  重新收集并用 `--expect-total` 对上计划数（`SPLIT_E_PLAN_MISMATCH`）、拒绝桶数多于模块数（空桶＝
+  一条什么都不测的绿色 job）。
+  本机等价性实测（同一棵树）：单体 `3106 passed, 6 skipped, 1 warning in 141.89s`；六桶
+  519/519/519/519/518/518 = 3,112，合起来同样的 3,106 passed + 6 skipped，六次 `--expect-total` 全
+  rc=0。CI 侧 run 40195913940 落地：`Plan the suite split` 绿，`pytest-ci-log-3.11-01` 这份 artifact
+  57,088 字节（zip 后 9,990），逐条名单跑到 `[100%]` 并写明 `518 passed, 1 skipped in 11.75s`——
+  也就是说**这套在 runner 上也不慢**，"2 核共享 runner 上大概率超过 45 分钟"那句同样被这条直接证据
+  推翻。（当时我据此写下"六个桶 12 秒跑完"，这句在本轮末尾被自己修正：十条腿确实一两分钟，
+  另两条没有——见下面那条。）
+
+- **拆完桶，挂在哪里第一次有了名字；然后把那一步改成"一定结束"的形状。** run 40195913940 的完整读数：
+  `Plan the suite split` 绿，**12 条腿里 10 条绿**（3.10 与 3.11 各 5 条，每条一分钟左右），而
+  `Python tests (3.10 / bucket 06)` 与 `(3.11 / bucket 06)` 从 13:04:40 起卡在 `Run test suite`，
+  越过自己 1200 s + `--kill-after=60` 之后照旧 `in_progress`（13:26:50 复核），最后由 GitHub 在
+  **13:39:40** 判成 cancelled，`artifacts` 停在 **11** 件——那两条腿的日志又一次不存在。
+  于是"挂起"第一次落成一个**具名文件集**：bucket 06 那 31 个模块
+  （`tests/test_services/test_docker_backend_stop.py`、`tests/test_ui/test_react_backend.py`、
+  `tests/test_swarm/test_worktree.py`、`tests/test_services/test_cron_scheduler.py`、
+  `tests/test_voice/test_voice_mode.py` 等），本机因缺 docker/node 把这些路径全跳过 ⇒ **本机不可复现**。
+  形状因此再改一次：`Run test suite` 不再用 `timeout ... | tee`，而是 `setsid` 完全脱离、stdio 只进文件、
+  bash 用**有界轮询**而不是等管道，到点 `kill -9 -- -$pid` 打整个新会话组，并在杀死前后各写一份
+  `ps -eo pid,ppid,pgid,sess,stat,etime,args --ww`。理由正是这次量到的机制：`tee` 要等 pytest 的
+  stdout 出现 EOF，而本套件五处用 `start_new_session=True` 起的孩子逃出可被信号的那一组、握着写端——
+  步骤于是永不结束，日志与 artifact 跟着永不存在。步骤状态与退出码分开报（`pytest_exit=$rc
+  stopped=$stopped`），"跑完而红"与"预算耗尽"从此是两种读数。前置一条与套件无关的对照，先证明
+  `setsid` 与 `ps -o sess=` 在这块 image 上真的会落地、且 detached 的进程真的是自己的会话组长
+  ——不是组长的话 `kill -9 -- -PID` 打的是别人的组。
+  **这一步现在是被测过的程序**：`tests/test_ci_suite_step_program.py` 从 ci.yml 取出那段 bash 本体，
+  用 stub 换掉 `setsid`／`uv`／`ps`／`timeout`（本机既没有 `setsid` 也没有 `timeout`；BSD 的
+  `ps -o sess` 实测返回结构地址而不是 sid，所以桩必须回答那个真正要被判的性质——它以真实 pgid 作答
+  "是不是组长"），跑四条：正常通过；用例红（必须是 `pytest_exit=1 stopped=finished` 而不是 124）；
+  预算耗尽（必须在预算 + 轮询间隔之内自己结束，日志里带着杀死前后的 `ps`，且不留残留进程）；
+  **守护必须能拒绝**（把 setsid 换成不脱离会话的启动器，步骤要在启动套件之前就停下并说出原因）。
+  这几条自己又被 25 条变异电池管着：`M-T` 把 `exit "$rc"` 改成 `exit 0`、`M-U` 抽掉组杀、`M-V` 把组长
+  守护改成 `if false`，各自把点名的用例打红；25/25 RED-AS-SPECIFIED，变异用备份 + sha256 核回
+  （`8d2b049d…` 逐字节相等）。
+  电池还抓到**我刚写下的一个缺陷**：拒绝消息里用了反引号——双引号里那是命令替换，实测它执行了
+  `kill`、`setsid`（无参，IndexError）与 `ps`，把一句本该解释失败原因的话跑成三条随机输出。于是新增
+  `test_no_run_body_carries_a_backtick_that_is_not_a_comment`（`$(…)` 是步骤体里唯一允许的替换写法）和
+  `test_every_run_body_is_syntactically_valid_bash`（每段 `run:` 过一遍 `bash -n`）。而探针判据的第一版
+  本身是**假绿**的：它找 `"setsid "`，而这一步的注释与 echo 文案里也写着 setsid，于是把启动命令换成
+  `timeout` 管道它照样绿——改成行首锚定 + `_commands_of()`（剥掉注释行再断言），M-B 这才红。
+  本仓那句老话又应验一次：**注释不能替代码说话**。
+  本机整树复跑 `3113 passed, 6 skipped, 1 warning in 123.69s`，ruff 与 mypy 绿。
+  **仍未判死的是"bucket 06 那 31 个模块里谁在 ubuntu 上等"**：新形状的价值不在于它让那一格变绿，而在于
+  下一次运行这一步一定会结束、一定会把日志和两份 `ps` 快照交出来——名单停在哪一行、快照里活着的是谁，
+  就是那一格剩下的判据。禁忌照旧写在 step 注释里：不许抬预算、不许 skip、不许摘掉 `ps` 快照。
+
 ### Documentation
 
 - **「🔬 GlassPane integration / 与 GlassPane 的集成」四句按代码改写。** 全新眼界的复审读的是代码而不是

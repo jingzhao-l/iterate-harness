@@ -11,8 +11,8 @@ sibling job's log fetched 31,956 bytes while the in-progress test leg's log endp
 monolith further could not produce an observation.
 
 So the suite stops being one job. Each bucket is a job on its own machine, short enough to *end*, and
-therefore to have a log; and if a bucket still hangs, the question shrinks from "one of 3,099 tests"
-to "one of the files this bucket names".
+therefore to have a log; and if a bucket still hangs, the question shrinks from "one of every test
+in the repo" to "one of the files this bucket names".
 
 Splitting introduces its own failure mode, which is the reason this is a script with tests rather than
 a shell snippet: a split that quietly drops a group is a **green CI over a subset of the suite**. The
@@ -86,8 +86,8 @@ def group_of(node_id: str) -> str:
     """The smallest unit CI can ask pytest to run: one test module.
 
     A **file** is the unit rather than a directory, for two reasons that pull against each other and
-    this is the balance the suite is 3,099 tests deep. Collection is atomic per module, so nothing is
-    half-collected; and the granularity is what makes the buckets even — grouping by directory put
+    this is the balance for a suite three thousand tests deep. Collection is atomic per module, so
+    nothing is half-collected; and the granularity is what makes the buckets even — grouping by directory put
     `tests/test_iterate` alone at 1,355 of 3,099 tests, which is not a bucket, it is the same monolith
     with a number on it. Each file keeps whatever `conftest.py` governs its path, in every bucket it
     lands in, because pytest walks the confests of the *paths it was given*.

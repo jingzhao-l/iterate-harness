@@ -24,6 +24,8 @@ only runs *inside* CI:
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -165,39 +167,66 @@ def test_every_script_a_workflow_calls_still_exists() -> None:
     assert not missing, "workflow step(s) call script(s) that are not in the repo: " + ", ".join(missing)
 
 
-def test_the_suite_step_keeps_the_probe_that_makes_a_death_findable() -> None:
-    """The flags that produced rulings, not decoration — each asserted separately so a drop says which.
+def _commands_of(run: str) -> str:
+    """A step body without its comment lines.
 
-    The file-redirect pair (`> pytest-ci.log` … `cat pytest-ci.log`) is deliberately NOT required any
-    more: it was added on the theory that a detached child holding the Actions log pipe was what kept
-    the step alive, and run 40187109237 measured that false — the step outran its ceiling with the
-    pipe unheld. Output still lands in `pytest-ci.log` via `tee`, which keeps the artifact channel and
-    streams to the log instead of withholding it until the end.
+    A comment must not be able to satisfy an assertion about the code: the first draft of the probe
+    test looked for `setsid ` in the whole body, and the body's own prose mentions setsid three times,
+    so replacing the command with a plain `timeout` pipeline kept the test green.
+    """
+    return "\n".join(
+        line for line in run.splitlines() if not line.strip().startswith("#")
+    )
+
+
+def test_the_suite_step_keeps_the_probe_that_makes_a_death_findable() -> None:
+    """The parts that turn "the step never ends" into a reading instead of a lost run.
+
+    Each is asserted separately, with its own message: they answer different failures (an unflushed
+    channel, an import-time block, a wait that outlives every signal the step can send), and an edit
+    that quietly drops one has to say which ruling it is withdrawing.
     """
     steps = _steps_of(_load("ci.yml")["jobs"][TEST_JOB])
     suite = [step for step in steps if step.get("name") == SUITE_STEP]
     assert len(suite) == 1, f"expected exactly one {SUITE_STEP!r} step, found {len(suite)}"
-    run = suite[0].get("run", "")
+    run = _commands_of(str(suite[0].get("run", "")))
 
-    assert "timeout " in run, (
-        "the step must hard-stop pytest: a process that exits on its own uploads its log, and the "
-        "whole investigation began because a job that never ended left no log anywhere"
+    assert re.search(r"(?m)^\s*setsid sh -c ", run), (
+        "pytest must be launched detached, as the command on its own line: this suite spawns children"
+        " with `start_new_session=True`, and a step that waits on them — or on a pipe they hold —"
+        " cannot be ended from the inside. Anchored to a line start because the step's own refusal"
+        " message mentions setsid, and prose must not satisfy an assertion about the launcher."
     )
-    assert "tee pytest-ci.log" in run, (
-        "the bucket log has to exist as a file the artifact step can ship *and* reach the channel "
-        "live; `tee` is what makes those the same output"
+    assert '> pytest-ci.log 2>&1' in run and "cat pytest-ci.log" in run, (
+        "output goes to a file, never to a pipe someone else can hold open, and is printed by the step"
+        " itself so a finished bucket always has a log"
+    )
+    assert 'kill -9 -- -"$suite_pid"' in run, (
+        "the kill must target the whole session, not the process `timeout` would have signalled"
+    )
+    assert '"$PYTEST_HARD_STOP"' in run, (
+        "the budget is the step's own bound: without it the step waits for a process that may never"
+        " end, and a job that never ends has no log at all"
+    )
+    assert run.count("ps -eo pid,ppid,pgid,sess,stat,etime,args --ww") == 2, (
+        "one snapshot before the kill and one after: they are what names a survivor instead of"
+        " leaving 'something survived the signal' as an inference"
+    )
+    assert "pytest_exit=$rc stopped=$stopped" in run, (
+        "the step has to distinguish 'pytest finished with a failure' from 'the budget ran out',"
+        " because those two readings imply opposite next actions"
     )
     assert "-v" in run, (
         "one line per test is what let us rule out import-time and collection blocking; without it "
         "the log is silent by default and the death is unattributable"
     )
     assert "faulthandler_timeout" in run and "faulthandler_exit_on_timeout" in run, (
-        "faulthandler is the only thing that names a test stuck mid-call — it did not fire in the "
-        "runs measured so far, which is itself evidence, and dropping the flag loses that"
+        "faulthandler is the only thing that names a test stuck mid-call — a complete `-v` list with "
+        "no dump is itself a reading: the wait is then in a fixture or in pytest's exit, not in a test"
     )
     assert "PYTHONUNBUFFERED" in str(suite[0].get("env", "")), (
-        "python block-buffers when stdout is not a TTY; the split is the fix for the wedged runner, "
-        "but an unbuffered channel is what makes a *finished* bucket's log worth reading"
+        "python block-buffers when stdout is not a TTY (measured: the first flush costs ~68 finished "
+        "tests), and an unbuffered file is what makes 'where did the list stop' readable"
     )
 
 
@@ -227,23 +256,84 @@ def test_the_suite_log_leaves_the_machine_when_the_bucket_ends() -> None:
 
 
 def test_the_ceiling_has_its_own_control_step_before_the_suite_runs() -> None:
-    """A hard stop is only an instrument if something proves the stop works.
+    """A bound is only an instrument if something proves the bound works, on the same machine.
 
     This machine cannot: `timeout` and `gtimeout` are both absent here, so the proof has to happen on
-    the runner — which is why the control is a 5-second step that echoes its own exit code and elapsed
-    wall time. It has now done its job once: rc=124 in 5 s on run 40190097615, which is the measurement
-    that turned "the ceiling did not fire" from a guess about the flag into a fact about the process.
+    the runner. It has already done its job once: rc=124 in 5 s on run 40190097615, which is the
+    measurement that turned "the ceiling did not fire" from a guess about the flag into a fact about
+    the process — and which is why the suite step no longer relies on that flag at all.
     """
     steps = _steps_of(_load("ci.yml")["jobs"][TEST_JOB])
     names = [str(step.get("name")) for step in steps]
-    control = [i for i, name in enumerate(names) if name.startswith("Prove the ceiling is enforced")]
-    assert len(control) == 1, f"expected exactly one ceiling-control step, found {control}"
+    control = [i for i, name in enumerate(names) if name.startswith("Prove the instruments")]
+    assert len(control) == 1, f"expected exactly one instrument-control step, found {control}"
     suite = [i for i, name in enumerate(names) if name == SUITE_STEP]
     assert len(suite) == 1, f"expected exactly one {SUITE_STEP!r} step"
     assert control[0] < suite[0], "the control must run before the thing it certifies"
-    body = steps[control[0]]["run"]
+    body = _commands_of(steps[control[0]]["run"])
     assert "timeout 5 sleep 30" in body, "the control must be independent of the suite it certifies"
     assert "ceiling_control_exit=$rc" in body, "it has to report the code, not just pass or fail"
+    assert "setsid-probe.pid" in body, (
+        "the control must certify the same detached-process shape the suite step uses: a pid file "
+        "written by the session itself, not a `$!` that assumes `setsid` never forks"
+    )
+    assert 'ps -o sess= -p "$probe"' in body, (
+        "`kill -9 -- -PID` aimed at a process that is not a session leader signals the wrong group —"
+        " possibly this job's own. The control proves leadership before the suite step relies on it."
+    )
+    assert "poll_killed_after=" in body, "the bounded poll has to report its own elapsed time"
+
+
+def test_no_run_body_carries_a_backtick_that_is_not_a_comment() -> None:
+    """Inside double quotes a backtick is a command substitution, and the message runs it.
+
+    Measured on this very file: a refusal message written as
+    ``echo "Without leadership, `kill -9 -- -PID` would …"`` executed `kill`, then `setsid` with no
+    arguments, then `ps` — and printed whatever came out instead of the words that were meant to
+    explain the failure. `$(…)` is the only command substitution allowed in a step body.
+    """
+    for name in _workflow_names():
+        for job_name, job in (_load(name).get("jobs") or {}).items():
+            for step in _steps_of(job):
+                run = step.get("run", "")
+                if not isinstance(run, str):
+                    continue
+                for line in run.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("#") or "`" not in stripped:
+                        continue
+                    raise AssertionError(
+                        f"{name} / {job_name} / {step.get('name')!r}: a backtick in {stripped!r} "
+                        "is a command substitution when it is inside double quotes — use $(…)"
+                    )
+
+
+def test_every_run_body_is_syntactically_valid_bash() -> None:
+    """A YAML typo in a `run:` block is a red CI step; a *bash* typo can be a silently-green one.
+
+    The suite step is now a real program — a detached launch, a poll, a group kill — so it gets parsed
+    before it gets run. `bash -n` cannot be checked by behaviour on this machine for the same reason
+    the ceiling control can't (no `setsid` here), but syntax is portable.
+    """
+    for name in _workflow_names():
+        for job_name, job in (_load(name).get("jobs") or {}).items():
+            for step in _steps_of(job):
+                run = step.get("run", "")
+                if not isinstance(run, str) or "\n" not in run:
+                    continue
+                with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as handle:
+                    handle.write(run)
+                    path = handle.name
+                try:
+                    parsed = subprocess.run(
+                        ["bash", "-n", path], capture_output=True, text=True, check=False
+                    )
+                finally:
+                    Path(path).unlink()
+                assert parsed.returncode == 0, (
+                    f"{name} / {job_name} / {step.get('name')!r} is not valid bash:"
+                    f" {parsed.stderr.strip()}"
+                )
 
 
 def test_the_test_job_is_a_matrix_of_buckets_that_cannot_start_without_a_plan() -> None:
@@ -258,7 +348,7 @@ def test_the_test_job_is_a_matrix_of_buckets_that_cannot_start_without_a_plan() 
     assert job.get("timeout-minutes") == 30, (
         "the ceiling exists so a bucket ENDS — a job that ends is the precondition for its log "
         "existing (measured: an in-progress job's log endpoint answers HTTP 404); 30 minutes is room "
-        "for ~517 of 3,099 tests, which take 256 s together here, not a guess to be nudged up"
+        "for 519 of 3,112 tests, which take 141.89 s together here, not a guess to be nudged up"
     )
     matrix = job["strategy"]["matrix"]
     versions = matrix["python-version"]
@@ -278,8 +368,9 @@ def test_a_bucket_checks_its_own_count_against_the_plan() -> None:
     """The anti-subset gate. A bucket whose paths resolve to fewer tests is a green job over a subset.
 
     Measured equivalence, which is what makes this gate worth its runtime: the monolith on this tree
-    is `3093 passed, 6 skipped` and the six buckets are 517/517/517/516/516/516 = 3,099 with the same
-    3,093 passed and the same 6 skipped.
+    is `3106 passed, 6 skipped in 141.89s` and the six buckets are 519/519/519/519/518/518 = 3,112
+    with the same 3,106 passed and the same 6 skipped, each bucket's own re-collected count matching
+    its plan row (six rc=0).
     """
     job = _load("ci.yml")["jobs"][TEST_JOB]
     env_step = [

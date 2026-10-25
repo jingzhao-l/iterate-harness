@@ -29,7 +29,7 @@ jobs:
   #
   # What each bucket buys: its own machine (so the 2-core contention that made this suite measure
   # 36m27s locally cannot stack across buckets), a wall clock far under the ~45-minute cut, and — if
-  # one still wedges — a named file list instead of "one of 3,099". `scripts/split_suite.py` builds
+  # one still wedges — a named file list instead of "one of everything". `scripts/split_suite.py` builds
   # the plan and refuses to emit one that is not an exact partition, so the split cannot quietly turn
   # CI green over a subset; `tests/test_ci_workflow_shape.py` pins this job's wiring.
   suite-plan:
@@ -119,9 +119,9 @@ jobs:
     needs: suite-plan
     runs-on: ubuntu-latest
     # 30, not 90: the point of the split is that a bucket ENDS, because a job that ends is the
-    # precondition for its log existing at all (see the note above). A bucket is ~517 of 3,099 tests,
-    # and the whole suite is 115 s idle here, so 30 minutes is not a guess at the cost — it is room
-    # for the worst shared runner. remedy if a bucket ever hits it: the log names the files, act on
+    # precondition for its log existing at all (see the note above). Measured on this tree: 3,112
+    # tests in six buckets of 519/519/519/519/518/518, the whole suite 141.89 s here (3,106 passed,
+    # 6 skipped), so 30 minutes is not a guess at the cost — it is room for the worst shared runner. remedy if a bucket ever hits it: the log names the files, act on
     # those; do not raise the number and do not mark anything skip.
     timeout-minutes: 30
     strategy:
@@ -164,23 +164,57 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
-      - name: Prove the ceiling is enforced before trusting it as an instrument
-        # A five-second control, kept because it is what made the last question answerable: it proved
-        # `timeout --kill-after` does fire inside this job (rc=124 in 5 s, run 40190097615), which is
-        # what left "something survived the signal, or the runner stopped reporting" as the only pair
-        # of readings standing. It cannot be checked here: this machine has no `timeout` and no
-        # `gtimeout` (measured: both absent), so CI is where this is observed — which is also why it
-        # echoes its own exit code and elapsed seconds. If it ever goes red, every inference of the
-        # form "the ceiling fired / did not fire" is void.
+      - name: Prove the instruments that end the suite step actually work
+        # Two primitives, each certified before the step that relies on them.
+        #   `timeout` — the hard stop the collect steps use. Measured to fire inside this job (rc=124
+        #     in 5 s, run 40190097615) while the suite step outran the same ceiling twice, which is
+        #     what says the ceiling is not the weak link.
+        #   `setsid` + a bounded poll — the suite step's own shape. It is there because a step that
+        #     waits on a pipe, or on a child that escaped the group `timeout` can signal, cannot be
+        #     ended from the inside: bucket 06's two legs on run 40195913940 were still `in_progress`
+        #     22 minutes in, past 1,200 s plus `--kill-after=60`, on a live run that was reporting
+        #     every other job. So the control proves the poll ends a detached sleeper *and* that the
+        #     detached process really is its own session leader, because `kill -9 -- -PID` on a
+        #     process that is not one would signal the wrong group.
+        # This machine has neither `timeout` nor `gtimeout` (measured: both absent), so this is where
+        # the proof happens — which is also why every branch echoes its own code and elapsed seconds.
         run: |
           set -euo pipefail
           start=$(date +%s)
           rc=0
           timeout 5 sleep 30 || rc=$?
-          end=$(date +%s)
-          echo "ceiling_control_exit=$rc elapsed=$((end-start))s (want 124 and <=10s)"
+          echo "ceiling_control_exit=$rc elapsed=$(( $(date +%s) - start ))s (want 124 and <=10s)"
           test "$rc" = 124
-          test "$((end-start))" -le 10
+          test "$(( $(date +%s) - start ))" -le 10
+
+          command -v setsid
+          PROBE_DIR="${RUNNER_TEMP:-/tmp}"
+          export PROBE_DIR
+          rm -f "$PROBE_DIR/setsid-probe.pid"
+          setsid sh -c 'echo $$ > "$PROBE_DIR/setsid-probe.pid"; exec sleep 300' >/dev/null 2>&1 &
+          for _ in 1 2 3 4 5; do
+            test -s "$PROBE_DIR/setsid-probe.pid" && break
+            sleep 1
+          done
+          probe=$(cat "$PROBE_DIR/setsid-probe.pid")
+          leader=$(ps -o sess= -p "$probe" 2>/dev/null | tr -d ' ' || true)
+          echo "setsid_probe_pid=$probe session=${leader:-unreadable} (want them equal: the group kill needs a leader)"
+          test "${leader:-}" = "$probe"
+          poll_start=$(date +%s)
+          while kill -0 "$probe" 2>/dev/null; do
+            if [ $(( $(date +%s) - poll_start )) -ge 3 ]; then
+              kill -9 -- -"$probe" 2>/dev/null || true
+              break
+            fi
+            sleep 1
+          done
+          wait "$probe" 2>/dev/null || true
+          echo "poll_killed_after=$(( $(date +%s) - poll_start ))s (want <=15)"
+          test "$(( $(date +%s) - poll_start ))" -le 15
+          if kill -0 "$probe" 2>/dev/null; then
+            echo "the detached sleeper survived the group kill — the suite step would not end either"
+            exit 1
+          fi
 
       - name: Collect this bucket and check it is the bucket the plan promised
         env:
@@ -205,26 +239,92 @@ jobs:
             --expect-total "$BUCKET_COUNT" --collect-file bucket-collect.txt
 
       - name: Run test suite
+        # Why this is a detached process with a bounded poll and not a `timeout`-wrapped `tee`.
+        # Both of those shapes were measured ending up in the state this step must not reach: run
+        # 40195913940 left bucket 06's two legs `in_progress` 22 minutes into this step — past 1,200 s
+        # plus `--kill-after=60` — while ten other legs of the same run finished green and the runner
+        # was demonstrably still reporting. A step that cannot end takes its log, its annotation and
+        # its artifact with it (a job's log only exists once the job has ended: measured HTTP 404 for
+        # the in-progress leg against 31,956 bytes for a completed sibling on run 40190097615).
+        # The mechanism the `tee` shape offers is concrete: `timeout ... | tee log` makes `tee` wait
+        # for EOF on pytest's stdout, and this suite spawns children with `start_new_session=True`
+        # (`tasks/manager.py`, `tools/bash_tool.py`, `hooks/executor.py`, `services/cron_scheduler.py`,
+        # `tools/remote_trigger_tool.py`) that escape the process group `timeout` can signal while
+        # holding the write end of that pipe. So: stdout goes to a **file** that nothing outside the
+        # group can keep open, the step polls a bounded budget instead of waiting on a pipe, and the
+        # kill is aimed at the whole new session. `PYTHONUNBUFFERED=1` keeps the file live, which is
+        # what makes "where did the list stop" readable.
         # `-v` and the two `faulthandler` options stay because they produced rulings, not decoration:
         # with `-v` on the channel the 45-minute cut could not be a silence timeout, and `faulthandler`
         # is the only thing that names a test stuck mid-call — measured against a deliberate
-        # `sleep(60)` probe, where it printed the file, line and test name and exited 1.
-        # Output goes through `tee`, so it is both a file the artifact step can ship and a live
-        # channel. (An earlier revision redirected to a file and `cat`-ed it afterwards on the theory
-        # that a detached child holding the Actions pipe was what kept the step alive; run 40187109237
-        # measured that theory false — the step still outran its ceiling with the pipe unheld.)
+        # `sleep(60)` probe, where it printed the file, line and test name and exited 1. A finished
+        # list plus no faulthandler dump is itself a reading: the wait is then in a session fixture or
+        # in pytest's own exit, not in any test body.
+        # remedy when a bucket is red with `pytest_exit=124`: the log carries a `ps` snapshot taken
+        # before and after the kill, which names whatever was still alive — act on that. Do NOT raise
+        # the budget to make the red disappear and do NOT mark anything skip.
         env:
           PYTEST_HARD_STOP: "1200"
           PYTHONUNBUFFERED: "1"
           BUCKET_PATHS: ${{ matrix.bucket.paths }}
         run: |
           set -euo pipefail
-          rc=0
-          timeout --kill-after=60 "$PYTEST_HARD_STOP" \
-            uv run pytest -v -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true \
-            $BUCKET_PATHS \
-            2>&1 | tee pytest-ci.log || rc=$?
-          echo "pytest_exit=$rc (124 = the ceiling fired; 0 = the bucket really finished)"
+          start=$(date +%s)
+          SUITE_DIR="${RUNNER_TEMP:-/tmp}"
+          export SUITE_DIR
+          rm -f "$SUITE_DIR/gp-suite.pid" "$SUITE_DIR/gp-suite.rc"
+          # The status and the pid land in files rather than in `$!`/`wait`, because whether `setsid`
+          # execs or forks depends on the shell's job control — and a step that guessed wrong about
+          # that would report a killed run as a passing one. The inner script is single-quoted so
+          # `$$`, `$@` and `$?` are the detached shell's, not this step's; `SUITE_DIR` reaches it
+          # through the environment, and the bucket's paths arrive as its positional parameters.
+          setsid sh -c 'echo $$ > "$SUITE_DIR/gp-suite.pid"; uv run pytest -v \
+            -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true "$@"; \
+            echo $? > "$SUITE_DIR/gp-suite.rc"' gp $BUCKET_PATHS > pytest-ci.log 2>&1 &
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            test -s "$SUITE_DIR/gp-suite.pid" && break
+            sleep 1
+          done
+          suite_pid=$(cat "$SUITE_DIR/gp-suite.pid")
+          leader=$(ps -o sess= -p "$suite_pid" 2>/dev/null | tr -d ' ' || true)
+          echo "suite_pid=$suite_pid session=${leader:-unreadable} (the kill below aims at this session)"
+          # Leadership is only required while there is still something to kill: a bucket that failed
+          # fast can be gone before this check runs, and the step must then report pytest's own status
+          # rather than the guard's. No backticks in these messages — inside double quotes they are
+          # command substitutions, and this line was measured executing `setsid` with no arguments.
+          if kill -0 "$suite_pid" 2>/dev/null && [ "${leader:-}" != "$suite_pid" ]; then
+            echo 'the suite process is not its own session leader (ps reports no match for its pid).'
+            echo 'Without leadership, "kill -9 -- -PID" would signal the wrong group, so this step'
+            echo 'refuses instead of pretending it can end the run. Either setsid is not the'
+            echo 'util-linux one on this image, or "ps -o sess=" is not the keyword it answers to:'
+            echo 'fix that here, not in the suite.'
+            exit 1
+          fi
+          rc=""
+          stopped=finished
+          while true; do
+            if [ -s "$SUITE_DIR/gp-suite.rc" ]; then
+              rc=$(cat "$SUITE_DIR/gp-suite.rc")
+              break
+            fi
+            if [ $(( $(date +%s) - start )) -ge "$PYTEST_HARD_STOP" ]; then
+              stopped=budget-exhausted
+              {
+                echo "--- budget $PYTEST_HARD_STOP s exhausted; processes still alive BEFORE the kill ---"
+                ps -eo pid,ppid,pgid,sess,stat,etime,args --ww
+              } >> pytest-ci.log
+              kill -9 -- -"$suite_pid" 2>/dev/null || true
+              rc=124
+              break
+            fi
+            sleep 5
+          done
+          {
+            echo "--- processes still alive when the step returned ($stopped) ---"
+            ps -eo pid,ppid,pgid,sess,stat,etime,args --ww
+          } >> pytest-ci.log
+          echo "pytest_exit=$rc stopped=$stopped elapsed=$(( $(date +%s) - start ))s (0 and finished = the bucket really ended)"
+          cat pytest-ci.log
           exit "$rc"
 
       - name: Upload the suite log (the only thing that survives a dead runner)
