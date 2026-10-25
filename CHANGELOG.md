@@ -4,7 +4,20 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
-（空。2.11.0 收口后没有未归号的条目。）
+- **跨项目验收 `scripts/check_run_plan_channel.py` 修好了一件它此前一直在隐瞒的事：默认调用
+  从来没有测量过任何东西。** 两个默认值各多了一段目录——
+  `REPO.parents[1] / "iterate-skill" / "config" / "iterate.config.yaml"` 实测解析成
+  `/Volumes/Eng-Dev/iterate-skill/iterate-skill/config/iterate.config.yaml`，
+  `…/iterate-skill/GlassPane/harness/glasspane-harness` 同理，两者的 `exists()` 都是 `False`——
+  所以不带 `--config/--harness` 的默认运行在写出计划之前就 `return 2`。退出 2 的意思是
+  "没有测量发生"，不是"测量通过"，而它被当成后者引用过。现在按仓库真实布局逐候选发现路径，
+  发现不到就具名拒绝并退出 2。
+  同时补上本版才交付的第二条通道：`.iterate/run-plan.json` 项目文件通道（`readRunPlan({}, dir)`
+  而不是只喂 `GLASSPANE_RUN_PLAN`），并断言回包的 `plan.source` 等于所测的那条通道
+  （`env` / `project`）——否则两条通道可以实际读同一份环境变量，却都被记成"通过"。
+  实测读数：9 个维度、digest
+  `rp_68049dadeff6c85c4807448b04f44462c24f069b8936e57b181a667b8f42380e`、两条通道各自
+  `channel agrees`、退出 0。
 
 ## [2.11.0] - 2026-10-25
 
