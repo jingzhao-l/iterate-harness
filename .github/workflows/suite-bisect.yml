@@ -1,0 +1,243 @@
+name: Suite bisect (diagnostic)
+
+# WHY THIS FILE EXISTS, AND WHY IT IS NOT A GATE.
+#
+# `Python tests (x / bucket 06)` has hung in every run since the split landed. What the last completed
+# run measures, from outside the machine, so that none of my own instruments had to survive it:
+#
+#   - the plan job collected those paths in seconds (`Collect this bucket and check it is the bucket the
+#     plan promised` completed success, 23:23:04 -> 23:23:12), so the hang is NOT collection;
+#   - a green sibling's `Run test suite` step is 23 s (23:23:15 -> 23:23:38) for 520 tests, so the
+#     bucket is not "slow as one process" either;
+#   - in the cancelled leg, step 10 stays `in_progress` with no completion and steps 11-22 stay
+#     `pending` — the runner's own bookkeeping stopped about 7 s into the step, and the job ended
+#     25 minutes later by GitHub's server-side timeout (started 23:22:45 -> completed 23:47:46 for a
+#     20-minute ceiling).
+#
+# The question that has a FIX at the end of it is not "why did the VM stop talking" — it is "which of
+# these modules makes it stop, and what does one of them cost when it runs alone". So: ONE module per
+# leg, `fail-fast: false`, a 12-minute ceiling per leg, and a log artifact for every leg that ends.
+# Both readings are actionable, and neither of them is a green mark:
+#
+#   every leg ends  => nothing is individually fatal, so the failure is an aggregate of running that
+#                      set in one process, and the fix is the partition — which is what the split exists
+#                      to do, and `scripts/split_suite.py` is where a rule about it belongs;
+#   one leg dies    => the module is named by its own leg's job title, and the fix is in that test.
+#
+# The module set is NOT hardcoded. `prepare` re-runs the same collect + `split_suite.py --buckets 6`
+# that `ci.yml`'s plan job runs and takes the suspect bucket's paths out of that plan, so this line
+# bisects what CI actually grouped today rather than a snapshot someone copies by hand.
+#
+# Dispatch-only. Nothing on push/PR depends on it, no gate reads its result, and it cannot make any
+# other job greener.
+
+on:
+  workflow_dispatch:
+    inputs:
+      python_version:
+        description: Which interpreter to bisect with (3.10 or 3.11)
+        required: false
+        default: "3.11"
+      suspect_bucket:
+        description: Which bucket id from the plan to take apart, one module per leg
+        required: false
+        default: "06"
+
+jobs:
+  probe-the-image:
+    name: What the runner image gives a leg
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Every line here is a fact about the image a bucket runs on, not an assertion: which of docker,
+      # node and ripgrep exist decides which of bucket 06's modules actually execute instead of skipping,
+      # and the disk figure is what an aggregate-cost finding would have to be read against.
+      - name: Record the machine before any test runs on it
+        run: |
+          set -uo pipefail
+          echo "--- disk ---"
+          df -h
+          echo "--- memory ---"
+          free -m
+          echo "--- cpu ---"
+          nproc
+          echo "--- tooling present? ---"
+          for tool in docker node npm rg git uv python3; do
+            if command -v "$tool" >/dev/null 2>&1; then
+              echo "$tool=$(command -v "$tool")"
+            else
+              echo "$tool=ABSENT"
+            fi
+          done
+          echo "--- images already in the docker cache ---"
+          docker images 2>&1 | head -20 || true
+
+  prepare:
+    name: Plan, build the frontend, and name the modules to bisect
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      modules: ${{ steps.solo.outputs.modules }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/web/package-lock.json
+
+      - name: Build web frontend (editable install requires frontend/web/dist)
+        working-directory: frontend/web
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      - name: Tar it so a leg restores one file instead of running npm ci
+        run: |
+          set -euo pipefail
+          tar -czf web-dist.tar.gz -C frontend/web dist
+          test -s web-dist.tar.gz
+
+      - name: Upload the frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist-tarball
+          path: web-dist.tar.gz
+          retention-days: 1
+
+      - name: Collect the suite exactly the way ci.yml's plan job does
+        run: |
+          set -euo pipefail
+          rc=0
+          timeout --kill-after=60 600 uv run pytest --collect-only -q > collect.txt 2>&1 || rc=$?
+          echo "collect_exit=$rc"
+          test "$rc" = 0
+
+      - name: Split it into the same six buckets
+        id: split
+        env:
+          SUITE_BUCKETS: "6"
+        run: |
+          set -euo pipefail
+          uv run python scripts/split_suite.py --buckets "$SUITE_BUCKETS" \
+            --github-output "$GITHUB_OUTPUT" --collect-file collect.txt
+
+      - name: Take the suspect bucket apart into one module per leg
+        id: solo
+        env:
+          BUCKETS_JSON: ${{ steps.split.outputs.buckets }}
+          SUSPECT: ${{ inputs.suspect_bucket }}
+        run: |
+          set -euo pipefail
+          python3 > "$GITHUB_OUTPUT" <<'PY'
+          import json, os
+          buckets = json.loads(os.environ["BUCKETS_JSON"])
+          wanted = os.environ["SUSPECT"].strip()
+          rows = [b for b in buckets if str(b["id"]) == wanted]
+          if len(rows) != 1:
+              raise SystemExit(f"{len(rows)} bucket rows match id {wanted!r}; want exactly one")
+          paths = rows[0]["paths"].split()
+          print(f"modules={json.dumps(paths)}")
+          print(f"[bisect] bucket {wanted}: {rows[0]['count']} tests across {len(paths)} modules")
+          for p in paths:
+              print(f"[bisect]   {p}")
+          PY
+
+  one-module-per-leg:
+    name: solo ${{ matrix.module }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJson(needs.prepare.outputs.modules) }}
+    steps:
+      # The artifact name cannot carry the path's slashes, and it has to exist before the run that may
+      # die does, so the name is derived in its own step rather than interpolated into `with:`.
+      - name: Name this leg
+        id: leg
+        env:
+          MODULE_PATH: ${{ matrix.module }}
+        run: |
+          set -uo pipefail
+          echo "leg=${MODULE_PATH//\//_}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Restore the frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist-tarball
+
+      - name: Unpack it and prove the editable install's prerequisite is really there
+        run: |
+          set -euo pipefail
+          test -f web-dist.tar.gz
+          tar -xzf web-dist.tar.gz -C frontend/web
+          test -d frontend/web/dist
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run this one module alone
+        env:
+          MODULE_PATH: ${{ matrix.module }}
+        # No `set -e` on purpose: the readings below are the reason this leg exists, and a nonzero pytest
+        # must not skip them. `timeout --kill-after` bounds the run; a leg that never reaches this line
+        # is the leg the whole workflow is looking for, and its absence is the answer.
+        # `free`/`df`/`ps` are read AFTER the run because an aggregate cost (memory, disk, surviving
+        # children) is the one hypothesis a per-module leg can settle that a bucket of 32 cannot.
+        run: |
+          set -uo pipefail
+          start=$(date +%s)
+          rc=0
+          timeout --kill-after=30 600 uv run pytest -v \
+            -o faulthandler_timeout=120 -o faulthandler_exit_on_timeout=true \
+            "$MODULE_PATH" > module.log 2>&1 || rc=$?
+          end=$(date +%s)
+          {
+            echo "--- module=$MODULE_PATH pytest_rc=$rc elapsed=$((end - start))s ---"
+            echo "--- disk after the run ---"
+            df -h / "$RUNNER_TEMP" 2>&1 || true
+            echo "--- memory after the run ---"
+            free -m
+            echo "--- processes still alive, largest first ---"
+            ps -eo pid,ppid,pgid,stat,etime,rss,args --sort=-rss 2>&1 | head -25 || true
+          } >> module.log 2>&1
+          tail -60 module.log
+          exit "$rc"
+
+      - name: Upload this leg's log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bisect-${{ steps.leg.outputs.leg }}
+          path: module.log
+          if-no-files-found: warn
+          retention-days: 30

@@ -499,9 +499,13 @@ one before it hangs a test on purpose to prove the watchdog names it.
 Known open issue, stated as measured: on `ubuntu-latest` the `bucket 06` legs (31 modules, the
 spawn-heavy ones: `tests/test_swarm/test_worktree.py`, `tests/test_services/test_cron_scheduler.py`,
 `tests/test_ui/test_react_backend.py`, `tests/test_tools/test_remote_trigger_tool.py`, …) leave the
-runner unable to complete the step — and the step's own log stops at `collecting ...`, which is where
-the evidence now points: the wait is in **collection**, not in a test. That is also why no per-test
-timer ever fired (`pytest-timeout` and `faulthandler_timeout` time items, and there is no item yet).
+runner unable to complete the step. The last line its log ever *flushed* is `collecting ...` — read
+that precisely: pytest's live progress writes are carriage-return updates that sit in a text buffer
+until 8 KB or a newline forces them out, so this bounds where the visible output stopped, not where the
+process is. What it does rule in is **collection**, since a per-item timer (`pytest-timeout` 240 s,
+`faulthandler_timeout` 300 s) has nothing to time before the first item exists — which is why neither
+ever fired. The step's own thread watchdog dumps every stack to a descriptor it owns, and that dump
+says which of the two it is.
 The modules are skipped on macOS (no docker/node), so this does not reproduce locally.
 
 ## 🚑 Troubleshooting

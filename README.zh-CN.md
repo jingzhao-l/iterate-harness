@@ -447,8 +447,11 @@ CI 不再把整套当**一个进程**跑。`scripts/split_suite.py` 把 `pytest 
 `tests/test_swarm/test_worktree.py`、`tests/test_services/test_cron_scheduler.py`、
 `tests/test_ui/test_react_backend.py`、`tests/test_tools/test_remote_trigger_tool.py` 等）会让 runner
 **结束不了那一步**。步骤内的上限、脱离会话后的有界轮询、`gh run cancel`、进程级看门狗都没能结束它，
-而这条日志停在 `collecting ...` ⇒ 等待在**收集阶段**，不在任何一条用例里（逐条表从不响也正是这个原因：
-`pytest-timeout` 与 `faulthandler_timeout` 计的是条目，而那时还没有条目）。这些模块在本机
+而它最后**刷出**的一行是 `collecting ...`——这句要按字面读：pytest 的进度行是以 `\r` 覆写的文本缓冲，
+没满 8 KB 或不换行就不会落盘，所以它界定的是"可见输出停在哪"，不是"进程在哪"。它能确认的是**收集阶段**
+这个范围：逐条表（`pytest-timeout` 240 s、`faulthandler_timeout` 300 s）在第一条条目存在之前没有东西可计时，
+所以它们从不响是同一件事。步骤自己那把守护线程表会把每个线程的栈写进它自己持有的描述符里，
+那一份 dump 才说得出是哪一种。这些模块在本机
 （缺 docker/node）整体跳过，所以本机不可复现。
 
 ## 🚑 故障排查
