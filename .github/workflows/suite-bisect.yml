@@ -154,7 +154,7 @@ jobs:
           SUSPECT: ${{ inputs.suspect_bucket }}
         run: |
           set -euo pipefail
-          python3 > "$GITHUB_OUTPUT" <<'PY'
+          python3 - <<'PY'
           import json, os
           buckets = json.loads(os.environ["BUCKETS_JSON"])
           wanted = os.environ["SUSPECT"].strip()
@@ -162,7 +162,14 @@ jobs:
           if len(rows) != 1:
               raise SystemExit(f"{len(rows)} bucket rows match id {wanted!r}; want exactly one")
           paths = rows[0]["paths"].split()
-          print(f"modules={json.dumps(paths)}")
+          if not paths:
+              raise SystemExit(f"bucket {wanted} has no paths; a matrix of zero legs is a green run that tests nothing")
+          # Only the `key=value` line may enter $GITHUB_OUTPUT. Run 40249521406 measured the alternative:
+          # redirecting the step's whole stdout into the output file made the runner reject the job with
+          # `Invalid format '[bisect] bucket 06: 521 tests across 32 modules'`, because the human-readable
+          # lines are not output syntax. They belong on the log; the output gets one line.
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"modules={json.dumps(paths)}\n")
           print(f"[bisect] bucket {wanted}: {rows[0]['count']} tests across {len(paths)} modules")
           for p in paths:
               print(f"[bisect]   {p}")
