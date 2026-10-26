@@ -3,6 +3,44 @@
 All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
+- **`bucket 06` 那条挂了两天的腿，名字量出来了，而且名字后面跟着一条真缺陷：一段测试代码让 SIGKILL
+  走进了 `kill(-1, SIGKILL)` 那条广播语义。**
+  判据不是再加仪器，而是把可疑那一桶拆成"一个模块一条腿"（新的 `suite-bisect.yml`：只能手动派发、
+  不进任何判定、矩阵由 CI 自己的 plan 现算）。run 40249882415 的读数是 **32 条腿里 31 条绿，唯一不
+  结束的是 `tests/test_services/test_cron_scheduler.py`**，而它也是唯一没留下日志 artifact 的那条。
+  同一批读数顺手推翻我自己写在 README 里的两句：`Collect this bucket and check it is the bucket the
+  plan promised` 在那些路径上 8 s 完成（23:23:04→23:23:12）⇒ 挂的**不是收集期**；绿兄弟腿的
+  `Run test suite` 只花 23 s（23:23:15→23:23:38，520 条）⇒ 也不是"这些用例同进程本来就慢"。
+  机制在本机量到两处，都在 `src/iterate_harness/services/cron_scheduler.py`：
+  ① `_kill_process_group()` 无条件 `os.killpg(os.getpgid(process.pid), SIGKILL)`，而
+  `TestExecuteJob::test_timeout_job` 递给它的是一个 AsyncMock——本机实测 `AsyncMock().pid.__index__()`
+  **返回 1**，Linux 上 `killpg(1, …)` 就是 `kill(-1, …)`，而 kill(2) 对 `pid == -1` 写明的语义是"把信号
+  发给调用者有权发给的每一个进程"：同一 uid 下的 `Runner.Worker`、步骤的 shell、actions 的 node 全在射程
+  内，并且只要打中一个系统调用就返回 0，看起来像成功。这一步的 `except (ProcessLookupError,
+  PermissionError, OSError)` 因此接不到任何东西。本机这一半是量下来的另一副样子：`getpgid(1)` 回 1
+  （拿得到），而 `killpg(1, 0)` 回 EPERM——旧代码正好把 EPERM 吞掉退回 `process.kill()`，所以同一行在
+  macOS 上从未炸过，这就是它只在 ubuntu 上发生的理由。Linux 那一半依据的是 kill(2) 的成文语义，本机
+  没法实测；因果是否闭合，判决交给 CI 复跑，这一段只写"已修的代码路径＋量到的两半"。
+  ② `read_pid()`/`stop_scheduler()` 只问"这个号活着吗"（`os.kill(pid, 0)`），从不问"这个号是不是本
+  daemon"。本机对照实验（`/var/tmp/prove_pid_claim.py`，一个从没见过这个 daemon 的活 `sleep` 子进程被
+  写进 pid 文件）：**修前** `stop_scheduler()` 在 13.5 s 里先 SIGTERM 再 SIGKILL 把它打死（退出码
+  `-15`），事后还报"survived SIGKILL"并留着 pid 文件——僵尸也答 signal 0；同一个函数对**真 daemon**
+  也返回 False，而那 daemon 其实已退 0。**修后** 陌生进程毫发无损（0.0 s 拒绝并释放凭证），真 daemon
+  0.2 s 停住并如实返回 True。pid 会被回收再发给别人，而文件里过去只有一个号。
+  修：pid 文件从"一个号"改成"号 + 写它的进程当时的 command line"的凭证；`read_pid()` 先验活（僵尸算
+  已死）再验连续；比对取 argv 尾——量到解释器会在 exec 之后重写 argv[0]（同一个子进程先答
+  `.venv/bin/python -c …`、随后答 framework 的真实路径），整行比对会拒绝一个从未变过的好凭证，第一版
+  就是这么把 7 条原本绿的用例打红的；读不到命令行时（Windows）如实接受并在日志里说明，不假装验过；
+  旧版裸号文件由 `_DAEMON_ENTRY_CODE` 兜底，升级路上旧 daemon 仍停得住。`killpg` 从此只打
+  `getpgid(pid)==pid` 的、也就是自己用 `start_new_session` 造出来的组，pid 不是可用整数的一律不打。
+  核验：4 项反向变异各自点名变红（M1 抽掉身份核验→3 条具名红；M2 僵尸算活着→那条红；M3 回到没有归属
+  proof 的 `killpg`→那条红；M4 `write_pid` 退回裸号→新加的"真 daemon 必须写下指纹"那条红），变异用
+  备份＋sha256 核回（`b54a2daa…`，跑完与基线逐字节相等）；本模块 40 passed；全量本机
+  3126 passed / 6 skipped / 6 failed，那 6 条在**未改动的树上同名同序地红、单跑也红**（已知环境组，
+  不是本批造成的）。同一个 stub 在修后再也打不出 `killpg`：实测 `after the fix, killpg calls: none`。
+  这一格唯一还没证的事是 CI 自己：修前它是"31 绿 1 永不结束"，修后应 12 条全绿。在那之前本版不写
+  "CI 绿"，2.11.2 也不取。
+
 
 - **改 CI 注释时我自己把 `ci.yml` 的一个 step 写出了两个 `run:` 键，而 PyYAML 不报错——它取最后一
   个。** 于是那一步实际跑的是旧的单行命令，上面新加的 `timeout` 硬停块只是**看起来**像交付了的

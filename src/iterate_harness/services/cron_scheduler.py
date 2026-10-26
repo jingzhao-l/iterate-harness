@@ -60,6 +60,18 @@ _STOP_KILL_POLL_ATTEMPTS = 10
 _STOP_KILL_POLL_INTERVAL_SECONDS = 0.1
 """Delay between the post-SIGKILL confirmation polls."""
 
+_DAEMON_ENTRY_CODE = (
+    "from iterate_harness.services.cron_scheduler import _run_daemon; _run_daemon()"
+)
+"""The argv every ``start_daemon`` child is started with.
+
+Two things read this string: ``start_daemon`` passes it to the interpreter, and
+:func:`claim_matches_process` falls back to it for the bare-integer pid files that every version before
+this one wrote — those files carry a number but no recorded command line, so the standard spawn shape is
+the only identity available to them. Keeping one copy is what stops the spawn and the check from drifting
+apart.
+"""
+
 
 def _job_timeout(job: dict[str, Any]) -> int:
     """Resolve the job's timeout (clamped to ``[1, MAX]``; bad values fall
@@ -144,30 +156,227 @@ def get_pid_path() -> Path:
     return get_data_dir() / "cron_scheduler.pid"
 
 
-def read_pid() -> int | None:
-    """Read the PID of a running scheduler, or None."""
+def _pid_state(pid: int) -> str | None:
+    """The kernel's one-letter process state for *pid*, or None when it cannot be read.
+
+    Linux answers from ``/proc/<pid>/stat``; everything else from ``ps -o stat=``. The short-option form
+    is deliberate: ``ps --ww`` was measured (run 40199977015, in this repo's own CI) replying
+    ``error: unknown gnu long option`` on procps, and an unguarded ``set -e`` step turned ten green
+    buckets red over it.
+
+    A probe must not be able to break the thing it is probing, so the fallback is a broad one: this module
+    patches ``subprocess`` wholesale in its own tests, and an ``AttributeError`` escaping through
+    ``except (OSError, subprocess.SubprocessError)`` was measured here taking seven green tests down with
+    it. The answer is "unknown", never an exception.
+    """
+    stat_file = Path(f"/proc/{pid}/stat")
+    if stat_file.exists():
+        try:
+            raw = stat_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        # "<pid> (<comm>) <state> ..." and <comm> may itself contain ")" and spaces.
+        tail = raw.rpartition(") ")[2]
+        state = tail.split(" ", 1)[0].strip()
+        return state or None
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:  # noqa: BLE001 - a failed probe reports "unknown", see the docstring
+        return None
+    if out.returncode != 0:
+        return None
+    state = out.stdout.strip()
+    return state[:1] or None
+
+
+
+def process_is_live(pid: int) -> bool:
+    """True only while *pid* names a running process — a zombie is not alive.
+
+    ``os.kill(pid, 0)`` succeeds for a zombie, so a confirmation loop built on that probe alone reports a
+    dead process as un-killable. Measured locally before this function existed: ``stop_scheduler`` had
+    already killed its target (exit status ``-15``) and still logged ``pid ... survived SIGKILL``,
+    because the unreaped child kept answering signal 0. On Linux the state comes from procfs, elsewhere
+    from ``ps``; where neither can be read the probe falls back to signal 0 — the old behaviour — and
+    says so in the log instead of pretending the check ran.
+    """
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    state = _pid_state(pid)
+    if state is None:
+        logger.debug("Cannot read the process state of pid=%d; treating signal 0 as the answer", pid)
+        return True
+    return "Z" not in state
+
+
+def _pid_cmdline(pid: int) -> str | None:
+    """The command line *pid* was started with, or None when this platform does not expose it.
+
+    Same rule as :func:`_pid_state`: a probe that raises is worse than a probe that answers "unknown", and
+    this module's own tests replace ``subprocess`` wholesale.
+    """
+    cmdline = Path(f"/proc/{pid}/cmdline")
+    if cmdline.exists():
+        try:
+            return cmdline.read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace").strip()
+        except OSError:
+            return None
+    try:
+        out = subprocess.run(
+            ["ps", "-ww", "-o", "args=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:  # noqa: BLE001 - a failed probe reports "unknown", see the docstring
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def _collapse(text: str) -> str:
+    """One space between tokens, no leading or trailing space: the shape both sides of a comparison
+    have to agree on, because procfs separates argv with NULs and ``ps`` prints what the kernel kept."""
+    return " ".join(text.split())
+
+
+def _argv_tail(text: str) -> str:
+    """The command line with its first token removed: what survives an interpreter rewriting argv[0].
+
+    Measured here: a child spawned as ``.venv/bin/python -c "import time; time.sleep(60)"`` answers ``ps``
+    with that path immediately, and later answers it with
+    ``/Library/Frameworks/Python.framework/.../Python -c import time; time.sleep(60)`` — the framework
+    interpreter replaces argv[0] with its own real path after startup. A whole-line comparison therefore
+    rejects claims from processes that never changed, which is not the thing being guarded against; the
+    tail is what both readings agree on. A line with no tail at all (a bare executable, no arguments) has
+    nothing stable to compare, and the caller falls back to the whole string.
+    """
+    return text.split(" ", 1)[1] if " " in text else ""
+
+
+def claim_matches_process(pid: int, recorded_cmdline: str | None) -> bool:
+    """Whether the process behind *pid* is the one that wrote the claim, judged by its command line.
+
+    A pid file is a claim about a number, and Linux re-issues numbers as soon as a process is reaped, so
+    the number alone says nothing about who lives there now. The claim therefore records the command line
+    the claiming process had, and this function compares it with the command line the kernel reports for
+    that number today — as an argv tail, because argv[0] is not stable (see :func:`_argv_tail`).
+
+    Note what this proves and what it does not: it proves *continuity* — the process there now is the
+    process that wrote the file. It cannot prove legitimacy, because the only writer of a claim is a
+    process claiming the file for itself. Continuity is exactly the question a signal has to answer.
+
+    Before this existed, ``stop_scheduler`` signalled whatever the file named. Measured locally: a live
+    sleep child that had never seen this daemon was written into the file, and ``stop_scheduler`` sent it
+    SIGTERM and then SIGKILL — it exited with status ``-15``, the log claimed it had "survived SIGKILL",
+    and the pid file was still there 13.5 s later. On a CI runner the same call, driven by a test's
+    recycled pid (``_dead_pid()`` in ``tests/test_services/test_cron_scheduler.py`` assumes a reaped
+    child's number can never be live again), is how the process that hosts the step dies — which is
+    exactly the reading ``bucket 06`` produced: no step completion, no log, no artifact, and only
+    GitHub's server-side timeout ends the job.
+
+    Two documented degradations, both louder than a silent pass:
+      * where no command line can be read (Windows has neither procfs nor ``ps``), the claim is accepted,
+        because the alternative is a daemon that can never be stopped from another process;
+      * a legacy file that holds only a number has no recorded command line, so it is checked against
+        ``_DAEMON_ENTRY_CODE`` — the argv every ``start_daemon`` child is started with.
+    """
+    line = _pid_cmdline(pid)
+    if line is None:
+        logger.warning(
+            "Cannot read the command line of pid=%d; accepting the pid file's claim unverified", pid
+        )
+        return True
+    if recorded_cmdline:
+        recorded_tail = _argv_tail(_collapse(recorded_cmdline))
+        live_tail = _argv_tail(line)
+        if recorded_tail and live_tail:
+            return recorded_tail == live_tail
+        return _collapse(recorded_cmdline) in line
+    return _DAEMON_ENTRY_CODE in line
+
+
+def read_pid_claim() -> tuple[int, str | None] | None:
+    """Return ``(pid, recorded_cmdline)`` from the pid file, or None if it carries no usable claim.
+
+    Two formats are accepted: the current JSON claim, and the bare-integer file every version before this
+    one wrote. A file that is neither is treated the way an unparseable pid always has been — no claim.
+    """
     path = get_pid_path()
     if not path.exists():
         return None
     try:
-        pid = int(path.read_text(encoding="utf-8").strip())
-    except (ValueError, OSError):
-        return None
-    # Check if process is alive
-    try:
-        os.kill(pid, 0)
+        raw = path.read_text(encoding="utf-8").strip()
     except OSError:
+        return None
+    try:
+        claim = json.loads(raw)
+    except json.JSONDecodeError:
+        claim = None
+    if isinstance(claim, dict):
+        try:
+            pid = int(claim["pid"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        recorded = claim.get("cmdline")
+        return pid, recorded if isinstance(recorded, str) else None
+    try:
+        return int(raw), None
+    except ValueError:
+        return None
+
+
+def read_pid() -> int | None:
+    """Read the PID of a running scheduler, or None.
+
+    Two things have to hold before a number counts as "the scheduler is running": the process must be live
+    and not a zombie (see :func:`process_is_live`), and it must be the process that wrote the claim (see
+    :func:`claim_matches_process`). A file that fails either test is stale and is released, because
+    keeping a stranger's claim both blocks ``ih cron start`` and arms ``stop_scheduler`` against it.
+    """
+    path = get_pid_path()
+    claim = read_pid_claim()
+    if claim is None:
+        return None
+    pid, recorded = claim
+    if not process_is_live(pid):
         logger.debug("Removed stale scheduler PID file (pid=%d)", pid)
+        path.unlink(missing_ok=True)
+        return None
+    if not claim_matches_process(pid, recorded):
+        logger.warning(
+            "Scheduler PID file names pid=%d, which is not the process that claimed it; releasing the "
+            "claim instead of signalling it",
+            pid,
+        )
         path.unlink(missing_ok=True)
         return None
     return pid
 
 
+
 def write_pid() -> None:
-    """Write the current process PID."""
+    """Claim the pid file for this process, recording the command line that goes with the number.
+
+    The number alone is not a claim: it can be re-issued to another process after this one exits, and
+    anything reading the file later would then be pointing a signal at a stranger (see
+    :func:`claim_matches_process`). ``sys.argv`` cannot serve as the fingerprint — for a ``python -c …``
+    start it is just ``['-c']`` — so the recorded line comes from the same source the checker reads, which
+    is what makes the two sides comparable. Where that source does not exist (Windows) the claim is
+    written without a fingerprint and the checker says it could not verify, rather than pretending to.
+    """
     path = get_pid_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(os.getpid()) + "\n", encoding="utf-8")
+    claim = {"pid": os.getpid(), "cmdline": _pid_cmdline(os.getpid())}
+    atomic_write_text(path, json.dumps(claim) + "\n")
 
 
 def _claim_pid_file() -> bool:
@@ -213,7 +422,14 @@ def is_scheduler_running() -> bool:
 
 
 def stop_scheduler() -> bool:
-    """Send SIGTERM to the running scheduler. Returns True if killed."""
+    """Send SIGTERM to the running scheduler. Returns True if killed.
+
+    Every probe here is :func:`process_is_live`, not ``os.kill(pid, 0)``: the difference is what the
+    confirmation loop reports about a daemon that died but has not been reaped yet. And the escalation to
+    SIGKILL re-checks identity first, because the pid we signalled can be re-issued while we wait — a
+    number that was our daemon for those 12 seconds may belong to an unrelated process by the time the
+    second signal would leave.
+    """
     pid = read_pid()
     if pid is None:
         return False
@@ -226,12 +442,21 @@ def stop_scheduler() -> bool:
     # timeout, so we must wait at least that long before SIGKILL to avoid
     # orphaning child processes.
     for _ in range(60):
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if not process_is_live(pid):
             remove_pid()
             return True
         time.sleep(0.2)
+    if read_pid() != pid:
+        # The daemon is gone and something else answers to this number now — or the claim has stopped
+        # verifying for any other reason. Either way SIGKILL would aim at a process this file no longer
+        # describes, so release the claim and report the daemon as stopped.
+        logger.warning(
+            "pid=%d no longer carries this daemon's claim after SIGTERM; releasing the pid file "
+            "without escalating",
+            pid,
+        )
+        remove_pid()
+        return True
     # Force kill after the scheduler had ample time to shut down cleanly.
     try:
         os.kill(pid, signal.SIGKILL)
@@ -242,9 +467,7 @@ def stop_scheduler() -> bool:
     # dying daemon unstoppable (a subsequent start would spawn a second loop
     # alongside the one that has not finished tearing down yet).
     for _ in range(_STOP_KILL_POLL_ATTEMPTS):
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if not process_is_live(pid):
             remove_pid()
             return True
         time.sleep(_STOP_KILL_POLL_INTERVAL_SECONDS)
@@ -252,6 +475,7 @@ def stop_scheduler() -> bool:
         "Scheduler pid=%d survived SIGKILL; leaving the pid file in place", pid
     )
     return False
+
 
 
 # ---------------------------------------------------------------------------
@@ -266,14 +490,33 @@ _MAX_JOB_OUTPUT_BYTES = 256 * 1024
 
 
 def _kill_process_group(process: asyncio.subprocess.Process) -> None:
-    """SIGKILL a job's whole process group (fallback: the direct child)."""
+    """SIGKILL a job's whole process group — but only a group this call created.
+
+    ``execute_job`` spawns with ``start_new_session=True``, which makes the child the group leader, so
+    ``getpgid(pid) == pid`` is the proof that the group belongs to this job. Without that proof the
+    signal goes to whatever group the number happens to identify: the stub in
+    ``tests/test_services/test_cron_scheduler.py::TestExecuteJob`` carries a mock pid, and a mock pid
+    reaches ``os.getpgid`` as ``1`` — the machine's own group, with the runner's step host inside it. A
+    number is not ownership.
+
+    Anything that is not a usable pid (a stub, a negative value) is refused before it can reach the
+    kernel, and the direct child is signalled instead.
+    """
     pid = process.pid
-    if pid is not None:
+    if isinstance(pid, int) and pid > 0:
         try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
-            return
+            if os.getpgid(pid) == pid:
+                os.killpg(pid, signal.SIGKILL)
+                return
+            logger.debug(
+                "pid=%d leads group %d, which this job did not create; signalling the child only",
+                pid,
+                os.getpgid(pid),
+            )
         except (ProcessLookupError, PermissionError, OSError):
             pass
+    else:
+        logger.debug("Job process carries no usable pid (%r); not signalling any group", pid)
     try:
         process.kill()
     except (ProcessLookupError, OSError):
@@ -574,7 +817,7 @@ def start_daemon() -> int:
 
     log_path = get_logs_dir() / "cron_scheduler.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    code = "from iterate_harness.services.cron_scheduler import _run_daemon; _run_daemon()"
+    code = _DAEMON_ENTRY_CODE
 
     with log_path.open("ab") as log_fh:
         proc = subprocess.Popen(
