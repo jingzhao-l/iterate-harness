@@ -119,11 +119,22 @@ jobs:
           path: web-dist.tar.gz
           retention-days: 1
 
+      - name: Install dependencies
+        # Measured the hard way on run 40249046877: without this, the collect step below dies because
+        # pytest lives in the `dev` extra and a bare `uv run` does not install extras. ci.yml's plan job
+        # has the same step in the same position; this job is meant to mirror it exactly, so the plan
+        # this line bisects is the plan CI would build.
+        run: uv sync --extra dev
+
       - name: Collect the suite exactly the way ci.yml's plan job does
+        # `cat` before the assertion, exactly as ci.yml does. The first version of this step dropped the
+        # `cat` and died with `collect_exit=2` and no evidence of why — an instrument that swallows its
+        # own output is how the same mistake gets made twice.
         run: |
           set -euo pipefail
           rc=0
           timeout --kill-after=60 600 uv run pytest --collect-only -q > collect.txt 2>&1 || rc=$?
+          cat collect.txt
           echo "collect_exit=$rc"
           test "$rc" = 0
 
