@@ -3,6 +3,13 @@
 All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
+
+（空。2.11.2 收口后没有未归号的条目。）
+
+## [2.11.2] - 2026-10-26
+
+**版本判断：patch。** 这一版不加任何用户可见能力，也不动既有形状：`requires-python >= 3.10` 未变、CLI 参数与退出码集合未变、内核仍是 `iterate-kernel@0.1.10`、`.iterate/decision-log.jsonl` 与 `recipe-gate` 行的格式未变。变的是两件「已经宣称过、但今天才成立」的事：① `cron_scheduler` 不再对「pid 文件里的号」开枪——它现在要求那个号仍是写凭证的进程，且 `killpg` 只准打本任务用 `start_new_session` 自己造的组；② `Python tests` 那条 lane 从「12 条里 10 条绿、2 条永不结束」变成 **12/12 绿**。附带一条形状变化要说清：pid 文件从裸整数变成 `{"pid", "cmdline"}`。新 CLI 读旧文件（`_DAEMON_ENTRY_CODE` 兜底，实测停得住旧 daemon）；**旧 CLI 读新文件会把它当成「没有 daemon」**（`int()` 解析失败→ None），也就是先升级 daemon、再退回旧 CLI 的组合下 stop 会失灵——同一个包里两边同源，正常升级路径碰不到，降级会碰到，因此记在这里而不是藏在代码注释里。既有形状零破坏 → 不是 major；新增能力零 → 不是 minor。
+
 - **`bucket 06` 那条挂了两天的腿，名字量出来了，而且名字后面跟着一条真缺陷：一段测试代码让 SIGKILL
   走进了 `kill(-1, SIGKILL)` 那条广播语义。**
   判据不是再加仪器，而是把可疑那一桶拆成"一个模块一条腿"（新的 `suite-bisect.yml`：只能手动派发、
@@ -308,6 +315,113 @@ All notable changes to iterate-harness should be recorded in this file.
   断言找的 `dump_traceback_later` / `exit=True` 仍然在文件里——留在解释"为什么不再用它"的散文里；
   现在用 `_call_lines` + `_is_call_site` 只认**行首是调用**的行。变异 `W-1` 把表换回 SIGALRM 计时器，
   点名红。电池共 34 条，全部具名变红；本机整树与四条判据文件复跑见下条提交信息。
+### Documentation
+
+- **「🔬 GlassPane integration / 与 GlassPane 的集成」四句按代码改写。** 全新眼界的复审读的是代码而不是
+  这几句话，抓出四处与实现不符：① 原文写"每次 `gp_*` 调用都回一份证据包"——引擎里
+  `["evidencePack":` 的出口全仓只有一处（`Dispatcher.swift:216`，`handleLastEvidence`），其余四项工具
+  不回包；② 原文写"两侧都能整链验通对方那本"——生产里跑这个读者的是回路这一侧（`fix_proof`），fork
+  带同一个校验器、也有固定点用例证明这边写出的链在那边验得过，但它自己的生产路径只写不读；③ 原文把
+  允许清单（只读五项）说成回路会问的调用，而它真正构造的是每个操作一条 `gp_last_evidence` 加一条
+  `gp_diagnose`；④ 原文"计划显式交接走 `GLASSPANE_RUN_PLAN`"容易被读成本项目会设这个变量——本项目写的
+  是 `.iterate/run-plan.json`，那个环境变量是操作者那一侧的交接。闸那一句跟着上面第一条修复一起改
+  （通过轮也落账、契约拒绝不落账）。中英两版逐条同步。
+- **父仓 README（双语）里那句"各自整链验通对方那本"同样收成实测形状**：读者在哪一侧、另一侧靠什么
+  证明，分开写清。
+
+- **④ 的闸答多了一条操作者验收：`scripts/check_gate_answer_reader.py`。** 它验的不是形状而是
+  "装好的那份读得回来"：跑一轮真通过的项目（`spawned=False` + `reason='the invariant report passed…'`），
+  要求台账里恰好一行 `kind: recipe-gate`，再用 subprocess 问发布出去的 `ih iterate gate` 把答案打出来。
+  三条退出码分得很清：0 两头都通；1 落账了却读不回来，**或那行长出了 `operationId`/`outcome`**——那会让
+  闸自己开自己（下一轮把回路自己的答复当成"修复发生过"的证据）；2 什么都没量到（PATH 上没有 `ih`，
+  或给的路径执行不了）。"问不到"与"答案不对"必须分码，否则一台没装 CLI 的机器会被读成一次失败的门禁。
+  反向变异当场验过它能红：把两处 `if _answered_by_passing_round(outcome):` 改成 `if False and …` 后，
+  它按名字报 `expected exactly one recipe-gate row for one passing round, found 0`；变异用备份 +
+  sha256 核回（`d931658b…`），不走 `git checkout`。它是操作者命令、不进 CI——与另外三条
+  `check_glasspane_*` / `check_run_plan_channel` 同一待遇，理由也相同：需要对面在场或需要装好的 CLI 的
+  检查，写成会 skip 的测试就是又一次"没人跑的绿灯"。
+
+- **我自己上一批把 CHANGELOG 里一个已发布版本的整段正文删掉了，修复这一笔只插入、不重组。**
+  事故在 `3676343e`：本意是改一条 bullet 的措辞，diff 却是 +19/-50，被切走的一刀连带删掉
+  `## [2.11.1] - 2026-10-25` 这个标题、它的版本判断段与 7 条 bullet，以及 [Unreleased] 里记
+  `scripts/check_gate_answer_reader.py` 的那条。也就是说 2.11.1 早已发出去了（tag / Release / PyPI / npm
+  四格齐），而它的台账在这份文件里一度不存在。本仓对这类错有写过的教训（合并解析时不许拿
+  head+theirs+mine 重组文件），当时的防线就是"改完数一遍 section 与 bullet 条数，跟父提交比"——
+  这次没执行那条防线，所以它是来第二次。修复不搬动任何文字：从父提交 `3676343e^` 按字节取出那段区域
+  （91 行 / 8 条 bullet / 10,141 字节），插回它原来的位置（当前 `## [2.11.0] - 2026-10-25` 之前），
+  事后四条断言各跑一遍：插入文本与父提交逐字节相等、每个版本标题恰好一次、恢复后的 [2.11.1]
+  bullet 数 = 7、`git diff --numstat` 删除列 = 0。
+  同一批还留下第二个自己的错，形状小但同类：那条修复的提交信息（`e2bfef57`）是用未加引号的
+  `printf` 写的，于是我写进信息里的反引号被 shell 当成命令替换执行了一遍——`3676343e`、
+  `scripts/check_gate_answer_reader.py`、`record_gate_without_send`、`3676343e^` 四个名字从信息里被吃掉
+  （四条命令都是 command not found，没有任何副作用，但它们也不该被运行）。内容无损、全过程在本条里，
+  不改写已提交的历史；从这里起所有提交信息一律写进文件再 `git commit -F`，不在命令行里拼。
+
+## [2.11.1] - 2026-10-25
+
+**版本判断：patch。** 这一版没有新增任何用户可见能力，它做的是一件更早的事：2.11.0 的 README 与注册表描述宣称「判定闸的答案随那一轮的账本行落盘，两扇门都读得回来」，而落账的只有「发出去了」那一支——通过轮把答案留在瞬时 payload 里，读台账的两扇门永远读不到。这一版把那条宣称变成事实 (`record_gate_without_send`)，改掉四句与代码不符的文档，并补两把此前不存在的闸（懒加载表可达性、README 清单与 handler 一致）。既有形状一个都没动：`requires-python >= 3.10` 未变、CLI 参数与退出码集合未变、内核仍是 `iterate-kernel@0.1.10`、`.iterate/decision-log.jsonl` 的行格式未变（新增的是一行 `kind: recipe-gate` 的记录，而 `fix_proof` 不会把它当成修复证据——它缺 `fix_proof` 要的两样）。所以不是 minor（没有新能力），也不是 major（没有破坏）。
+
+- **判定闸的答案在"通过所以什么都没发"的那一轮也会落账了——在此之前两扇门永远读不到它。**
+  `_prepare` 每条分支都算 ④ 的闸（通过的、契约拒绝的、发出去的），但落账的只有"发出去"那一条，
+  而 `/iterate gate` 与 `ih iterate gate` 读的是**台账**。于是一个项目跑十轮通过的轮次，终端门
+  仍然回答 "no recipe gate recorded yet"——本轮就实测到了这句：那条通过轮在 `iterate_state` 里
+  明明发布了 `invariantState=pass` 的闸答，账本里却一个字节都没有。瞬时的 payload 不是读者，它随
+  轮次一起蒸发，而"发布了一个没有读者能达到的状态"正是本仓反复被罚的形状。
+  新增 `record_gate_without_send`：只给**做成过决定**的那一条（判定通过、因此什么都没发）落一行
+  （`recipe-gate`），契约拒绝仍一个字都不写——Requirement C 钉着那条路径（
+  `test_a_refusal_path_writes_zero_ledger_bytes`）：一个从未做成的决定不该变成一条审计记录。这行也不是
+  修复证据：它既没有 passing outcome 也没有 operationId，而 `fix_proof` 要的就是这两样，`
+  test_a_gate_row_cannot_be_read_as_the_fix_it_is_talking_about` 把形状本身钉住（给它加 operationId
+  就红）。台账写不进也不取消这一轮：错误文本进 payload 的 `ledgerError`，与发出的那条同一个契约。
+  变异电池 3 组 7 条具名红（撤掉落账 / 懒加载表塞死名 / 给这行加 operationId），逐文件 sha256 核回。
+
+- **懒加载导出表里有两个名字指向不存在的符号，套件全绿。** `iterate/__init__.py` 的 `_EXPORTS` 把
+  `MAX_REQUESTED_RECIPE_STEPS` 交给 `.reverify_trigger`，而那个常量早已改名成 `MAX_REQUESTED_OPERATIONS`；
+  `recipe_steps_not_requested` 则在本轮 ④ 的闸挪位时被删了实现，表和 `__all__` 都没跟。两者实测都是
+  `AttributeError: module 'iterate_harness.iterate.reverify_trigger' has no attribute …`——**数静态
+  import 抓不到这种名字**，字符串加载器只在有人真去取的时候才炸。新增
+  `test_every_name_the_lazy_export_map_advertises_actually_resolves`：逐条 import 目标模块并要求符号存在，
+  再要求 `__all__` 里每个名字都答得出。这两条死名由此被抓出并归位。
+
+- **`/iterate` 不带参数打印的是这个项目当前状态，不是子命令清单。** 上一轮我为了"抄来的清单每加一条
+  子命令就漂一次"把 README 与注册表描述改成"不带参数会打印当前清单"——这句本身也是一句抄来的话，
+  实测是错的：裸命令走 `status` 分支（配置摘要 + 决策日志条数 + 引导提示），**打印清单的是不认识的
+  子命令**。现在两处 README、`registry.py` 的命令描述都按实测改写，并新增
+  `tests/test_iterate/test_iterate_slash_surface.py`：把 README 里那份 16 项清单与 handler 的分支
+  条件逐字比相等（两个语言各一条），两个入口各跑一次真 handler 判形状。控制实测：把注册表描述改回
+  旧句、把中文清单里的一项改名、把裸命令改派到未知分支，三种都各自具名红。
+
+- **跨项目验收 `scripts/check_run_plan_channel.py` 修好了一件它此前一直在隐瞒的事：默认调用
+  从来没有测量过任何东西。** 两个默认值各多了一段目录——
+  `REPO.parents[1] / "iterate-skill" / "config" / "iterate.config.yaml"` 实测解析成
+  `/Volumes/Eng-Dev/iterate-skill/iterate-skill/config/iterate.config.yaml`，
+  `…/iterate-skill/GlassPane/harness/glasspane-harness` 同理，两者的 `exists()` 都是 `False`——
+  所以不带 `--config/--harness` 的默认运行在写出计划之前就 `return 2`。退出 2 的意思是
+  "没有测量发生"，不是"测量通过"，而它被当成后者引用过。现在按仓库真实布局逐候选发现路径，
+  发现不到就具名拒绝并退出 2。
+  同时补上本版才交付的第二条通道：`.iterate/run-plan.json` 项目文件通道（`readRunPlan({}, dir)`
+  而不是只喂 `GLASSPANE_RUN_PLAN`），并断言回包的 `plan.source` 等于所测的那条通道
+  （`env` / `project`）——否则两条通道可以实际读同一份环境变量，却都被记成"通过"。
+  实测读数：9 个维度、digest
+  `rp_68049dadeff6c85c4807448b04f44462c24f069b8936e57b181a667b8f42380e`、两条通道各自
+  `channel agrees`、退出 0。
+
+- **主干 CI 的测试套件那一格：四次同死法，两版仪表，一个当场量到的时长。** 死法是先跑起来再无输出，
+  job 在起跑后第 45 分钟整被 "The hosted runner lost communication with the server" 打掉，而 runner 一死
+  日志就不上传（`--log-failed` 报 `log not found`，`runs/{id}/logs` 的归档里只有三条成功的 job）——
+  run 40167475388、40168346235、40103418285（v2.10.0）与 40171467085。**第一版仪表不够**：只加了
+  pytest 自带的 `faulthandler`（`-o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true`，
+  零新依赖；对本机一条故意 `sleep(60)` 的用例实测 rc=1 并报出
+  `File "…/test_hang_probe.py", line 3 in test_hangs`），而带上它的 run 40171467085 仍以同一姿势死在
+  同一分钟，日志照旧没有。于是补第二版，并同时记下为什么不能断言"这是挂起"：本机跑同一套是
+  **36m27s / 3083 条**——45 分钟的沉默同样可以是"这套本来就比 runner 的沉默窗口慢"，不是证据指向挂起。
+  第二版做三件事，两件同时服务于两种成因：① 独立一步 `pytest --collect-only -q`（收集期就卡住＝某个
+  模块在 import 时阻塞，而那正是 `faulthandler_timeout` 看不见的地方）；② 跑测试改用 `-v`（逐条打一行，
+  日志通道不再沉默——慢的套会跑完并报告，真挂的会留下最后那条名字）；③ job 级 `timeout-minutes: 90`
+  （有上限才会**带着日志结束**，而不是让 runner 把证据带走）。90 不是猜的，是按上面那个实测留的余量。
+  判据写在步骤注释里：红了按 dump 或最后一条 `-v` 找出等的是谁；不许抬 `faulthandler_timeout` 让红消失、
+  不许改成 skip、更不许为了"日志太长"把 `-v` 拿掉——那行逐条输出正是这一步可寻的原因。
+
 ### Documentation
 
 - **「🔬 GlassPane integration / 与 GlassPane 的集成」四句按代码改写。** 全新眼界的复审读的是代码而不是
