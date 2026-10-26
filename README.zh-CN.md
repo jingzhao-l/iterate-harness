@@ -443,16 +443,23 @@ CI 不再把整套当**一个进程**跑。`scripts/split_suite.py` 把 `pytest 
 `tests/test_split_suite.py`、`tests/test_ci_suite_step_program.py`（用 stub 把 CI 那段 bash 当程序跑）
 与 `tests/test_test_watchdog.py`（故意挂一条用例，证明看门狗会把它的名字打出来）。
 
-按实测写明的已知问题：在 `ubuntu-latest` 上，`bucket 06` 那两条腿（31 个模块，都是会 spawn 进程的那批：
-`tests/test_swarm/test_worktree.py`、`tests/test_services/test_cron_scheduler.py`、
-`tests/test_ui/test_react_backend.py`、`tests/test_tools/test_remote_trigger_tool.py` 等）会让 runner
-**结束不了那一步**。步骤内的上限、脱离会话后的有界轮询、`gh run cancel`、进程级看门狗都没能结束它，
-而它最后**刷出**的一行是 `collecting ...`——这句要按字面读：pytest 的进度行是以 `\r` 覆写的文本缓冲，
-没满 8 KB 或不换行就不会落盘，所以它界定的是"可见输出停在哪"，不是"进程在哪"。它能确认的是**收集阶段**
-这个范围：逐条表（`pytest-timeout` 240 s、`faulthandler_timeout` 300 s）在第一条条目存在之前没有东西可计时，
-所以它们从不响是同一件事。步骤自己那把守护线程表会把每个线程的栈写进它自己持有的描述符里，
-那一份 dump 才说得出是哪一种。这些模块在本机
-（缺 docker/node）整体跳过，所以本机不可复现。
+有一条已关闭的缺陷值得写下名字，因为它对所有指向它的仪器都不可见。`bucket 06` 那两条腿过去让 runner
+**结束不了那一步**——没日志、没 artifact、步骤内任何一张表都收不了它。判据不是再加仪器，而是把那一桶拆成
+"一个模块一条腿"（`suite-bisect.yml`：只能手动派发，模块清单由 CI 自己的 plan 现算，不是手抄）：32 条腿里
+31 条结束了，唯一没结束的是 `tests/test_services/test_cron_scheduler.py`，它也是唯一没留下日志的那条。
+根因是一个信号打在"号"上而不是打在"进程"上。`_kill_process_group()` 无条件跑
+`os.killpg(os.getpgid(pid), SIGKILL)`，而 `test_timeout_job` 递给它的 mock 进程 `pid.__index__()` 回 **1**
+——Linux 上 `killpg(1, …)` 就是 `kill(-1, …)`，kill(2) 写明它是"发给调用者有权发给的每一个进程"，runner 的
+Worker、步骤的 shell、actions 的 node 都在其中，且只要打中一个就返回 0，旧代码那句
+`except PermissionError` 因此什么都接不到。另一半是 `read_pid()` 过去只问"这个号活着吗"，从不问"这个号
+是不是写文件的那个进程"：本机实测，把一个从没见过这个 daemon 的活子进程写进 pid 文件，`stop_scheduler()`
+先 SIGTERM 再 SIGKILL 把它打死（退出码 `-15`），随后还报这个 pid"扛住了 SIGKILL"——因为僵尸也答 signal 0；
+同一个函数对**真** daemon 也返回 False，而那个 daemon 其实已退 0。现在的形状：pid 文件写"号 + 写它的进程
+当时的命令行"，`read_pid()` 先验活（僵尸算已死）再验连续，比对取 argv 尾（解释器会在 exec 之后重写
+argv[0]，这是量出来的；整行比对会拒绝一个从未变过的好凭证，第一版就是这么把 7 条原本绿的用例打红的），
+`killpg` 只准打本任务用 `start_new_session` 自己造出来的组。修后 `Python tests` **12/12 绿**：`bucket 06`
+现在打出 `pytest_exit=0 stopped=finished elapsed=38s`，日志末尾是 **518 passed, 5 skipped in 32.10s**，
+并按规矩删掉自己的诊断 ref。哪一桶再结束不了，第一步是跑 `suite-bisect.yml`——被点名的模块才是能修的模块。
 
 ## 🚑 故障排查
 

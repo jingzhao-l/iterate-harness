@@ -40,6 +40,13 @@ All notable changes to iterate-harness should be recorded in this file.
   不是本批造成的）。同一个 stub 在修后再也打不出 `killpg`：实测 `after the fix, killpg calls: none`。
   这一格唯一还没证的事是 CI 自己：修前它是"31 绿 1 永不结束"，修后应 12 条全绿。在那之前本版不写
   "CI 绿"，2.11.2 也不取。
+  **CI 已经答完了，答案是绿的。** run 40252896348（standalone main `e94ded57`）：`Python tests` 12 条腿
+  **12/12 completed/success**，`artifacts.total_count=13`（tarball＋12 份腿日志），run 结论
+  `completed success`。`bucket 06` 那条腿自己写下的最后三行就是这一格的终态：
+  `suite_pid=2425 session=2425`（setsid 确实脱离了）、`recorder ref deleted (the artifact carries the log)`
+  （步骤结束得干净，连记录器的诊断 ref 都按规矩删了）、
+  `pytest_exit=0 stopped=finished elapsed=38s`，日志末尾 **518 passed, 5 skipped in 32.10s**（3.11 那条是
+  25.45 s）。同一 run 的 plan 报 `3138 test(s) in 6 buckets`。本仓的 CI 绿，从这一笔起才有资格写。
 
 
 - **改 CI 注释时我自己把 `ci.yml` 的一个 step 写出了两个 `run:` 键，而 PyYAML 不报错——它取最后一

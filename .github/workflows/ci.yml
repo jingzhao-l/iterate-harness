@@ -86,8 +86,12 @@ jobs:
         run: uv sync --extra dev
 
       - name: Collect the suite (a hang here is an import-time block, not a test)
-        # Split out on purpose, and measured: this step answers in 13 s on the runner and 31 s here,
-        # which is what ruled collection/import blocking out of the 45-minute death in its track.
+        # Split out on purpose, and now measured twice over: this step answers in 13 s on the runner and
+        # 31 s here, and in run 40244447182 the equivalent per-bucket step completed success on exactly the
+        # paths whose suite step never ended (23:23:04 -> 23:23:12). That reading is what retired my own
+        # earlier claim that the bucket-06 death was "in collection" — the suite step was the thing that
+        # died, because a mock pid turned `killpg(1, SIGKILL)` into `kill(-1, SIGKILL)`. See
+        # `tests/test_services/test_cron_scheduler.py::TestKillProcessGroupOwnership`.
         run: |
           set -euo pipefail
           rc=0
@@ -118,21 +122,19 @@ jobs:
     name: Python tests (${{ matrix.python-version }} / bucket ${{ matrix.bucket.id }})
     needs: suite-plan
     runs-on: ubuntu-latest
-    # 30, not 90: the point of the split is that a bucket ENDS, because a job that ends is the
-    # precondition for its log existing at all (see the note above). Measured on this tree: 3,112
-    # tests in six buckets of 519/519/519/519/518/518, the whole suite 141.89 s here (3,106 passed,
-    # 6 skipped), so 30 minutes is not a guess at the cost — it is room for the worst shared runner. remedy if a bucket ever hits it: the log names the files, act on
-    # those; do not raise the number and do not mark anything skip.
     # 20 — and at least double the step's own 600 s budget, because the setup before that step is
     # 3.5 minutes of checkout + uv sync + collect: measured on run 40206085949 a 12-minute ceiling
     # landed *before* the step's budget could, which made the experiment inconclusive rather than
-    # answered. A job that ends is the
-    # precondition for its log existing, but GitHub's timeout is the last line, not the instrument
-    # - measured, a leg that outran its step budget was cut at job start + 35 min (30 + grace) and
-    # that cut uploads nothing. Cost basis: ten of twelve legs on run 40200818814 finished in about
-    # a minute each (checkout, uv sync, collect, 520 tests), and the whole suite is 123.69 s here.
-    # remedy if a bucket ever hits it: the log names the files, act on those; do not raise the
-    # number and do not mark anything skip.
+    # answered. A job that ends is the precondition for its log existing, but the ceiling is the last
+    # line, not an instrument — and sharper than I had it: a job ended by GitHub's own timeout keeps NO
+    # log at all (`gh run view --log` answers `log not found` on both cancelled bucket-06 legs of run
+    # 40244447182), so a ceiling that fires is evidence destruction, not evidence.
+    # Cost basis, from the green run 40252896348 on this tree: the plan self-reports
+    # `[split_suite] 3138 test(s) in 6 buckets`, and the worst bucket — 06, the one that used to never
+    # end — closes its step with `pytest_exit=0 stopped=finished elapsed=38s` (518 passed, 5 skipped in
+    # 32.10 s; the 3.11 leg 25.45 s). 20 minutes is room for the worst shared runner, not a guess.
+    # remedy if a bucket ever hits it: dispatch `suite-bisect.yml`, which runs one module per leg and
+    # names the module; do NOT raise this number and do NOT mark anything skip.
     timeout-minutes: 20
     # `contents: write` is for ONE thing: the flight recorder inside `Run test suite`, which pushes a
     # log tail to a `diagnostics/*` ref while the step is still hung. It exists because the measured
@@ -140,6 +142,10 @@ jobs:
     # `if: always()` upload is a step behind the one that never finishes. It can only ever write
     # `refs/heads/diagnostics/<run>-<version>-<bucket>` in practice: the recorder force-pushes that one
     # name and nothing else, and the repository ruleset protects `refs/heads/main` separately.
+    # What it was for is now closed: bucket 06 hung because a mock pid made `killpg(1, SIGKILL)` into
+    # `kill(-1, SIGKILL)` — every process the runner user may signal, this step's own host among them.
+    # `TestKillProcessGroupOwnership` is what keeps that from coming back; the recorder stays because a
+    # channel that leaves the machine is the only one a wedged runner cannot censor.
     permissions:
       contents: write
     strategy:

@@ -496,17 +496,23 @@ watchdog** (`ITERATE_TEST_WATCHDOG`, unset locally, 420 s in CI) < the **step bu
 pin that shape — the last one runs the CI step's own bash against stubbed `setsid`/`uv`/`ps`, and the
 one before it hangs a test on purpose to prove the watchdog names it.
 
-Known open issue, stated as measured: on `ubuntu-latest` the `bucket 06` legs (31 modules, the
-spawn-heavy ones: `tests/test_swarm/test_worktree.py`, `tests/test_services/test_cron_scheduler.py`,
-`tests/test_ui/test_react_backend.py`, `tests/test_tools/test_remote_trigger_tool.py`, …) leave the
-runner unable to complete the step. The last line its log ever *flushed* is `collecting ...` — read
-that precisely: pytest's live progress writes are carriage-return updates that sit in a text buffer
-until 8 KB or a newline forces them out, so this bounds where the visible output stopped, not where the
-process is. What it does rule in is **collection**, since a per-item timer (`pytest-timeout` 240 s,
-`faulthandler_timeout` 300 s) has nothing to time before the first item exists — which is why neither
-ever fired. The step's own thread watchdog dumps every stack to a descriptor it owns, and that dump
-says which of the two it is.
-The modules are skipped on macOS (no docker/node), so this does not reproduce locally.
+One closed defect worth naming, because it was invisible from every instrument pointed at it. The
+`bucket 06` legs used to leave the runner unable to complete the step — no log, no artifact, nothing any
+in-step bound could end. A dispatch-only diagnostic line (`suite-bisect.yml`: one module per leg, with the
+module list taken from CI's own plan rather than typed in) put it on a single file,
+`tests/test_services/test_cron_scheduler.py` — 31 of 32 legs ended, that one did not, and it was the only
+leg that left no log. The cause was a signal aimed at a number instead of at a process.
+`_kill_process_group` ran `os.killpg(os.getpgid(pid), SIGKILL)`, and the mock process in `test_timeout_job`
+answers `pid.__index__()` with `1`, which on Linux is `kill(-1, SIGKILL)` — "every process the caller may
+signal", the step's own host among them. And `read_pid()` trusted whatever number the pid file held, so
+`stop_scheduler()` would SIGTERM a recycled stranger; measured, it killed a live process that had never
+seen this daemon and then logged that the pid had "survived SIGKILL", because a zombie answers signal 0.
+Now the pid file records the claiming process's command line, `read_pid()` requires liveness (a zombie is
+not alive) and continuity — compared by argv tail, since interpreters rewrite `argv[0]` after exec — and
+`killpg` may only signal a group this job created with `start_new_session`. `Python tests` is 12/12 green
+on that fix: `bucket 06` now prints `pytest_exit=0 stopped=finished elapsed=38s` and deletes its own
+diagnostic ref. If a bucket ever stops ending again, `suite-bisect.yml` is the first move, because a named
+module is a fixable one.
 
 ## 🚑 Troubleshooting
 
