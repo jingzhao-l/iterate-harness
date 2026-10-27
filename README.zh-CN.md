@@ -37,6 +37,12 @@
 - **iterate-harness** — 独立无头引擎（`ih`，npm: `iterate-harness`）。**本仓库** —— 在终端 / CI / Git 钩子里运行同一闭环，无需对话式助手。
 - [**iterate-plugin**](https://github.com/jingzhao-l/iterate-plugin) — dsh 桌面客户端插件。把 iterate 的收敛仪表盘 / review 进度带进 dsh 界面。
 
+**相关项目：[GlassPane](https://github.com/jingzhao-l/GlassPane)。** 本 harness 证明"代码做得对不对"，
+GlassPane 证明"跑起来的应用到底变没变"——它是一个 macOS 运行时验证引擎，用 `gp_*` 工具测量无障碍树、
+像素变化与崩溃信号，并回一份证据包。两边交换的是可核验的记录，走同一份发布出去的契约层，
+所以这里的一轮可以把量到的界面结果当成已验证——见
+[与 GlassPane 的双向集成](#-与-glasspane-的双向集成)。
+
 它是一款**独立的专属 agent harness**，围绕 iterate review/fix 闭环打造：
 内核 agent loop、React TUI、工具/技能/插件体系与权限层全部为 iterate 原生，
 核心是移植自 iterate skill TypeScript 实现的语义层，以及引擎级的收敛控制策略。
@@ -58,7 +64,7 @@ harness 已走过两条大版本主线：
 - [📖 日常使用](#-日常使用)
 - [✨ Iterate 特性](#-iterate-特性)
 - [🔧 七个 iterate 工具](#-七个-iterate-工具)
-- [🔬 与 GlassPane 的集成](#-与-glasspane-的集成)
+- [🔬 与 GlassPane 的双向集成](#-与-glasspane-的双向集成)
 - [🧭 架构](#-架构)
 - [📦 安装与测试](#-安装与测试)
 - [🚑 故障排查](#-故障排查)
@@ -346,12 +352,14 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 review、run、resume、log、trend、gate、glasspane-ledger、report、init、doctor、dimensions、
 validate）。
 
-## 🔬 与 GlassPane 的集成
+## 🔬 与 GlassPane 的双向集成
 
 被审的代码是图形界面应用时，"测试过了"说明不了界面到底变没变。
 [GlassPane](https://github.com/jingzhao-l/GlassPane) 在 macOS 上回答这个问题，本 harness 是它在
-审查这一侧的对应物。两边交换的是**可核验的记录**而不是文字，走的是同一份发布出去的契约层
-（`iterate-kernel`）：
+审查这一侧的对应物。这个交换是**双向的**——量到的证据进来，过闸的判定出去——而且两个方向上传的
+都是**可核验的记录**而不是文字，走的是同一份发布出去的契约层（`iterate-kernel`）。
+
+**从 GlassPane 进到回路里：**
 
 - **证据落进哈希链账本。** 回证据包的那次调用是 `gp_last_evidence`——其余 `gp_*` 不回证据包，这正是
   在它们身上声明的维度会被一直报成"没验过"的原因——围着它的那一侧为每条从包里记下的决定追加一条
@@ -379,9 +387,24 @@ validate）。
   session 里 `/iterate gate`，终端里 `ih iterate gate`。而契约拒绝这条分支一个字节都不写，因为一个
   从未做成的决定不该变成一条审计记录。
 
+**从回路回到 GlassPane：**
+
+- **一份两边都读得到的闸答案。** 判定是一条账本行，不是一条消息。终端里的 `ih iterate gate` 与
+  session 里的 `/iterate gate` 读的是同一条记录——发出去的那一轮读得到，判定通过、因此什么都没发的
+  那一轮也读得到——而"被契约拒绝"与"没做成决定"仍然分得开：只有后者一个字节都不留。
+- **GlassPane 自己的仓库就跑在这条回路上。** GlassPane 仓库里的 `ITERATE.md` 与
+  `iterate.config.yaml` 是这个生态的 onboarding 产物，所以在那里跑一次 `/iterate`，是拿它 CI 强制的
+  同一批验证命令来审引擎与 MCP 层——2026-09-22 实测：`iterate doctor` 18 项全部通过、
+  `iterate fingerprint` 无漂移。
+
 分工正是这件事的重点：应用做了什么由 GlassPane 判，一轮可不可以把那件事当成已验证由本 harness 判，
 谁都不替对方判证据。那道闸只报与拦——它不执行配方，两边都没有配方执行器；进度指针由真正动手修的
 那一侧写进账本。
+
+反方向的交换——账本格式、`gp_*` 转录记了什么、压缩时锚点怎么留住——写在 GlassPane Harness 的 README 里
+（[与 iterate-harness 的双向集成](https://github.com/jingzhao-l/glasspane-harness/blob/main/README.zh-CN.md#与-iterate-harness-的双向集成)），
+引擎自己那一侧写在
+[GlassPane 的双向集成一节](https://github.com/jingzhao-l/GlassPane/blob/main/README.zh-CN.md#与审查回路的双向集成)。
 
 ## 🧭 架构
 

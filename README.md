@@ -45,6 +45,13 @@ one of **three interchangeable components** that share the same
 - **iterate-harness** — a standalone headless engine (`ih`, npm: `iterate-harness`). **This repo** — runs the same loop in terminal / CI / git hooks, no conversational assistant needed.
 - **[iterate-plugin](https://github.com/jingzhao-l/iterate-plugin)** — a dsh desktop-client plugin. Surfaces the iterate dashboard / review progress inside the dsh UI.
 
+**Related project: [GlassPane](https://github.com/jingzhao-l/GlassPane).** This harness proves what
+the *code* does; GlassPane proves what the *running app* does — a macOS runtime-verification engine
+whose `gp_*` tools measure an accessibility tree, a pixel change and crash signals, and return an
+evidence pack. The two exchange verifiable records through one published contract layer, so a round
+here can treat a measured interface outcome as verified — see
+[Two-way integration with GlassPane](#-two-way-integration-with-glasspane).
+
 It is a **standalone agent harness** built around the iterate review/fix
 loop: the kernel agent loop, React TUI, tool/skill/plugin systems and
 permission layer are iterate-native, with the iterate semantic layer (ported
@@ -68,7 +75,7 @@ The harness has been through two major version lines:
 - [📖 Daily usage](#-daily-usage)
 - [✨ Iterate features](#-iterate-features)
 - [🔧 The seven iterate tools](#-the-seven-iterate-tools)
-- [🔬 GlassPane integration](#-glasspane-integration)
+- [🔬 Two-way integration with GlassPane](#-two-way-integration-with-glasspane)
 - [🧭 Architecture](#-architecture)
 - [📦 Install & tests](#-install--tests)
 - [🚑 Troubleshooting](#-troubleshooting)
@@ -385,12 +392,15 @@ exist prints the current list (status, config, onboard,
 personalize, review, run, resume, log, trend, gate, glasspane-ledger, report, init, doctor,
 dimensions, validate).
 
-## 🔬 GlassPane integration
+## 🔬 Two-way integration with GlassPane
 
 When the code under review is a GUI app, "the tests pass" says nothing about whether the interface
 changed. [GlassPane](https://github.com/jingzhao-l/GlassPane) answers that on macOS, and this harness
-is its counterpart on the review side. The two exchange **verifiable records** rather than prose,
-through the same published contract layer (`iterate-kernel`):
+is its counterpart on the review side. The exchange runs in **both directions** — measured evidence
+comes in, a gated verdict goes back — and in both directions what crosses is a **verifiable record**
+rather than prose, through the same published contract layer (`iterate-kernel`).
+
+**From GlassPane into the loop:**
 
 - **Evidence lands in an audit chain.** `gp_last_evidence` is the call that answers with an evidence
   pack — the other `gp_*` tools return no pack, which is why a dimension declared on them stays
@@ -427,10 +437,27 @@ through the same published contract layer (`iterate-kernel`):
   it back: `/iterate gate` in a session, `ih iterate gate` in a terminal. A contract refusal writes no
   ledger bytes, because a decision that was never made must not become an audit entry.
 
+**From the loop back to GlassPane:**
+
+- **A gate answer both sides can read.** The verdict is a ledger line, not a message. `ih iterate gate`
+  in a terminal and `/iterate gate` in a session read the same record — on the round that sent the
+  re-verification request and on the round that passed and therefore sent nothing — and "refused by
+  contract" stays distinguishable from "no decision was made", because only the latter leaves no bytes.
+- **GlassPane's own repositories run through this loop.** `ITERATE.md` and `iterate.config.yaml` in the
+  GlassPane repository are onboarding artifacts of this ecosystem, so an `/iterate` run there reviews
+  the engine and the MCP shell against the same validation commands its CI enforces — measured
+  2026-09-22: `iterate doctor` 18 checks ok, `iterate fingerprint` no drift.
+
 The division of labour is the point: GlassPane decides what the application did, this harness decides
 whether a round may treat that as verified, and neither judges the other's evidence. The gate reports
 and withholds — it does not execute a recipe, because neither side ships a recipe executor; the
 progress pointer is written by whoever performs the fix.
+
+The exchange from the other side — the ledger format, what a `gp_*` transcript records, and how
+compaction keeps the anchors — is documented in the GlassPane Harness README
+([Two-way integration with iterate-harness](https://github.com/jingzhao-l/glasspane-harness#two-way-integration-with-iterate-harness)),
+and from the engine's own side in
+[GlassPane's two-way integration section](https://github.com/jingzhao-l/GlassPane#two-way-integration-with-the-review-loop).
 
 ## 🧭 Architecture
 
