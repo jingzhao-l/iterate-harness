@@ -4,7 +4,49 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
-（空。2.11.2 收口后没有未归号的条目。）
+（空。2.12.0 收口后没有未归号的条目。）
+
+## [2.12.0] - 2026-10-28
+
+**版本判断：minor。** 这一版新增一个用户可达的控制台页面与一条只读 API，既有形状不动：CLI 命令、参数与退出码集合未变，`requires-python >= 3.10` 未变，决策日志与 `recipeStepGate` 行的格式未变，页面也不写 `.iterate`。判定闸的答案自 GlassPane 交接落地起就能被 `ih iterate gate` 从账本里读出来，但控制台读不到——这一版补的就是这条断链，因此是净新增能力而不是修补。
+
+- **控制台第一次能读到 GlassPane 闸的答案。** `GET /api/v1/gate` 返回
+  `has_gate / total / latest / history / rendered`；`latest` 与 `history` 是同一批记录的结构化字段
+  （轮次、时间、allowed、不变量判定、配方摘要、步骤、修复证据、拒绝码/说明/补救），`rendered` 是
+  `ih iterate gate` 的逐字输出。前端新增「判定闸」页（侧栏 + `g j` 快捷键）：最近一次结论、拒绝原因与
+  可执行的下一步、修复证据来源、历史表逐行点选，以及一键复制终端原文。
+  两个读者共用 `glasspane_recipe._published_gates`：CLI 的 `render_gate_state` 与新的
+  `gate_history` 从同一次 lenient 扫描取数，所以页面与终端不可能对同一轮给出不同答案；测试直接断言
+  `payload["rendered"] == render_gate_state(root)`，并有一条测试把 CLI 文本逐字钉死（多行断言）。
+- **没有记录就显示“没有记录”，并且写清它不等于通过。** `has_gate=false` 只在账本里一条 `recipeStepGate`
+  都没有时出现；空状态页明确写「没有记录代表没人问过，不代表通过」，并给出产生记录的命令
+  （`ih iterate run --rounds 3`）与终端读取方式（`ih iterate gate`）。这与
+  `render_gate_state` 一直以来的口径一致：absence is not a pass。
+- **只读、可安全留在后台。** 路由只调用 `gate_history` / `render_gate_state`，不 append 账本；`limit`
+  （1–500）只裁剪 `history`，`latest` 仍取全量最后一条，`total` 仍是全量计数。根目录校验与其它路由
+  相同（`allowed_roots` / `default_root`，404/403 与既有页面一致），链断裂不会让页面空白——它沿用
+  `decision_log.read_entries` 的宽松投影，这正是 `render_gate_state` 原本的取舍。
+- **文档与帮助同步。** 两份 README 的页面清单与 GlassPane 段落都补上「判定闸 / Gate」及 `g j`；
+  `ih web serve --help` 的页面列表加入 recipe gate；版本号在 `__init__.py`、`npm/package.json`、
+  `frontend/web/package.json` 与 lock 中同步为 2.12.0。
+
+**核验（本机，2026-10-28）：**
+
+- 端到端（真起进程、真令牌、真账本）：`ih web serve --project <tmp> --no-browser --port 8792` 后
+  `curl /api/v1/gate` 返回 `has_gate: true, total: 1, latest.round: 2, latest.allowed: false,
+  latest.refusal.code: RECIPE_GATE_E_INVARIANT_GATE`，`rendered` 与 CLI 文本一致；同一个服务对空项目
+  返回 `has_gate: false, total: 0, latest: null`，`rendered` 以
+  `no recipe gate recorded yet … that is absence, not a pass` 起头。构建产物里能抓到页面标题串
+  （`curl /assets/index-*.js | grep -c 判定闸` → `2`）。
+- `pytest tests/ -q` → **3143 passed, 6 skipped, 1 warning in 111.70s**（新增 11 条：路由 6 条 +
+  `gate_history` 5 条；含 403/404、limit 边界、畸形 payload、CLI 文本逐字）。
+- 反向变异：把 `gate_history` 的 `allowed=bool(...)` 改成 `allowed=True` → 3 条具名测试变红
+  （`test_latest_answer_and_history_order`、`test_records_are_oldest_first_and_carry_the_published_fields`、
+  `test_a_malformed_payload_is_reported_rather_than_raised`）；还原后 sha256 与基线逐字节相等
+  （`daaa8da5…`），同两条文件 11 passed。
+- `ruff check .` → All checks passed；`mypy src` → Success: no issues found in 270 source files；
+  `node --test test/bootstrap.test.js`（npm 包装器）→ 68/68 pass；前端 `tsc --noEmit` 通过、
+  `vitest run` → 6 files / 69 tests passed、`vite build` 成功（dist 里含新页面）。
 
 ## [2.11.2] - 2026-10-26
 

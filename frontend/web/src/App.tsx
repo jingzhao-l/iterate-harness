@@ -17,6 +17,7 @@ import BudgetRate from "./pages/BudgetRate";
 import Checkpoints from "./pages/Checkpoints";
 import ConfigPage from "./pages/ConfigPage";
 import Dashboard from "./pages/Dashboard";
+import Gate from "./pages/Gate";
 import Reports from "./pages/Reports";
 import Runs from "./pages/Runs";
 import Trend from "./pages/Trend";
@@ -32,6 +33,7 @@ const NAV_ITEMS = [
   { to: "/config", label: "配置", end: false },
   { to: "/reports", label: "报告", end: false },
   { to: "/trend", label: "趋势", end: false },
+  { to: "/gate", label: "判定闸", end: false },
 ];
 
 // Single-key → route map for the "g <key>" jump shortcuts.
@@ -45,6 +47,7 @@ const G_BUFFER_ROUTES: Record<string, string> = {
   p: "/config",
   g: "/reports",
   t: "/trend",
+  j: "/gate",
 };
 
 const CONN_LABELS: Record<string, string> = {
@@ -223,6 +226,7 @@ export default function App(): React.JSX.Element {
             <Route path="/config" element={<ConfigPage />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/trend" element={<Trend />} />
+            <Route path="/gate" element={<Gate />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </ErrorBoundary>

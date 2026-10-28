@@ -945,8 +945,8 @@ def render_ledger_link(project_root: Path | str, env: Mapping[str, str] | None =
     return "\n".join(lines)
 
 
-def render_gate_state(project_root: Path | str) -> str:
-    """The last ④ answer this project recorded, read back out of its own ledger.
+def _published_gates(project_root: Path | str) -> list[tuple[int, str, Mapping[str, object]]]:
+    """Every published ④ answer in this project's ledger, oldest first.
 
     Read through the lenient projector, not the chain verifier: this answers "what did the loop
     publish", and it must still answer after a chain break elsewhere. The distinction is the one
@@ -954,20 +954,28 @@ def render_gate_state(project_root: Path | str) -> str:
     """
     from .decision_log import read_entries  # local: decision_log imports nothing from here
 
-    for entry in reversed(read_entries(project_root)):
+    published: list[tuple[int, str, Mapping[str, object]]] = []
+    for entry in read_entries(project_root):
         data = entry.data if isinstance(entry.data, Mapping) else {}
         gate = data.get(RECIPE_GATE_DATA_KEY)
-        if not isinstance(gate, Mapping):
-            continue
+        if isinstance(gate, Mapping):
+            published.append((entry.round, str(entry.timestamp), gate))
+    return published
+
+
+def render_gate_state(project_root: Path | str) -> str:
+    """The last ④ answer this project recorded, read back out of its own ledger."""
+    for round_number, _timestamp, gate in reversed(_published_gates(project_root)):
         lines = [
-            f"round {entry.round}: recipe gate — "
+            f"round {round_number}: recipe gate — "
             + ("ALLOWED" if gate.get("allowed") else "not allowed"),
             f"  invariant verdict: {gate.get('invariantState', 'unknown')}",
         ]
         if gate.get("recipeDigest"):
             lines.append(f"  recipe: {gate['recipeDigest']}")
-        if isinstance(gate.get("steps"), list) and gate["steps"]:
-            lines.append(f"  steps configured: {', '.join(str(step) for step in gate['steps'])}")
+        steps = gate.get("steps")
+        if isinstance(steps, list) and steps:
+            lines.append(f"  steps configured: {', '.join(str(step) for step in steps)}")
         proof = gate.get("fixProof")
         if isinstance(proof, Mapping):
             lines.append(
@@ -983,6 +991,89 @@ def render_gate_state(project_root: Path | str) -> str:
         "no recipe gate recorded yet: it is published by a round that measured an invariant verdict, "
         "so a project that has not run one has nothing to report here — that is absence, not a pass"
     )
+
+
+@dataclass(frozen=True)
+class GateRecord:
+    """One published ④ answer, shaped for readers other than the CLI renderer.
+
+    The CLI prints this answer as text; the WebUI needs the same facts as fields so it can show a
+    history and let the operator pick a round. Both read ``_published_gates``, so the two surfaces
+    cannot disagree about what the loop published.
+    """
+
+    round: int
+    timestamp: str
+    allowed: bool
+    invariant_verdict: str
+    recipe_digest: str | None = None
+    steps: tuple[str, ...] = ()
+    fix_proof: dict[str, str] | None = None
+    refusal: dict[str, str] | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        """JSON shape used by ``GET /api/v1/gate`` (snake_case, absent-as-null)."""
+        return {
+            "round": self.round,
+            "timestamp": self.timestamp,
+            "allowed": self.allowed,
+            "invariant_verdict": self.invariant_verdict,
+            "recipe_digest": self.recipe_digest,
+            "steps": list(self.steps),
+            "fix_proof": dict(self.fix_proof) if self.fix_proof is not None else None,
+            "refusal": dict(self.refusal) if self.refusal is not None else None,
+        }
+
+
+def _gate_field(value: object) -> str:
+    return "" if value is None else str(value)
+
+
+def gate_history(project_root: Path | str) -> tuple[GateRecord, ...]:
+    """Every published ④ answer this project recorded, oldest first.
+
+    Same lenient read as :func:`render_gate_state`: a chain break elsewhere must not hide what
+    this project's own loop published. An empty tuple means "nobody asked", never "it passed".
+    """
+    records: list[GateRecord] = []
+    for round_number, timestamp, gate in _published_gates(project_root):
+        steps = gate.get("steps")
+        proof = gate.get("fixProof")
+        refusal = gate.get("refusal")
+        records.append(
+            GateRecord(
+                round=round_number,
+                timestamp=timestamp,
+                allowed=bool(gate.get("allowed")),
+                invariant_verdict=_gate_field(gate.get("invariantState", "unknown")) or "unknown",
+                recipe_digest=(
+                    _gate_field(gate.get("recipeDigest")) if gate.get("recipeDigest") else None
+                ),
+                steps=tuple(str(step) for step in steps) if isinstance(steps, list) else (),
+                fix_proof=(
+                    {
+                        "entry_id": _gate_field(proof.get("entryId")),
+                        "operation_id": _gate_field(proof.get("operationId")),
+                        "outcome": _gate_field(proof.get("outcome")),
+                        "ledger": _gate_field(proof.get("ledger")),
+                        "ledger_source": _gate_field(proof.get("ledgerSource")),
+                        "created_at": _gate_field(proof.get("createdAt")),
+                    }
+                    if isinstance(proof, Mapping)
+                    else None
+                ),
+                refusal=(
+                    {
+                        "code": _gate_field(refusal.get("code")),
+                        "message": _gate_field(refusal.get("message")),
+                        "remedy": _gate_field(refusal.get("remedy")),
+                    }
+                    if isinstance(refusal, Mapping)
+                    else None
+                ),
+            )
+        )
+    return tuple(records)
 
 
 def recipe_step_gate(
@@ -1084,6 +1175,7 @@ __all__ = [
     "GATE_E_LEDGER",
     "GATE_E_NO_VERDICT",
     "GATE_E_UNPROVEN",
+    "GateRecord",
     "RECIPE_E_ABSENT",
     "RECIPE_E_CONTEST",
     "RECIPE_E_NOT_ASKED",
@@ -1103,6 +1195,7 @@ __all__ = [
     "StepGate",
     "fix_proof",
     "format_recipe_error",
+    "gate_history",
     "ledger_link_path",
     "link_ledger",
     "link_ledger_now",

@@ -303,6 +303,13 @@ table.data tr:last-child td {
   overflow-x: auto;
 }
 
+/* Selected row in a clickable history table (recipe-gate page, §17.3 P9):
+   the detail panel above follows the selection, so the row must stay visibly
+   chosen after the click — a hover-only cue would hide which round is shown. */
+table.data tr.row-selected td {
+  background: var(--accent-soft);
+}
+
 /* ---- trend page (design §17.3 P8) ---- */
 .trend-columns {
   display: grid;

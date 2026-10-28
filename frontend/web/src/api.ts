@@ -8,6 +8,7 @@ import type {
   CheckpointView,
   ConfigView,
   FindingsResponse,
+  GateView,
   OperationResult,
   ReportPreview,
   ReportView,
@@ -217,6 +218,11 @@ export const api = {
     request<TrendReport>(
       `/trend${buildQuery(projectRoot, { top, history })}`,
     ),
+
+  // Recipe gate: the latest ④ answer plus every round that published one,
+  // read from this project's decision log. Read-only; absence is its own state.
+  gate: (projectRoot?: string, limit = 100): Promise<GateView> =>
+    request<GateView>(`/gate${buildQuery(projectRoot, { limit })}`),
 
   // Team roster: one row per worker the harness is tracking. Read-only, so it
   // is safe to poll while a loop is running. `tail=0` returns sizes without

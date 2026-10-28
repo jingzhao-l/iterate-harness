@@ -382,3 +382,44 @@ export interface StopAgentResult {
   status_now: string | null;
   return_code: number | null;
 }
+
+// ---- Recipe gate (design §17.3 P9) ----
+// The ④ answer a round publishes when it measured an invariant verdict. The
+// CLI has printed this since the GlassPane hand-off; the console now reads the
+// same records. `has_gate: false` means "nobody asked", never "it passed".
+
+export interface GateFixProof {
+  entry_id: string;
+  operation_id: string;
+  outcome: string;
+  ledger: string;
+  ledger_source: string;
+  created_at: string;
+}
+
+export interface GateRefusal {
+  code: string;
+  message: string;
+  remedy: string;
+}
+
+export interface GateRecord {
+  round: number;
+  timestamp: string;
+  allowed: boolean;
+  invariant_verdict: string;
+  recipe_digest: string | null;
+  steps: string[];
+  fix_proof: GateFixProof | null;
+  refusal: GateRefusal | null;
+}
+
+export interface GateView {
+  project_root: string;
+  generated_at: string;
+  has_gate: boolean;
+  total: number;
+  latest: GateRecord | null;
+  history: GateRecord[];
+  rendered: string;
+}

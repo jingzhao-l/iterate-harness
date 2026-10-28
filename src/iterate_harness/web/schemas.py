@@ -74,6 +74,22 @@ class TrendView(BaseModel):
     open_by_dimension: dict[str, int] = Field(default_factory=dict)
 
 
+class GateView(BaseModel):
+    """Recipe-gate answers published to this project's decision log (design §17.3 P9).
+
+    ``has_gate`` false means no round recorded one — absence, not a pass.
+    ``rendered`` is the exact CLI text for the latest answer.
+    """
+
+    project_root: str
+    generated_at: str
+    has_gate: bool
+    total: int
+    latest: dict[str, Any] | None = None
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    rendered: str
+
+
 class RunSummary(BaseModel):
     """One decision-log entry in the runs overview (design §17.3 P2)."""
 

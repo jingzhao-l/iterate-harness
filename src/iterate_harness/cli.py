@@ -2180,9 +2180,10 @@ def web_serve(
 ) -> None:
     """Start the WebUI management console (FastAPI + React frontend).
 
-    Serves the dashboard, runs timeline, trend, checkpoints, budget, config,
-    and reports on a local loopback address and opens the browser. The backend
-    binds to 127.0.0.1 by default and never exposes itself externally.
+    Serves the dashboard, runs timeline, trend, the recipe gate, checkpoints,
+    budget, config, and reports on a local loopback address and opens the
+    browser. The backend binds to 127.0.0.1 by default and never exposes itself
+    externally.
     """
     from iterate_harness.web.api import serve as web_serve_backend
 

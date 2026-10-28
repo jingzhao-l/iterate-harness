@@ -337,7 +337,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
-Workspaces, **Team**, Checkpoints, Budget & Rate, Config, Reports. The **Trend**
+**Gate**, Workspaces, **Team**, Checkpoints, Budget & Rate, Config, Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
 entries arrive — no terminal needed to tell whether a loop is actually
@@ -346,7 +346,12 @@ running right now — subprocess teammates, in-process teammates and shell tasks
 side by side, with elapsed time, output size and the last thing each one said —
 and is the only way to stop a single stuck worker from the browser (二次确认 +
 audited); it polls while any worker is live and stops polling once the roster is
-quiet.
+quiet. The **Gate** page (`g j`) is the console's half of the GlassPane gate:
+the latest recipe-gate answer, the refusal code with its executable remedy, and
+every round that published one — click a round to inspect its verdict, steps and
+fix evidence, or copy the exact `ih iterate gate` text. With no record the page
+says 尚未记录 (absence, not a pass), so a project that never asked cannot look
+like one that passed.
 
 ### Cost, resources & gates
 
@@ -434,7 +439,8 @@ rather than prose, through the same published contract layer (`iterate-kernel`).
   chain-verified ledger line recording a passing outcome against an operation id. Anything absent or
   unmeasured is refused by name (`RECIPE_GATE_E_*`). The answer is recorded in the project's ledger —
   on the round that sends, and on a round that passed and therefore sent nothing — and both doors read
-  it back: `/iterate gate` in a session, `ih iterate gate` in a terminal. A contract refusal writes no
+  it back: `/iterate gate` in a session, `ih iterate gate` in a terminal, and the WebUI's **Gate**
+  page (`g j`) in the console. A contract refusal writes no
   ledger bytes, because a decision that was never made must not become an audit entry.
 
 **From the loop back to GlassPane:**
