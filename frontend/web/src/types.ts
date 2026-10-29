@@ -423,3 +423,48 @@ export interface GateView {
   history: GateRecord[];
   rendered: string;
 }
+
+// ---- Scheduled reviews (design §17.3 P10) ----
+// The cron registry and daemon are machine-global (not per project), so this
+// view carries no project root. Times are ISO-8601 with an offset.
+
+export interface SchedulerStatus {
+  running: boolean;
+  pid: number | null;
+  total_jobs: number;
+  enabled_jobs: number;
+  log_file: string;
+  history_file: string;
+}
+
+export interface CronJobView {
+  name: string;
+  schedule: string;
+  timezone: string | null;
+  command: string;
+  cwd: string;
+  enabled: boolean;
+  schedule_valid: boolean;
+  next_run: string | null;
+  last_run: string | null;
+  last_status: string | null;
+}
+
+export interface CronHistoryView {
+  name: string;
+  command: string;
+  started_at: string;
+  ended_at: string;
+  status: string;
+  returncode: number | null;
+  duration_s: number | null;
+  stdout_tail: string;
+  stderr_tail: string;
+}
+
+export interface SchedulesView {
+  generated_at: string;
+  scheduler: SchedulerStatus;
+  jobs: CronJobView[];
+  history: CronHistoryView[];
+}

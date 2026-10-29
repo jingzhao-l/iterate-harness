@@ -330,14 +330,15 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Decision replay** — `ih iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording.
 - **Changed-only quick review** — `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing.
 - **Batch ranking** — `ih iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch.
-- **Scheduled review** — `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library.
+- **Scheduled review** — `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library. The WebUI **Schedules** page (`g s`) shows the registry, the next run and the last executions, so "did last night's run pass?" no longer needs a terminal.
 - **Cron scheduler daemon** — `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`).
 
 ### WebUI management console
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
-**Gate**, Workspaces, **Team**, Checkpoints, Budget & Rate, Config, Reports. The **Trend**
+**Gate**, **Schedules**, Workspaces, **Team**, Checkpoints, Budget & Rate, Config,
+Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
 entries arrive — no terminal needed to tell whether a loop is actually
@@ -352,6 +353,14 @@ every round that published one — click a round to inspect its verdict, steps a
 fix evidence, or copy the exact `ih iterate gate` text. With no record the page
 says 尚未记录 (absence, not a pass), so a project that never asked cannot look
 like one that passed.
+
+The **Schedules** page (`g s`) is the console's view of the machine-level cron
+registry: every registered job with its cron expression, timezone, freshly
+computed next run and last result, the scheduler's liveness (a stopped daemon
+is stated as stopped — the page says nothing will fire), and the recent
+execution history with exit code, duration and bounded stdout/stderr tails. Jobs
+are still added and removed from the CLI (`ih iterate schedule`); the page is
+read-only and machine-scoped, so it does not follow the project-root selector.
 
 ### Cost, resources & gates
 

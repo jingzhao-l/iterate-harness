@@ -90,6 +90,19 @@ class GateView(BaseModel):
     rendered: str
 
 
+class SchedulesView(BaseModel):
+    """Machine-level scheduled reviews and their execution history (design §17.3 P10).
+
+    The cron registry and daemon are global to this machine, not scoped to a
+    project, so this view carries no project root.
+    """
+
+    generated_at: str
+    scheduler: dict[str, Any] = Field(default_factory=dict)
+    jobs: list[dict[str, Any]] = Field(default_factory=list)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class RunSummary(BaseModel):
     """One decision-log entry in the runs overview (design §17.3 P2)."""
 

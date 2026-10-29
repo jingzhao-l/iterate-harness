@@ -13,6 +13,7 @@ import type {
   ReportPreview,
   ReportView,
   RunSummary,
+  SchedulesView,
   StartRequest,
   StatusResponse,
   StopAgentResult,
@@ -223,6 +224,11 @@ export const api = {
   // read from this project's decision log. Read-only; absence is its own state.
   gate: (projectRoot?: string, limit = 100): Promise<GateView> =>
     request<GateView>(`/gate${buildQuery(projectRoot, { limit })}`),
+
+  // Scheduled reviews: the machine-level cron registry, scheduler liveness and
+  // recent executions (with bounded output tails). Read-only.
+  schedules: (limit = 50): Promise<SchedulesView> =>
+    request<SchedulesView>(`/schedules${buildQuery(undefined, { limit })}`),
 
   // Team roster: one row per worker the harness is tracking. Read-only, so it
   // is safe to poll while a loop is running. `tail=0` returns sizes without

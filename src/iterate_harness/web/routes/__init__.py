@@ -6,7 +6,7 @@ Each route module defines one or more route functions registered in
 
 from __future__ import annotations
 
-from . import agents, chat, checkpoints, config, gate, reports, runs, status, trend, workspaces
+from . import agents, chat, checkpoints, config, gate, reports, runs, schedules, status, trend, workspaces
 
 __all__ = [
     "agents",
@@ -16,6 +16,7 @@ __all__ = [
     "gate",
     "reports",
     "runs",
+    "schedules",
     "status",
     "trend",
     "workspaces",

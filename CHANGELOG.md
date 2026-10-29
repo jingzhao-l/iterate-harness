@@ -4,7 +4,47 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
-（空。2.12.0 收口后没有未归号的条目。）
+（空。2.13.0 收口后没有未归号的条目。）
+
+## [2.13.0] - 2026-10-29
+
+**版本判断：minor。** 新增一个用户可达的控制台页面与一条只读 API；既有形状不动：CLI 命令、参数与退出码集合未变，cron 注册表 / 历史文件的格式未变，页面不写任何文件。定时评审从 `ih iterate schedule` 起就能被 CLI 管理，但操作台既看不到“登记了什么”，也看不到“昨晚那一跑过没过”——这一版补的是这条断链。
+
+- **控制台第一次能看到本机的定时任务。** `GET /api/v1/schedules` 返回
+  `scheduler`（是否运行、pid、启用/总数、日志与历史文件路径）、`jobs`（名称、cron 表达式、时区、
+  命令、工作目录、启用状态、表达式是否有效、下次运行、上次运行与结果）与 `history`（每次执行的开始/结束、
+  状态、退出码、耗时、stdout/stderr 尾部）。数据来自 `scheduler_status()`、`load_cron_jobs()` 与
+  `load_history()`，与 `ih cron status|history --json` 同源。
+- **“下次运行”是每次读取时重算的，不是注册表里的旧值。** 注册表里的 `next_run` 只在 daemon 跑过之后
+  刷新；调度器停了一周再打开页面，旧值会是一个已经过去的时间。路由用 `next_run_time(schedule,
+  tz_name=…)` 以当前时刻重算，并保留时区语义（`0 9 * * 1-5` + `Asia/Shanghai` → 01:00 UTC）；表达式
+  非法时 `schedule_valid=false`、`next_run=null`，页面显示“无效表达式”而不是猜一个时间。
+- **历史读取做了归一化与边界。** 旧写入器的 `jobName` 归一为 `name`；`duration_s` 由起止时间算出；
+  stdout/stderr 只带尾部 2000 字符（完整输出仍在日志文件里），单次响应不会被一条巨长的构建日志撑爆。
+  注册表或历史文件损坏时沿用既有 `load_*` 的降级（空列表 + warning），页面显示空态而不是 500。
+- **前端新增「定时任务」页（侧栏 + `g s`）。** 四张状态卡（调度器、计划数、最近一次执行、日志/历史文件名）、
+  计划表（下次运行、上次结果、命令与目录）、执行历史表（状态徽标、退出码、耗时、可展开的 stdout/stderr 尾部）。
+  关键状态写明：调度器没在跑而计划已登记时，页面单独给出“计划不会自动执行”的提示与
+  `ih iterate cron start`；没有计划/没有历史时给出产生数据的命令。本页属于本机（`~/.iterate-harness/data`），
+  不随项目根目录切换，页面顶部明确说明。
+- **文档与帮助同步。** 两份 README 的页面清单、Scheduled review 条目与 WebUI 段落都补上 Schedules/定时任务；
+  `ih web serve --help` 的页面列表加入 scheduled reviews；版本号在 `__init__.py`、`npm/package.json`、
+  `frontend/web/package.json` 与 lock 中同步为 2.13.0。
+
+**核验（本机，2026-10-29）：**
+
+- 端到端（真起进程、真令牌、真注册表/历史）：`ITERATE_DATA_DIR=<tmp> ih web serve --no-browser` 后
+  `curl /api/v1/schedules` 返回 `scheduler.running=false, total_jobs=1, enabled_jobs=1`，
+  `jobs[0].next_run=2026-10-30T01:00:00+00:00`（`0 9 * * 1-5` + Asia/Shanghai 的 09:00），
+  `last_status=success`，`history` 两条按时间正序、`duration_s=123.0/42.5`、失败那条带
+  `stderr_tail="threshold gate: FAIL"`；构建产物 bundle 能抓到「定时任务」串。
+- `pytest tests/ -q` → **3149 passed, 6 skipped, 1 warning in 117.90s**（新增 6 条：空注册表、时区下次运行、
+  非法表达式、历史归一化与尾部截断、损坏文件降级、limit 边界）。
+- 反向变异：把 `_tail()` 的截断改成原样返回 → `test_history_is_normalised_with_duration_and_bounded_tails`
+  变红；还原后 sha256 与基线逐字节相等（`64d3676d…`），复测 6 passed。
+- `ruff check .` → All checks passed；`mypy src` → Success: no issues found in 271 source files；
+  `node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` →
+  7 files / 79 tests passed、`vite build` 成功。
 
 ## [2.12.0] - 2026-10-28
 
