@@ -74,38 +74,41 @@ function withAuth(init?: RequestInit): RequestInit {
   return { ...init, headers };
 }
 
+/** Decode a non-2xx response into an ApiError carrying the backend's text. */
+async function throwApiError(response: Response): Promise<never> {
+  let message = `HTTP ${response.status}`;
+  let detail: unknown = undefined;
+  try {
+    const body = (await response.json()) as { message?: string; detail?: unknown };
+    // FastAPI reports human-readable failures under ``detail`` (a string for
+    // HTTPException, a list of issues for a 422). Every backend error message
+    // was being dropped on the floor, so the UI showed "控制失败：HTTP 409"
+    // with no indication of what to do — including the 401 that names the
+    // exact recovery command. Prefer whichever field actually carries text.
+    if (typeof body.detail === "string" && body.detail) {
+      message = body.detail;
+    } else if (Array.isArray(body.detail) && body.detail.length > 0) {
+      message = body.detail
+        .map((issue) => {
+          const entry = issue as { msg?: unknown; loc?: unknown };
+          const loc = Array.isArray(entry.loc) ? entry.loc.join(".") : "";
+          const text = typeof entry.msg === "string" ? entry.msg : JSON.stringify(entry);
+          return loc ? `${loc}: ${text}` : text;
+        })
+        .join("; ");
+    } else if (body.message) {
+      message = body.message;
+    }
+    detail = body.detail;
+  } catch {
+    // non-JSON error body; keep default message
+  }
+  throw new ApiError(response.status, message, detail);
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, withAuth(init));
-  if (!response.ok) {
-    let message = `HTTP ${response.status}`;
-    let detail: unknown = undefined;
-    try {
-      const body = (await response.json()) as { message?: string; detail?: unknown };
-      // FastAPI reports human-readable failures under ``detail`` (a string for
-      // HTTPException, a list of issues for a 422). Every backend error message
-      // was being dropped on the floor, so the UI showed "控制失败：HTTP 409"
-      // with no indication of what to do — including the 401 that names the
-      // exact recovery command. Prefer whichever field actually carries text.
-      if (typeof body.detail === "string" && body.detail) {
-        message = body.detail;
-      } else if (Array.isArray(body.detail) && body.detail.length > 0) {
-        message = body.detail
-          .map((issue) => {
-            const entry = issue as { msg?: unknown; loc?: unknown };
-            const loc = Array.isArray(entry.loc) ? entry.loc.join(".") : "";
-            const text = typeof entry.msg === "string" ? entry.msg : JSON.stringify(entry);
-            return loc ? `${loc}: ${text}` : text;
-          })
-          .join("; ");
-      } else if (body.message) {
-        message = body.message;
-      }
-      detail = body.detail;
-    } catch {
-      // non-JSON error body; keep default message
-    }
-    throw new ApiError(response.status, message, detail);
-  }
+  if (!response.ok) await throwApiError(response);
   // 204 / empty responses
   const text = await response.text();
   if (!text) return undefined as T;
@@ -128,6 +131,39 @@ function buildQuery(
   }
   const qs = params.toString();
   return qs ? `?${qs}` : "";
+}
+
+export type TrendExportFormat = "md" | "csv" | "json";
+
+export interface TrendExportDownload {
+  filename: string;
+  text: string;
+  contentType: string;
+}
+
+/**
+ * Fetch a trend export as text plus the server's filename. The server owns the
+ * filename (it stamps the report's own generated_at), so the download matches
+ * the data even when the browser clock is off.
+ */
+export async function downloadTrendExport(
+  projectRoot: string | undefined,
+  format: TrendExportFormat,
+  top = 20,
+  history = 20,
+): Promise<TrendExportDownload> {
+  const response = await fetch(
+    `${API_BASE}/trend/export${buildQuery(projectRoot, { format, top, history })}`,
+    withAuth(),
+  );
+  if (!response.ok) await throwApiError(response);
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+  return {
+    filename: match?.[1] ?? `iterate-trend.${format}`,
+    text: await response.text(),
+    contentType: response.headers.get("Content-Type") ?? "",
+  };
 }
 
 export const api = {
@@ -219,6 +255,9 @@ export const api = {
     request<TrendReport>(
       `/trend${buildQuery(projectRoot, { top, history })}`,
     ),
+
+  // Download the same report as a Markdown digest, CSV table or JSON payload.
+  exportTrend: downloadTrendExport,
 
   // Recipe gate: the latest ④ answer plus every round that published one,
   // read from this project's decision log. Read-only; absence is its own state.

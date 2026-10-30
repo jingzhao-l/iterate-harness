@@ -5,6 +5,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import type { TrendExportFormat } from "../api";
+import { downloadTextFile } from "../download";
 import { useWebUi } from "../store";
 import {
   directionLabel,
@@ -121,6 +123,8 @@ export default function Trend(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAllRuns, setShowAllRuns] = useState(false);
+  const [exporting, setExporting] = useState<TrendExportFormat | null>(null);
+  const pushToast = useWebUi((state) => state.pushToast);
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -152,15 +156,69 @@ export default function Trend(): React.JSX.Element {
     [runs, showAllRuns],
   );
 
+  const canExport = reportHasData(report);
+
+  // The export carries the same window the page is showing (top=50,
+  // history=100), so a downloaded digest never disagrees with the screen.
+  const exportTrend = async (format: TrendExportFormat): Promise<void> => {
+    setExporting(format);
+    try {
+      const { filename, text } = await api.exportTrend(projectRoot, format, 50, 100);
+      const mime =
+        format === "json"
+          ? "application/json"
+          : format === "csv"
+            ? "text/csv;charset=utf-8"
+            : "text/markdown;charset=utf-8";
+      downloadTextFile(filename, text, mime);
+      pushToast("success", `已导出 ${filename}`);
+    } catch (caught) {
+      pushToast(
+        "error",
+        `导出失败：${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+    } finally {
+      setExporting(null);
+    }
+  };
+
   const header = (
     <div className="page-head">
       <div>
         <h1 className="page-title">趋势</h1>
-        <p className="page-sub">跨运行的 new / fixed / regressed 变化与顽固问题</p>
+        <p className="page-sub">
+          跨运行的 new / fixed / regressed 变化与顽固问题 · 可导出 Markdown / CSV / JSON
+        </p>
       </div>
-      <button className="btn" onClick={() => void load()} disabled={loading}>
-        {loading ? "刷新中…" : "刷新"}
-      </button>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <button
+          className="btn"
+          onClick={() => void exportTrend("md")}
+          disabled={!canExport || exporting !== null}
+          title="把这份趋势导出成可直接贴进 PR / 周报的 Markdown"
+        >
+          {exporting === "md" ? "导出中…" : "导出 Markdown"}
+        </button>
+        <button
+          className="btn"
+          onClick={() => void exportTrend("csv")}
+          disabled={!canExport || exporting !== null}
+          title="每次运行一行的 CSV，可直接进表格"
+        >
+          {exporting === "csv" ? "导出中…" : "导出 CSV"}
+        </button>
+        <button
+          className="btn"
+          onClick={() => void exportTrend("json")}
+          disabled={!canExport || exporting !== null}
+          title="与页面完全一致的 JSON（脚本消费）"
+        >
+          {exporting === "json" ? "导出中…" : "导出 JSON"}
+        </button>
+        <button className="btn" onClick={() => void load()} disabled={loading}>
+          {loading ? "刷新中…" : "刷新"}
+        </button>
+      </div>
     </div>
   );
 

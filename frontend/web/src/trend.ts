@@ -54,3 +54,21 @@ export function newestFirst(runs: TrendRun[]): TrendRun[] {
 export function reportHasData(report: TrendReport | null): boolean {
   return Boolean(report && (report.has_data || report.runs.length > 0 || report.tracked > 0));
 }
+
+export type TrendExportFormat = "md" | "csv" | "json";
+
+/**
+ * Client-side fallback name for a trend export. The server normally supplies
+ * the filename (stamped with the report's generated_at), but a proxy that
+ * strips Content-Disposition must not leave the download unnamed.
+ */
+export function trendExportFilename(
+  format: TrendExportFormat,
+  at: Date = new Date(),
+): string {
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const stamp =
+    `${at.getUTCFullYear()}${pad(at.getUTCMonth() + 1)}${pad(at.getUTCDate())}` +
+    `-${pad(at.getUTCHours())}${pad(at.getUTCMinutes())}${pad(at.getUTCSeconds())}`;
+  return `iterate-trend-${stamp}.${format}`;
+}

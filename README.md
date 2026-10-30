@@ -342,7 +342,9 @@ Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
 entries arrive — no terminal needed to tell whether a loop is actually
-converging. The **Team** page (`g a`) shows every worker the serving process is
+converging. It also exports the window it is showing: a Markdown digest to paste
+into a PR or weekly report, a one-row-per-run CSV for a spreadsheet, and the
+exact page payload as JSON. The **Team** page (`g a`) shows every worker the serving process is
 running right now — subprocess teammates, in-process teammates and shell tasks
 side by side, with elapsed time, output size and the last thing each one said —
 and is the only way to stop a single stuck worker from the browser (二次确认 +

@@ -4,7 +4,28 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
-（空。2.13.0 收口后没有未归号的条目。）
+（空。2.14.0 收口后没有未归号的条目。）
+
+## [2.14.0] - 2026-10-30
+
+**版本判断：minor。** 新增一条只读导出 API 与趋势页的三个导出入口；既有形状不动：`GET /api/v1/trend` 的响应未变，CLI 命令与退出码集合未变，页面仍然只读，不写 `.iterate` 状态。趋势页此前只能“看”：想把它贴进 PR、周报或表格，只能回终端跑 `ih iterate trend --json` 再自己转格式——这一版补的是这条断链。
+
+- **趋势可以带走了。** `GET /api/v1/trend/export?format=md|csv|json`（`top` / `history` 与页面同参）返回三种形态：Markdown 摘要（标题、汇总行、逐次运行表、按维度统计、顽固与未解决 finding，按严重度排序）、每次运行一行的 CSV（列名固定为 `index,timestamp,round,verdict,mode,total,reported_total,new,fixed,regressed,unchanged`，由 `csv` 模块按 RFC 4180 转义）、以及与页面完全一致的 JSON。响应带 `Content-Disposition: attachment`，文件名用报告自身的 `generated_at`（UTC，可排序），浏览器时钟不准也不会对不上数据。
+- **Markdown 是“交给别人”的形态，不是终端文本的复刻。** 它由新的纯函数 `render_trend_markdown()` 生成，与既有 `render_trend_report()`（CLI 对齐文本）并存：前者给 PR / 周报，后者继续给管道与日志，互不改写。无数据时导出仍可用，并写明“跑一次 `ih iterate run` 后即可导出”，而不是给一个空文件。
+- **CSV 只导运行级列。** 逐条 finding 已在决策日志里，塞进同一张表会变成无法合并的锯齿表；顽固/未解决清单由 Markdown 与 JSON 承担。`history` 只裁剪导出的运行行数，与页面窗口一致。
+- **前端趋势页新增三个导出按钮**（Markdown / CSV / JSON），沿用页面正在显示的口径（`top=50, history=100`），导出成功给出文件名提示；无数据时按钮禁用并说明原因。下载走浏览器 Blob，不额外引入依赖。
+- **文档同步。** 两份 README 的趋势页段落与“逐次运行趋势历史”条目补上导出能力；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.14.0。
+
+**核验（本机，2026-10-30）：**
+
+- 端到端（真起进程、真令牌、真决策日志与趋势库，3 次运行、1 条连续 3 次未修复的 finding）：`curl /api/v1/trend/export?format=md` 返回
+  `content-type: text/markdown; charset=utf-8`、`content-disposition: attachment; filename="iterate-trend-20261030-042346.md"`，
+  正文含汇总行“运行：共 3 次，窗口内 3 次 / 跟踪 finding：1 · 未解决 1 · 顽固 1”、逐次运行表与顽固 finding 段；
+  `format=csv&history=2` 返回 `text/csv`，表头为固定 11 列、两行数据（run 2/3）；`format=json` 的 `runs` 为 3、`stubborn_findings` 为 1；
+  `format=pdf` 返回 422。
+- `pytest tests/ -q` → **3162 passed, 6 skipped, 1 warning in 114.31s**（新增 5 条 Markdown/CSV 单元测试 + 8 条路由测试）。
+- `ruff check .` → All checks passed；`mypy src` → Success: no issues found in 271 source files；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 8 files / 81 tests passed、`vite build` 成功。
+- 反向变异：把逐次运行表里的 `run.new` 改成常量 0，`test_markdown_digest_has_a_run_table_and_the_summary_line` 与路由的 `test_markdown_export_is_a_download_named_after_the_report` 变红；还原后 sha256 与基线逐字节相等（`0d11c8ca…`），复测 13 passed。
 
 ## [2.13.0] - 2026-10-29
 

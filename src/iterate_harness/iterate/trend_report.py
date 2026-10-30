@@ -25,6 +25,8 @@ guess):
 
 from __future__ import annotations
 
+import csv
+import io
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -456,6 +458,137 @@ def new_findings_at_or_above(report: TrendReport, severity: str) -> int:
     )
 
 
+#: Columns of the CSV export, in order. Stable, machine-friendly names so a
+#: spreadsheet column never depends on a translated label.
+TREND_CSV_COLUMNS = (
+    "index",
+    "timestamp",
+    "round",
+    "verdict",
+    "mode",
+    "total",
+    "reported_total",
+    "new",
+    "fixed",
+    "regressed",
+    "unchanged",
+)
+
+
+def trend_csv(report: TrendReport) -> str:
+    """Render one row per finished run as CSV (RFC 4180 quoting via ``csv``).
+
+    Only run-level columns are exported: the per-run findings already live in
+    the decision log and would turn the table into a ragged, unmergeable sheet.
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(TREND_CSV_COLUMNS)
+    for run in report.runs:
+        writer.writerow(
+            [
+                run.index,
+                run.timestamp,
+                run.round,
+                run.verdict,
+                run.mode,
+                run.total,
+                run.reported_total,
+                run.new,
+                run.fixed,
+                run.regressed,
+                run.unchanged,
+            ]
+        )
+    return buffer.getvalue()
+
+
+def _md_finding(finding: dict[str, Any]) -> str:
+    location = _format_location(finding)
+    dimension = str(finding.get("dimension") or "unknown")
+    severity = str(finding.get("severity") or "medium")
+    summary = str(finding.get("summary") or "").replace("\n", " ").strip()
+    runs = int(finding.get("runs") or 0)
+    last_seen = str(finding.get("last_seen") or "")
+    suffix = f"（已 {runs} 次，最后 {last_seen}）" if runs else ""
+    return f"- **[{severity}]** `{location}` · {dimension} · {summary}{suffix}"
+
+
+def render_trend_markdown(report: TrendReport) -> str:
+    """Render the trend as a paste-ready Markdown digest (console export).
+
+    This is the form an operator actually hands to a reviewer or a weekly
+    report: the run table first, then what is still open, worst first. The
+    plain-text CLI report stays untouched so existing logs/pipes do not move.
+    """
+    lines = [
+        f"# 迭代趋势 · {report.project_root}",
+        "",
+        f"- 生成时间：{report.generated_at}",
+        f"- 运行：共 {report.total_runs} 次，窗口内 {len(report.runs)} 次",
+        (
+            f"- 跟踪 finding：{report.tracked} · 未解决 {report.open} · "
+            f"已修复 {report.fixed} · 顽固 {report.stubborn}"
+        ),
+        "",
+    ]
+    if not report.has_data:
+        lines.extend(
+            [
+                "还没有已完成的运行：`.iterate/decision-log.jsonl` 里没有 `report` 记录。",
+                "跑一次 `ih iterate run`（或 `ih iterate review`）后即可导出。",
+                "",
+            ]
+        )
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            "## 逐次运行",
+            "",
+            "| # | 时间 | 轮次 | 结论 | 总数 | 新增 | 修复 | 回退 |",
+            "|---:|---|---:|---|---:|---:|---:|---:|",
+        ]
+    )
+    for run in report.runs:
+        lines.append(
+            f"| {run.index} | {run.timestamp} | R{run.round} | {run.verdict} | "
+            f"{run.total} | {run.new} | {run.fixed} | {run.regressed} |"
+        )
+
+    if report.open_by_dimension:
+        lines.extend(["", "## 未解决 finding 按维度", "", "| 维度 | 数量 |", "|---|---:|"])
+        for dimension, count in sorted(
+            report.open_by_dimension.items(), key=lambda item: (-item[1], item[0])
+        ):
+            lines.append(f"| {dimension} | {count} |")
+
+    if report.stubborn_findings:
+        lines.extend(
+            [
+                "",
+                f"## 顽固 finding（连续 {trend_store.STUBBORN_MIN_RUNS}+ 次未修复）",
+                "",
+            ]
+        )
+        lines.extend(_md_finding(finding) for finding in report.stubborn_findings)
+    elif report.open:
+        lines.extend(
+            [
+                "",
+                f"暂无顽固 finding：{report.open} 条未解决 finding 都还没到 "
+                f"{trend_store.STUBBORN_MIN_RUNS} 次。",
+            ]
+        )
+
+    if report.open_findings:
+        lines.extend(["", "## 未解决 finding（最严重的在前）", ""])
+        lines.extend(_md_finding(finding) for finding in report.open_findings)
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 __all__ = [
     "DEFAULT_HISTORY",
     "DEFAULT_TOP",
@@ -467,5 +600,7 @@ __all__ = [
     "collect_runs",
     "new_findings_at_or_above",
     "regression_count",
+    "render_trend_markdown",
     "render_trend_report",
+    "trend_csv",
 ]
