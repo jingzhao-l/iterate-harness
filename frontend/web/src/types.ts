@@ -468,3 +468,45 @@ export interface SchedulesView {
   jobs: CronJobView[];
   history: CronHistoryView[];
 }
+
+// ---- Two-run comparison (design §17.3 P2) ----
+// `runs` lists every finished run (for the pickers); `from_run`/`to_run` are
+// null until the project has two. Finding lists are worst-first.
+
+export interface RunSnapshotView {
+  index: number;
+  timestamp: string;
+  round: number;
+  verdict: string;
+  mode: string;
+  total: number;
+}
+
+export interface DiffFinding {
+  file: string;
+  line: number | null;
+  dimension: string;
+  severity: string;
+  summary: string;
+  fingerprint?: string;
+}
+
+export interface RunDiffCounts {
+  new: number;
+  fixed: number;
+  regressed: number;
+  unchanged: number;
+}
+
+export interface RunDiffView {
+  project_root: string;
+  generated_at: string;
+  runs: RunSnapshotView[];
+  from_run: RunSnapshotView | null;
+  to_run: RunSnapshotView | null;
+  counts: RunDiffCounts;
+  new: DiffFinding[];
+  fixed: DiffFinding[];
+  regressed: DiffFinding[];
+  unchanged: DiffFinding[];
+}

@@ -458,6 +458,171 @@ def new_findings_at_or_above(report: TrendReport, severity: str) -> int:
     )
 
 
+@dataclass
+class RunSnapshot:
+    """One finished run as a comparable snapshot: its findings, deduped."""
+
+    index: int
+    timestamp: str
+    round: int
+    verdict: str
+    mode: str
+    findings: list[dict[str, Any]] = field(default_factory=list)
+
+    def meta(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "timestamp": self.timestamp,
+            "round": self.round,
+            "verdict": self.verdict,
+            "mode": self.mode,
+            "total": len(self.findings),
+        }
+
+
+@dataclass
+class RunDiffReport:
+    """Two runs compared by finding fingerprint (engine: ``diff_runs``).
+
+    ``from_run`` is the earlier run and ``to_run`` the later one. Both are
+    ``None`` when the project has fewer than two finished runs — a state the
+    CLI and the console explain instead of guessing a pair.
+    """
+
+    project_root: str
+    generated_at: str
+    runs: list[RunSnapshot]
+    from_run: RunSnapshot | None
+    to_run: RunSnapshot | None
+    diff: trend_store.RunDiff | None
+
+    @property
+    def counts(self) -> dict[str, int]:
+        if self.diff is None:
+            return {"new": 0, "fixed": 0, "regressed": 0, "unchanged": 0}
+        return {
+            "new": len(self.diff.new),
+            "fixed": len(self.diff.fixed),
+            "regressed": len(self.diff.regressed),
+            "unchanged": len(self.diff.unchanged),
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        diff = self.diff
+        return {
+            "project_root": self.project_root,
+            "generated_at": self.generated_at,
+            "runs": [run.meta() for run in self.runs],
+            "from_run": self.from_run.meta() if self.from_run is not None else None,
+            "to_run": self.to_run.meta() if self.to_run is not None else None,
+            "counts": self.counts,
+            "new": list(diff.new) if diff is not None else [],
+            "fixed": list(diff.fixed) if diff is not None else [],
+            "regressed": list(diff.regressed) if diff is not None else [],
+            "unchanged": list(diff.unchanged) if diff is not None else [],
+        }
+
+
+def collect_run_snapshots(project_root: str | Path) -> list[RunSnapshot]:
+    """Every finished run's findings, in log order (1-based ``index``).
+
+    Same reader as :func:`collect_runs` (``report`` entries through
+    :func:`findings_from_report`), but keeps the full deduped finding set so a
+    diff can name what actually appeared or disappeared, not just count it.
+    """
+    snapshots: list[RunSnapshot] = []
+    for entry in read_entries(project_root):
+        if entry.type != "report" or not isinstance(entry.data, dict):
+            continue
+        unique = _unique_findings(findings_from_report(entry.data))
+        snapshots.append(
+            RunSnapshot(
+                index=len(snapshots) + 1,
+                timestamp=entry.timestamp,
+                round=entry.round,
+                verdict=str(entry.data.get("verdict") or "unknown"),
+                mode=str(entry.data.get("mode") or "dry-run"),
+                findings=[dict(view) for view in unique.values()],
+            )
+        )
+    return snapshots
+
+
+def build_run_diff(
+    project_root: str | Path,
+    *,
+    from_index: int | None = None,
+    to_index: int | None = None,
+) -> RunDiffReport:
+    """Compare two finished runs (defaults: the last two, earlier → later).
+
+    ``previously_fixed`` comes from the trend library's fixed records, so a
+    finding that disappeared earlier and is present again is classified as a
+    regression rather than "new" — the same rule the trend history uses.
+    """
+    root = Path(project_root)
+    snapshots = collect_run_snapshots(root)
+    generated_at = datetime.now(timezone.utc).isoformat()
+    if len(snapshots) < 2:
+        return RunDiffReport(str(root), generated_at, snapshots, None, None, None)
+
+    total = len(snapshots)
+    to_value = total if to_index is None else to_index
+    from_value = (to_value - 1) if from_index is None else from_index
+    for label, value in (("from", from_value), ("to", to_value)):
+        if not 1 <= value <= total:
+            raise ValueError(
+                f"{label} must be between 1 and {total} (got {value}); "
+                f"run indices come from `ih iterate trend`"
+            )
+    if from_value >= to_value:
+        raise ValueError(
+            f"from must be earlier than to (got {from_value} → {to_value}); "
+            f"swap them to compare the other direction"
+        )
+    from_run = snapshots[from_value - 1]
+    to_run = snapshots[to_value - 1]
+    previously_fixed = [
+        record
+        for record in trend_store.load_library(root).values()
+        if record.get("status") == trend_store.STATUS_FIXED
+    ]
+    raw = trend_store.diff_runs(from_run.findings, to_run.findings, previously_fixed)
+    diff = trend_store.RunDiff(
+        new=_sort_records(raw.new),
+        fixed=_sort_records(raw.fixed),
+        regressed=_sort_records(raw.regressed),
+        unchanged=_sort_records(raw.unchanged),
+    )
+    return RunDiffReport(str(root), generated_at, snapshots, from_run, to_run, diff)
+
+
+def render_run_diff(report: RunDiffReport) -> str:
+    """Render the comparison as plain text (CLI), metadata first."""
+    if report.from_run is None or report.to_run is None or report.diff is None:
+        return (
+            "No run pair to compare: need at least two finished runs "
+            "(.iterate/decision-log.jsonl has fewer than two report entries).\n"
+            "Run `ih iterate run` (or `ih iterate review`) twice, then re-run "
+            "`ih iterate diff`."
+        )
+    earlier, later = report.from_run, report.to_run
+    lines = [
+        f"iterate diff — run {earlier.index} → {later.index}",
+        (
+            f"  from: {earlier.timestamp} · R{earlier.round} · {earlier.verdict} · "
+            f"{len(earlier.findings)} finding(s)"
+        ),
+        (
+            f"  to:   {later.timestamp} · R{later.round} · {later.verdict} · "
+            f"{len(later.findings)} finding(s)"
+        ),
+        "",
+        trend_store.render_diff(report.diff),
+    ]
+    return "\n".join(lines)
+
+
 #: Columns of the CSV export, in order. Stable, machine-friendly names so a
 #: spreadsheet column never depends on a translated label.
 TREND_CSV_COLUMNS = (
@@ -594,12 +759,17 @@ __all__ = [
     "DEFAULT_TOP",
     "MAX_FINDINGS_PER_RUN",
     "SEVERITY_ORDER",
+    "RunDiffReport",
+    "RunSnapshot",
     "TrendReport",
     "TrendRun",
     "build_trend_report",
+    "build_run_diff",
+    "collect_run_snapshots",
     "collect_runs",
     "new_findings_at_or_above",
     "regression_count",
+    "render_run_diff",
     "render_trend_markdown",
     "render_trend_report",
     "trend_csv",

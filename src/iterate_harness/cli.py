@@ -850,7 +850,7 @@ app = typer.Typer(
 
 auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
-iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
+iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/diff/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
 web_app = typer.Typer(name="web", help="WebUI management console")
 
 app.add_typer(auth_app)
@@ -1613,6 +1613,55 @@ def iterate_trend(
             failed = True
     if failed:
         raise typer.Exit(1)
+
+
+@iterate_app.command("diff")
+def iterate_diff(
+    from_index: int = typer.Option(
+        0,
+        "--from",
+        min=0,
+        help="Earlier run index (1-based, as shown by `ih iterate trend`; default: the run before last)",
+    ),
+    to_index: int = typer.Option(
+        0,
+        "--to",
+        min=0,
+        help="Later run index (1-based; default: the last run)",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the structured comparison as JSON"),
+) -> None:
+    """Compare two finished runs: what appeared, disappeared or came back.
+
+    Classifies each finding by fingerprint against the earlier run
+    (new / fixed / regressed / unchanged). Regressions use the trend library's
+    fixed records, so a finding that was fixed earlier and is present again is
+    a regression, not "new".
+
+    Examples:
+        ih iterate diff
+        ih iterate diff --from 2 --to 5
+        ih iterate diff --json
+    """
+    from iterate_harness.iterate import trend_report
+
+    from_index = _typer_int(from_index)
+    to_index = _typer_int(to_index)
+    as_json = _typer_flag(as_json)
+
+    try:
+        report = trend_report.build_run_diff(
+            Path.cwd(),
+            from_index=from_index or None,
+            to_index=to_index or None,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if as_json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+        return
+    print(trend_report.render_run_diff(report))
 
 
 @iterate_app.command("gate")

@@ -379,6 +379,26 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
     if sub == "trend":
         return _result(message=trend_store.render_trend_summary(trend_store.summarize(cwd)))
 
+    if sub == "diff":
+        from iterate_harness.iterate import trend_report
+
+        from_index: int | None = None
+        to_index: int | None = None
+        if rest:
+            try:
+                from_index = int(rest[0])
+                if len(rest) > 1:
+                    to_index = int(rest[1])
+            except ValueError:
+                return _result(message="Usage: /iterate diff [from] [to]")
+        try:
+            diff_report = trend_report.build_run_diff(
+                cwd, from_index=from_index, to_index=to_index
+            )
+        except ValueError as exc:
+            return _result(message=f"Rejected: {exc}")
+        return _result(message=trend_report.render_run_diff(diff_report))
+
     if sub == "glasspane-ledger":
         # ③'s last mile: link the ledger the *other* harness wrote, once per project, so a fix can be
         # cited from a chain this run never wrote without exporting an environment variable by hand.
@@ -552,7 +572,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
 
     return _result(
         message=(
-            "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|gate|glasspane-ledger|report|init|doctor|dimensions|validate]\n"
+            "Usage: /iterate [status|config|onboard|personalize|review|run|resume|log|trend|diff|gate|glasspane-ledger|report|init|doctor|dimensions|validate]\n"
             "- status|config: effective config summary\n"
             "- onboard [goal]: model-driven project scan that writes ITERATE.md\n"
             "- personalize: directional-key 9-category wizard (or terminal: `ih iterate personalize`)\n"
@@ -562,6 +582,7 @@ async def iterate_command_handler(args: str, context: CommandContext) -> Command
             "- resume: continue the last finished run from its decision log\n"
             "- log [n]: tail the decision log (or `log trend`)\n"
             "- trend: cross-run finding trend (new/fixed/stubborn)\n"
+            "- diff [from] [to]: compare two finished runs (new/fixed/regressed/unchanged)\n"
             "- gate: the last recipe-gate answer this project recorded (scenario 4; terminal: `ih iterate gate`)\n"
             "- glasspane-ledger [<path>]: show which decision log the fix evidence is read from, "
             "or link the one the GlassPane harness wrote (absolute path; terminal: "

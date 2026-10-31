@@ -12,6 +12,7 @@ import type {
   OperationResult,
   ReportPreview,
   ReportView,
+  RunDiffView,
   RunSummary,
   SchedulesView,
   StartRequest,
@@ -293,6 +294,20 @@ export const api = {
     request<StopAgentResult>(
       `/agents/shutdown${buildQuery(projectRoot, { agent_id: agentId, confirm: "true" })}`,
       { method: "POST" },
+    ),
+
+  // Compare two finished runs by finding fingerprint (new/fixed/regressed/
+  // unchanged). 0 means "let the server pick": last run, and the one before it.
+  runDiff: (
+    projectRoot?: string,
+    fromIndex = 0,
+    toIndex = 0,
+  ): Promise<RunDiffView> =>
+    request<RunDiffView>(
+      `/runs/diff${buildQuery(projectRoot, {
+        from: fromIndex || undefined,
+        to: toIndex || undefined,
+      })}`,
     ),
 
   reportPreview: (name: string, projectRoot?: string): Promise<ReportPreview> =>

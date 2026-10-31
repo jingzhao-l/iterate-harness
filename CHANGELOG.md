@@ -4,7 +4,30 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
-（空。2.14.0 收口后没有未归号的条目。）
+（空。2.15.0 收口后没有未归号的条目。）
+
+## [2.15.0] - 2026-10-31
+
+**版本判断：minor。** 新增一个 CLI 子命令、一个只读 API 与一个控制台页面；既有响应形状、命令与退出码集合不动。引擎里的 `trend_store.diff_runs()` 一直存在，却没有任何命令或页面调用它——这一版补的是这条「引擎能做、用户摸不到」的断链。
+
+- **两次运行可以正面比了。** `ih iterate diff [--from N] [--to M] [--json]`：把决策日志里任意两次已完成运行的 finding 按指纹逐条对照，归为新增 / 已修复 / 回归 / 未变。默认取最后两次（较早 → 较晚），索引与 `ih iterate trend` 的逐次运行编号一致；越界或把较晚一次放在 `--from` 时给出可用区间/方向提示并以退出码 2 拒绝（避免标签反转），`--json` 给脚本消费。
+- **回归不是「新增」。** 对比把趋势库中已修复的指纹作为 `previously_fixed`，因此「以前修过、这次又出现」进回归桶，不会被误报成新增——这是 `diff_runs` 的既有语义，此前没有入口能触发它。
+- **控制台「运行对比」页（快捷键 `g v`）。** 两个下拉框列出全部已完成运行（编号、时间、结论、finding 数），任选两次即可；新增 / 修复 / 回归 / 未变四个分区按严重度排序列出文件:行号、维度与摘要，并给出净变化（修复 − 新增 − 回归）。少于两次运行时页面写明原因与下一步命令（`ih iterate run`），而不是空白。数据来自一次 `GET /api/v1/runs/diff`（同时返回 `runs` 供下拉框）；越界索引返回 400 并写明区间，空项目返回 200 + 明确的空对比。
+- **TUI 同门。** `/iterate diff [from] [to]` 与 CLI 共用实现，`/iterate` 的用法清单同步增加 `diff`。
+- **文档同步。** 两份 README 的命令块、能力条目、WebUI 页面清单与 `/iterate` 子命令枚举；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.15.0。
+
+**核验（本机，2026-10-31）：**
+
+- 端到端（真起进程、真决策日志，2 次运行、3 条 finding）：在种子项目里 `ih iterate diff` 输出
+  `iterate diff — run 1 → 2`、两次运行的 timestamp/verdict/finding 数，正文为
+  `Run diff: 1 new, 1 fixed, 0 regressed, 1 unchanged`，新增 `[low] src/c.py:3`、修复 `[medium] src/b.py:9`；
+  `--from 1 --to 2 --json` 的 `counts` 为 `{'new': 1, 'fixed': 1, 'regressed': 0, 'unchanged': 1}`，
+  `new=['src/c.py']`、`fixed=['src/b.py']`、`unchanged=['src/a.py']`；`--from 9` 退出码 2 且提示
+  `from must be between 1 and 2 (got 9)`；`--from 2 --to 1` 提示 `from must be earlier than to (got 2 → 1)`。真起 uvicorn 后 `curl /api/v1/runs/diff` 返回 200（`counts` 同上、`runs` 2 条），
+  `from=9` 返回 400。
+- `pytest tests/ -q` → **3180 passed, 6 skipped, 1 warning in 104.70s**（新增 10 条单元/CLI/slash 测试 + 8 条路由测试）。
+- `ruff check .` → All checks passed；`mypy src` → Success: no issues found in 271 source files；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 9 files / 90 tests passed、`vite build` 成功。
+- 反向变异：把 `build_run_diff` 里的较早/较晚两次运行对调，`test_default_pair_is_the_last_two_runs`、`test_explicit_indices_compare_any_pair` 与路由的 `test_default_compares_the_last_two_runs` 变红；还原后 sha256 与基线逐字节相等（`cb442a32…`），复测 9 passed。
 
 ## [2.14.0] - 2026-10-30
 

@@ -270,6 +270,9 @@ ih iterate trend          # per-run new/fixed/regressed history + stubborn/open 
 ih iterate trend --json   # machine-readable trend report (for dashboards/CI)
 ih iterate trend --fail-on-regression        # CI gate: fail if a fixed finding came back
 ih iterate trend --fail-on-new high          # CI gate: fail on new high/critical findings
+ih iterate diff           # compare two runs: new / fixed / regressed / unchanged findings
+ih iterate diff --json    # machine-readable comparison (for scripts/CI)
+ih iterate diff --from 2 --to 5   # pick any pair of finished runs
 ih iterate log --replay   # replay the whole run chronologically (relative timestamps)
 ih iterate report         # render the final report (CI mode, see below)
 ih iterate report --pr    # post/update the report as a PR comment (gh CLI, idempotent)
@@ -320,6 +323,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Breakpoint resume** — the TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings.
 - **Finding trend library** — every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `ih iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs.
 - **Per-run trend history** — `ih iterate trend` reconstructs every finished run from the decision log and shows what that run **added, fixed, or regressed**, plus open/stubborn findings; `--fail-on-regression` / `--fail-on-new <severity>` turn it into a CI gate. The same view is a page in the WebUI (see below).
+- **Run comparison** — `ih iterate diff [--from N] [--to M] [--json]` answers "what changed between these two runs?" by classifying every finding against the earlier run: new / fixed / regressed / unchanged. It joins the decision log to the engine's fingerprint diff, and regressions are resolved against the trend library's fixed records, so a finding fixed earlier and present again is never reported as merely "new". The same comparison is a WebUI page (below).
 - **Team roster & stop channel** — `ih iterate agents` is the one place that could answer "which worker is stuck and why": subprocess teammates, in-process teammates and plain shell tasks all register the same task-manager store, and the roster is that store's projection — running first, with kind/backend, elapsed time, output size and a bounded output tail. `--stop <id> --confirm` is the matching intervention channel (task id or `name@team`, audited server-side). The WebUI has the same view as a live page.
 
 ### Reports & integration
@@ -337,14 +341,17 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
-**Gate**, **Schedules**, Workspaces, **Team**, Checkpoints, Budget & Rate, Config,
-Reports. The **Trend**
+**Run diff**, **Gate**, **Schedules**, Workspaces, **Team**, Checkpoints,
+Budget & Rate, Config, Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
 entries arrive — no terminal needed to tell whether a loop is actually
 converging. It also exports the window it is showing: a Markdown digest to paste
 into a PR or weekly report, a one-row-per-run CSV for a spreadsheet, and the
-exact page payload as JSON. The **Team** page (`g a`) shows every worker the serving process is
+exact page payload as JSON. The **Run diff** page (`g v`) picks any two finished
+runs from dropdowns and shows the exact findings that appeared, disappeared,
+came back or stayed, worst-first — the same classification as `ih iterate diff`,
+without copying run indices into a terminal. The **Team** page (`g a`) shows every worker the serving process is
 running right now — subprocess teammates, in-process teammates and shell tasks
 side by side, with elapsed time, output size and the last thing each one said —
 and is the only way to stop a single stuck worker from the browser (二次确认 +
@@ -405,7 +412,7 @@ read-only and machine-scoped, so it does not follow the project-root selector.
 Slash command `/iterate` and the bundled `iterate` skill provide the same loops through different
 entries — `/iterate` with no argument prints the project's status, and a subcommand that does not
 exist prints the current list (status, config, onboard,
-personalize, review, run, resume, log, trend, gate, glasspane-ledger, report, init, doctor,
+personalize, review, run, resume, log, trend, diff, gate, glasspane-ledger, report, init, doctor,
 dimensions, validate).
 
 ## 🔬 Two-way integration with GlassPane

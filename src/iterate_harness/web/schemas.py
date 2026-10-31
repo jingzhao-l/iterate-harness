@@ -113,6 +113,25 @@ class RunSummary(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+class RunDiffView(BaseModel):
+    """Two finished runs compared by finding fingerprint (design §17.3 P2).
+
+    ``runs`` carries every finished run's metadata so the console can build its
+    pickers from one response; the finding lists are worst-first.
+    """
+
+    project_root: str
+    generated_at: str
+    runs: list[dict[str, Any]] = Field(default_factory=list)
+    from_run: dict[str, Any] | None = None
+    to_run: dict[str, Any] | None = None
+    counts: dict[str, int] = Field(default_factory=dict)
+    new: list[dict[str, Any]] = Field(default_factory=list)
+    fixed: list[dict[str, Any]] = Field(default_factory=list)
+    regressed: list[dict[str, Any]] = Field(default_factory=list)
+    unchanged: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class TimelineEntry(BaseModel):
     """One trajectory entry inside a run's timeline."""
 

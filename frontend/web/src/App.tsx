@@ -17,6 +17,7 @@ import BudgetRate from "./pages/BudgetRate";
 import Checkpoints from "./pages/Checkpoints";
 import ConfigPage from "./pages/ConfigPage";
 import Dashboard from "./pages/Dashboard";
+import Diff from "./pages/Diff";
 import Gate from "./pages/Gate";
 import Reports from "./pages/Reports";
 import Runs from "./pages/Runs";
@@ -34,6 +35,7 @@ const NAV_ITEMS = [
   { to: "/config", label: "配置", end: false },
   { to: "/reports", label: "报告", end: false },
   { to: "/trend", label: "趋势", end: false },
+  { to: "/diff", label: "运行对比", end: false },
   { to: "/gate", label: "判定闸", end: false },
   { to: "/schedules", label: "定时任务", end: false },
 ];
@@ -49,6 +51,7 @@ const G_BUFFER_ROUTES: Record<string, string> = {
   p: "/config",
   g: "/reports",
   t: "/trend",
+  v: "/diff",
   j: "/gate",
   s: "/schedules",
 };
@@ -229,6 +232,7 @@ export default function App(): React.JSX.Element {
             <Route path="/config" element={<ConfigPage />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/trend" element={<Trend />} />
+            <Route path="/diff" element={<Diff />} />
             <Route path="/gate" element={<Gate />} />
             <Route path="/schedules" element={<Schedules />} />
             <Route path="*" element={<Navigate to="/" replace />} />

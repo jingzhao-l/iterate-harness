@@ -14,11 +14,13 @@ from fastapi import APIRouter, HTTPException, Query
 from ...iterate.ci_report import ReportSummary, latest_report_entry
 from ...iterate.decision_log import DecisionLogEntry, read_entries
 from ...iterate.html_report import REPLAY_ENTRY_TYPES
+from ...iterate.trend_report import build_run_diff
 from .. import findings_triage
 from ..schemas import (
     FindingsTriageDismissRequest,
     FindingsTriageRequest,
     OperationResult,
+    RunDiffView,
     RunSummary,
     TimelineEntry,
 )
@@ -129,6 +131,40 @@ def get_run_timeline(
         )
         for idx, entry in enumerate(page)
     ]
+
+
+@router.get("/runs/diff", response_model=RunDiffView)
+def get_run_diff(
+    project_root: str = "",
+    from_index: int = Query(
+        0,
+        ge=0,
+        alias="from",
+        description="Earlier run index (1-based; 0 = the run before last)",
+    ),
+    to_index: int = Query(
+        0,
+        ge=0,
+        alias="to",
+        description="Later run index (1-based; 0 = the last run)",
+    ),
+) -> RunDiffView:
+    """Compare two finished runs by finding fingerprint.
+
+    ``runs`` always lists every finished run so a console can populate its
+    pickers from one call; ``from_run``/``to_run`` are ``None`` until the
+    project has two. An out-of-range index is a 400 naming the valid range.
+    """
+    root = _resolve_project(project_root)
+    try:
+        report = build_run_diff(
+            root,
+            from_index=from_index or None,
+            to_index=to_index or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RunDiffView(**report.to_dict())
 
 
 @router.get("/runs/findings", response_model=dict[str, Any])

@@ -1,7 +1,7 @@
 {
   "name": "iterate-harness",
-  "version": "2.14.0",
-  "description": "npm distribution wrapper for iterate-harness — installs the Python harness (ih CLI) into a managed venv on install and exposes it as a global command",
+  "version": "2.15.0",
+  "description": "npm distribution wrapper for iterate-harness \u2014 installs the Python harness (ih CLI) into a managed venv on install and exposes it as a global command",
   "license": "MIT",
   "type": "commonjs",
   "repository": {

@@ -243,6 +243,9 @@ ih iterate trend          # 逐次运行的新增/修复/回归历史 + 未解�
 ih iterate trend --json   # 机器可读趋势报告（供看板/CI 使用）
 ih iterate trend --fail-on-regression        # CI 门禁：已修复问题回归即失败
 ih iterate trend --fail-on-new high          # CI 门禁：出现新高/严重问题即失败
+ih iterate diff           # 对比两次运行：新增 / 修复 / 回归 / 未变 的 finding
+ih iterate diff --json    # 机器可读对比（供脚本/CI 使用）
+ih iterate diff --from 2 --to 5   # 任选两次已完成运行
 ih iterate log --replay   # 按时间序回放整次运行（相对时间戳）
 ih iterate report         # 渲染最终报告（CI 模式，见下）
 ih iterate report --pr    # 把报告发布/更新为 PR 评论（gh CLI，幂等）
@@ -292,6 +295,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 - **断点续跑** — TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding。
 - **finding 指纹趋势库** — 每次收尾用 `文件\|行号\|维度` 指纹把 finding 记入 `.iterate/trend-library.json`；`ih iterate log --trend` / `/iterate trend` 跨运行统计新增 / 已修复 / 回归 / 顽固（连续 3+ 轮）finding。
 - **逐次运行趋势历史** — `ih iterate trend` 从决策日志还原每一次已完成的运行，展示该轮**新增 / 修复 / 回归**以及未解决/顽固问题；`--fail-on-regression` / `--fail-on-new <severity>` 可直接作为 CI 门禁。同一视图也出现在 WebUI 的「趋势」页（见下），并可导出 Markdown / CSV / JSON。
+- **运行对比** — `ih iterate diff [--from N] [--to M] [--json]` 回答“这两次运行之间到底变了什么”：把每个 finding 按指纹对照较早一次运行，归为新增 / 已修复 / 回归 / 未变。它把决策日志接到引擎已有的指纹 diff 上；回归判定使用趋势库里已修复的记录，因此“以前修过、这次又出现”不会被算成普通新增。同一对比也是 WebUI 的一个页面（见下）。
 - **团队名单与停止通道** — `ih iterate agents` 是「到底是哪个子代理卡住了、卡在哪」唯一能回答的地方：子进程 teammate、进程内 teammate 和普通 Shell 任务全部登记在同一个 task manager store 里，名单就是那个 store 的投影——在跑的排前面，带类型/后端、运行时长、输出体积和有上限的输出尾部。`--stop <id> --confirm` 是配套的干预通道（任务 id 或 `name@team`，服务端审计）。WebUI 里同一视图是一个实时页面。
 
 ### 报告与集成
@@ -307,7 +311,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 
 ### WebUI 管理台
 
-`ih web serve` 启动仅监听回环地址的管理台（`--project <root>` 固定项目，服务器上用 `--no-browser`）。页面：仪表盘、迭代详情、趋势、**判定闸**、**定时任务**、工作区、**团队**、检查点、预算与限流、配置、报告。**趋势**页（快捷键 `g t`）渲染与 `ih iterate trend` 相同的逐轮新增/修复/回归历史与顽固/未解决 finding，并随新决策条目实时更新——不盯终端也能判断这一轮到底有没有收敛；它还能把当前窗口导出成可直接贴进 PR / 周报的 Markdown、每次运行一行的 CSV，或与页面完全一致的 JSON。**团队**页（`g a`）显示服务进程此刻正在跑的每一个子代理——子进程 teammate、进程内 teammate 与 Shell 任务并排，带运行时长、输出体积和各自最后说的内容——也是唯一能在浏览器里停掉单个卡住子代理的入口（二次确认 + 服务端审计）；有子代理在跑时轮询刷新，名单安静下来就自动停止轮询。**判定闸**页（快捷键 `g j`）是 GlassPane 闸门的控制台一侧：最近一次配方闸回答、拒绝码与可执行的补救步骤、以及每一次发布过答案的轮次——点一行即可查看那一轮的判定、步骤与修复证据，也能一键复制与 `ih iterate gate` 逐字一致的原文。没有记录时页面明确显示「尚未记录」，并写明没有记录不等于通过，因此没问过的项目不会被看成通过的项目。**定时任务**页（快捷键 `g s`）是本机 cron 注册表的控制台视图：每个已登记计划的 cron 表达式、时区、每次读取时重算的下次运行时间与上次结果，调度器是否在跑（没在跑就明确写“不会自动执行”），以及最近执行历史（退出码、耗时、带上限的 stdout/stderr 尾部）。计划仍由 CLI 增删（`ih iterate schedule`）；本页只读，且属于本机而非某个项目，因此不跟随项目根目录切换。
+`ih web serve` 启动仅监听回环地址的管理台（`--project <root>` 固定项目，服务器上用 `--no-browser`）。页面：仪表盘、迭代详情、趋势、**运行对比**、**判定闸**、**定时任务**、工作区、**团队**、检查点、预算与限流、配置、报告。**趋势**页（快捷键 `g t`）渲染与 `ih iterate trend` 相同的逐轮新增/修复/回归历史与顽固/未解决 finding，并随新决策条目实时更新——不盯终端也能判断这一轮到底有没有收敛；它还能把当前窗口导出成可直接贴进 PR / 周报的 Markdown、每次运行一行的 CSV，或与页面完全一致的 JSON。**运行对比**页（快捷键 `g v`）用两个下拉框任选两次已完成运行，按严重度排序列出真正新增、消失、回归或保持不变的 finding——与 `ih iterate diff` 同一套分类，不必再把运行序号抄回终端。**团队**页（`g a`）显示服务进程此刻正在跑的每一个子代理——子进程 teammate、进程内 teammate 与 Shell 任务并排，带运行时长、输出体积和各自最后说的内容——也是唯一能在浏览器里停掉单个卡住子代理的入口（二次确认 + 服务端审计）；有子代理在跑时轮询刷新，名单安静下来就自动停止轮询。**判定闸**页（快捷键 `g j`）是 GlassPane 闸门的控制台一侧：最近一次配方闸回答、拒绝码与可执行的补救步骤、以及每一次发布过答案的轮次——点一行即可查看那一轮的判定、步骤与修复证据，也能一键复制与 `ih iterate gate` 逐字一致的原文。没有记录时页面明确显示「尚未记录」，并写明没有记录不等于通过，因此没问过的项目不会被看成通过的项目。**定时任务**页（快捷键 `g s`）是本机 cron 注册表的控制台视图：每个已登记计划的 cron 表达式、时区、每次读取时重算的下次运行时间与上次结果，调度器是否在跑（没在跑就明确写“不会自动执行”），以及最近执行历史（退出码、耗时、带上限的 stdout/stderr 尾部）。计划仍由 CLI 增删（`ih iterate schedule`）；本页只读，且属于本机而非某个项目，因此不跟随项目根目录切换。
 
 ### 成本、资源与门禁
 
@@ -349,7 +353,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 
 `/iterate` 斜杠命令与内置 `iterate` skill 提供同样闭环的不同入口——不带参数执行 `/iterate`
 打印这个项目的当前状态，而不认识的子命令会打印当前清单（status、config、onboard、personalize、
-review、run、resume、log、trend、gate、glasspane-ledger、report、init、doctor、dimensions、
+review、run、resume、log、trend、diff、gate、glasspane-ledger、report、init、doctor、dimensions、
 validate）。
 
 ## 🔬 与 GlassPane 的双向集成
