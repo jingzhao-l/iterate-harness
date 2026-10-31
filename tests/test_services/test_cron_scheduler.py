@@ -230,7 +230,23 @@ def _foreign_live_child() -> tuple[subprocess.Popen[bytes], int]:
     `bucket 06`'s legs stopped reporting without ever finishing.
     """
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    return proc, proc.pid
+    # Wait until the kernel exposes the child's own command line, not the parent's
+    # pre-exec copy or a momentarily empty /proc entry: `_verifiable_claim_for`
+    # records whatever `_pid_cmdline` answers, and a claim recorded before exec
+    # cannot verify afterwards. Measured on the 3.11 CI bucket: a claim written
+    # with `cmdline: null` made `_register_pid` release the live child's file and
+    # claim it for the test process, turning the guard's test red at random.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        line = cron_scheduler._pid_cmdline(proc.pid)
+        if line and "time.sleep(60)" in line:
+            return proc, proc.pid
+        if proc.poll() is not None:
+            break
+        time.sleep(0.02)
+    proc.terminate()
+    proc.wait()
+    raise AssertionError("the foreign child never exposed a readable command line")
 
 
 def _write_pid_file(pid: int | str) -> Path:
