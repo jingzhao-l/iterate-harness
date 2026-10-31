@@ -2229,8 +2229,8 @@ def web_serve(
 ) -> None:
     """Start the WebUI management console (FastAPI + React frontend).
 
-    Serves the dashboard, runs timeline, trend, the recipe gate, scheduled
-    reviews, checkpoints, budget, config, and reports on a local loopback
+    Serves the dashboard, runs timeline, trend, run comparison, the recipe gate,
+    scheduled reviews, checkpoints, budget, config, and reports on a local loopback
     address and opens the browser. The backend binds to 127.0.0.1 by default and
     never exposes itself externally.
     """
