@@ -4,7 +4,28 @@ All notable changes to iterate-harness should be recorded in this file.
 
 ## [Unreleased]
 
-（空。2.15.0 收口后没有未归号的条目。）
+（空。2.16.0 收口后没有未归号的条目。）
+
+## [2.16.0] - 2026-11-01
+
+**版本判断：minor。** 新增一个 CLI 子命令、一条只读 API 与一个控制台页面；既有命令、退出码集合与响应形状不动。环境自检此前只在交互式 REPL 的 `/doctor` 里存在，CI、脚本与操作台都没有入口——这一版补的是这条断链。
+
+- **机器就绪度第一次有了 CLI 与 CI 入口。** `ih doctor`：一趟**无网络**、确定性的自检，覆盖 11 项——解释器下限（>=3.10）、包导入、用户配置解析、活动 profile 凭证是否存在（只报来源，绝不打印密钥本身）、数据目录可写（真实探针而非 `exists`）、项目根目录（目录性 + 可写 + 是否在 git 仓库内）、iterate 配置存在性与可解析、受信校验命令是否登记、运行锁是否被外部持有、Docker 沙箱可用性（含 `fail_if_unavailable` 严格模式）、pre-commit 门禁钩子是否安装。每项都带可执行的 `remedy`；`fail` 排最前，坏掉的机器不会被一长串绿色检查淹没。退出码面向脚本/CI：0 = 通过（或有告警），1 = 有硬失败；`--strict` 把任何告警也当失败。`--json` 输出与页面同构的稳定结构（`id` 是机器键，供 CI 按项断言）。
+- **操作台自检页（快捷键 `g k`）。** 侧栏新页「自检」：状态卡（结论 / 正常 / 告警 / 失败 / 项目根）、按「失败 → 告警 → 正常」排序的检查表，每项有详情与**可复制**的 remedy 按钮，`只看需要处理` 过滤器，以及「此页只读，不修改任何项目或机器状态」的明确说明。数据来自一次 `GET /api/v1/doctor`（同源 `ih doctor`）；根目录越界 403、不存在 404，与其它路由一致。
+- **断链补齐不是新增检查。** `doctor` 模块是共享引擎：CLI、Web 路由与（未来）REPL 都从它读同一份报告；`ih web serve --help` 的页面清单同步加入自检。
+- **文档同步。** 两份 README 的能力条目与 WebUI 页面清单补上自检；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.16.0。
+
+**核验（本机，2026-11-01）：**
+
+- 端到端（真起 uvicorn、真令牌、空配置目录）：`ih web serve --no-browser --port 0 --project <repo>` 后
+  `curl -H "Authorization: Bearer $TOKEN" /api/v1/doctor?project_root=<repo>` 返回 200，11 项检查、
+  `summary` 为 `{'ok': 7, 'warn': 3, 'fail': 1}`（空配置目录 → 活动 profile 未配置 → `auth` fail，其余
+  依本机状态）；无令牌 → 401；`project_root=/nonexistent` → 404。CLI：`ih doctor --project-root <repo>`
+  退出 0、`--json` 可解析且 `summary` 与页面一致；`--strict` 在无 iterate.config.yaml 的项目上退出 1。
+- `pytest tests/ -q` → **3194 passed, 6 skipped, 1 warning in 149.47s**（新增 14 条：11 条 doctor 单元/路由 + 3 条 CLI 退出码）。
+- `ruff check .` → All checks passed；`mypy src` → Success: no issues found in 273 source files；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 10 files / 97 tests passed、`vite build` 成功。
+- 反向变异：把 `doctorHeadline` 的失败优先分支改成先看告警，`test_doctor_headline_leads_with_failures` 变红；
+  还原后 vitest 复测 97 passed。
 
 ## [2.15.0] - 2026-10-31
 

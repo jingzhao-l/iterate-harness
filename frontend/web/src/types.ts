@@ -510,3 +510,26 @@ export interface RunDiffView {
   regressed: DiffFinding[];
   unchanged: DiffFinding[];
 }
+
+// ---- Environment self-check (design §17.3 P11) ----
+// The console's projection of `ih doctor`: a deterministic, network-free
+// environment report with an actionable remedy per failure. Failures and
+// warnings sort first so a broken machine is visible at the top of the page.
+
+export interface DoctorCheck {
+  id: string;
+  title: string;
+  status: "ok" | "warn" | "fail";
+  detail: string;
+  remedy: string;
+}
+
+export interface DoctorView {
+  project_root: string;
+  generated_at: string;
+  ok: boolean;
+  has_failures: boolean;
+  has_warnings: boolean;
+  summary: Record<string, number>;
+  checks: DoctorCheck[];
+}

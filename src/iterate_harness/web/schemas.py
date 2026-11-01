@@ -103,6 +103,24 @@ class SchedulesView(BaseModel):
     history: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DoctorView(BaseModel):
+    """Environment self-check report (design §17.3 P11).
+
+    ``checks`` is ordered failures/warnings first so a broken environment is
+    visible at the top of the console page. Each check carries an executable
+    ``remedy`` the operator can copy — never a stack trace, never a
+    credential.
+    """
+
+    project_root: str
+    generated_at: str
+    ok: bool
+    has_failures: bool
+    has_warnings: bool
+    summary: dict[str, int] = Field(default_factory=dict)
+    checks: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class RunSummary(BaseModel):
     """One decision-log entry in the runs overview (design §17.3 P2)."""
 
@@ -390,6 +408,7 @@ __all__ = [
     "CheckpointView",
     "ConfigView",
     "ControlRequest",
+    "DoctorView",
     "FindingsTriageDismissRequest",
     "FindingsTriageRequest",
     "OperationResult",

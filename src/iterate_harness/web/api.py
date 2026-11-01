@@ -209,6 +209,7 @@ def create_app(
     app.include_router(route_modules.schedules.router, prefix=API_PREFIX)
     app.include_router(route_modules.agents.router, prefix=API_PREFIX)
     app.include_router(route_modules.chat.router, prefix=API_PREFIX)
+    app.include_router(route_modules.doctor.router, prefix=API_PREFIX)
     app.include_router(events_module.router, prefix=API_PREFIX)
 
     # Mount the built frontend (SPA) at / when available.

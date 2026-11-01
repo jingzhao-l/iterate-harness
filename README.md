@@ -336,13 +336,14 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Batch ranking** — `ih iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch.
 - **Scheduled review** — `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library. The WebUI **Schedules** page (`g s`) shows the registry, the next run and the last executions, so "did last night's run pass?" no longer needs a terminal.
 - **Cron scheduler daemon** — `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`).
+- **Environment self-check** — `ih doctor` diagnoses the local machine in one network-free pass: interpreter floor, package import, config parse, active-profile credential presence (never the secret itself), data-dir writability, project/git state, iterate config + trusted validation commands, run-lease state, Docker sandbox availability and the pre-commit hook — each with an executable `remedy`. Exit code is CI-friendly (1 on a hard failure, or on any warning with `--strict`); `--json` is for scripts. The WebUI **自检** page (`g k`) renders the same report, so "is this machine ready to iterate?" no longer needs a terminal.
 
 ### WebUI management console
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
-**Run diff**, **Gate**, **Schedules**, Workspaces, **Team**, Checkpoints,
-Budget & Rate, Config, Reports. The **Trend**
+**Run diff**, **Gate**, **Schedules**, **自检 (doctor)**, Workspaces, **Team**,
+Checkpoints, Budget & Rate, Config, Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
 entries arrive — no terminal needed to tell whether a loop is actually
@@ -370,6 +371,15 @@ is stated as stopped — the page says nothing will fire), and the recent
 execution history with exit code, duration and bounded stdout/stderr tails. Jobs
 are still added and removed from the CLI (`ih iterate schedule`); the page is
 read-only and machine-scoped, so it does not follow the project-root selector.
+
+The **自检** page (`g k`) is the console's half of `ih doctor`: a deterministic,
+network-free report of the local machine's readiness — interpreter floor,
+package import, config parse, active-profile credential presence (never the
+secret itself), data-dir writability, project/git state, iterate config + trusted
+validation commands, run-lease state, Docker sandbox availability and the
+pre-commit hook — each with an executable remedy the operator can copy. It is
+read-only and shows a failure-first headline, so a broken machine is visible
+before a wall of green checks.
 
 ### Cost, resources & gates
 

@@ -18,6 +18,7 @@ import Checkpoints from "./pages/Checkpoints";
 import ConfigPage from "./pages/ConfigPage";
 import Dashboard from "./pages/Dashboard";
 import Diff from "./pages/Diff";
+import Doctor from "./pages/Doctor";
 import Gate from "./pages/Gate";
 import Reports from "./pages/Reports";
 import Runs from "./pages/Runs";
@@ -38,6 +39,7 @@ const NAV_ITEMS = [
   { to: "/diff", label: "运行对比", end: false },
   { to: "/gate", label: "判定闸", end: false },
   { to: "/schedules", label: "定时任务", end: false },
+  { to: "/doctor", label: "自检", end: false },
 ];
 
 // Single-key → route map for the "g <key>" jump shortcuts.
@@ -54,6 +56,7 @@ const G_BUFFER_ROUTES: Record<string, string> = {
   v: "/diff",
   j: "/gate",
   s: "/schedules",
+  k: "/doctor",
 };
 
 const CONN_LABELS: Record<string, string> = {
@@ -235,6 +238,7 @@ export default function App(): React.JSX.Element {
             <Route path="/diff" element={<Diff />} />
             <Route path="/gate" element={<Gate />} />
             <Route path="/schedules" element={<Schedules />} />
+            <Route path="/doctor" element={<Doctor />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </ErrorBoundary>

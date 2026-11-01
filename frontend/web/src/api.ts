@@ -7,6 +7,7 @@ import type {
   ChatRunStatus,
   CheckpointView,
   ConfigView,
+  DoctorView,
   FindingsResponse,
   GateView,
   OperationResult,
@@ -264,6 +265,11 @@ export const api = {
   // read from this project's decision log. Read-only; absence is its own state.
   gate: (projectRoot?: string, limit = 100): Promise<GateView> =>
     request<GateView>(`/gate${buildQuery(projectRoot, { limit })}`),
+
+  // Environment self-check (the console's `ih doctor`). Deterministic,
+  // network-free, read-only; each check carries an actionable remedy.
+  doctor: (projectRoot?: string): Promise<DoctorView> =>
+    request<DoctorView>(`/doctor${buildQuery(projectRoot)}`),
 
   // Scheduled reviews: the machine-level cron registry, scheduler liveness and
   // recent executions (with bounded output tails). Read-only.

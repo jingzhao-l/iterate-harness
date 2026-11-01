@@ -380,6 +380,21 @@ table.data tr.row-selected td {
 .direction-good { color: #16a34a; }
 .direction-bad { color: var(--critical); }
 .direction-neutral { color: var(--text-muted); }
+.direction-ok { color: #16a34a; }
+.direction-warn { color: var(--medium); }
+.direction-fail { color: var(--critical); }
+.doctor-detail { max-width: 28rem; }
+.remedy-row { display: flex; align-items: center; gap: 8px; }
+.remedy {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  word-break: break-all;
+}
+.btn.small { padding: 2px 8px; font-size: 12px; }
 
 .card-note {
   font-size: 11px;

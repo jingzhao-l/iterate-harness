@@ -2230,9 +2230,9 @@ def web_serve(
     """Start the WebUI management console (FastAPI + React frontend).
 
     Serves the dashboard, runs timeline, trend, run comparison, the recipe gate,
-    scheduled reviews, checkpoints, budget, config, and reports on a local loopback
-    address and opens the browser. The backend binds to 127.0.0.1 by default and
-    never exposes itself externally.
+    scheduled reviews, the environment self-check, checkpoints, budget, config,
+    and reports on a local loopback address and opens the browser. The backend
+    binds to 127.0.0.1 by default and never exposes itself externally.
     """
     from iterate_harness.web.api import serve as web_serve_backend
 
@@ -3126,6 +3126,55 @@ def provider_remove(
         print(f"Error: {exc}", file=sys.stderr)
         raise typer.Exit(1)
     print(f"Removed provider profile: {name}", flush=True)
+
+
+@app.command("doctor")
+def doctor_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project root to diagnose (defaults to the current directory)",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the report as JSON (for scripts / CI)",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Treat warnings as failures (exit 1 on any warn or fail)",
+    ),
+) -> None:
+    """Diagnose the local environment: deps, credentials, config, project.
+
+    Runs a network-free set of checks and prints an actionable remedy for
+    each failure, so a fresh machine (or a CI job) can be brought to ready
+    without trial and error. Exit code: 0 when everything passes, 1 when a
+    check fails (or, with ``--strict``, when any check warns).
+
+    Examples:
+        ih doctor
+        ih doctor --project-root /path/to/repo
+        ih doctor --json --strict
+    """
+    from iterate_harness.doctor import render_doctor, run_doctor
+
+    root = str(Path(project_root).expanduser()) if project_root else None
+    report = run_doctor(root)
+    if as_json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(render_doctor(report))
+    problems = [
+        check
+        for check in report.checks
+        if check.status == "fail" or (strict and check.status == "warn")
+    ]
+    if problems:
+        raise typer.Exit(1)
+    raise typer.Exit(0)
+
 
 # ---------------------------------------------------------------------------
 # Main command
