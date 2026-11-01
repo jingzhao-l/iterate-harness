@@ -205,7 +205,13 @@ def test_route_respects_allowed_root_guard(
 # ---------------------------------------------------------------------------
 
 def test_cli_doctor_json_roundtrip(tmp_path: Path) -> None:
-    """``ih doctor --json`` emits a parseable report and exits 0 on ok/warn."""
+    """``ih doctor --json`` emits a parseable report; exit follows the result.
+
+    Exit code is intentionally NOT pinned to 0 here: on a CI runner with no
+    credential configured the ``auth`` check is a hard failure and the CLI
+    exits 1 by design. The test's contract is the JSON shape and that the
+    exit code agrees with ``has_failures`` — not the machine's auth state.
+    """
     from typer.testing import CliRunner
 
     from iterate_harness.cli import app
@@ -213,10 +219,11 @@ def test_cli_doctor_json_roundtrip(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         app, ["doctor", "--project-root", str(tmp_path), "--json"]
     )
-    assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert len(payload["checks"]) == 11
     assert payload["project_root"] == str(tmp_path.resolve())
+    expected_exit = 1 if payload["has_failures"] else 0
+    assert result.exit_code == expected_exit, result.output
 
 
 def test_cli_doctor_strict_exits_nonzero_on_warn(tmp_path: Path) -> None:
