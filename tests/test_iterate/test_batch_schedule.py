@@ -81,6 +81,22 @@ class TestInstallSchedule:
         with pytest.raises(ValueError, match="mode"):
             iterate_batch.install_schedule(cwd="/tmp", schedule="0 9 * * *", mode="chaos")
 
+    @pytest.mark.parametrize("rounds", [0, -1, 21, True, "3"])  # type: ignore[list-item]
+    def test_out_of_range_rounds_rejected(self, isolated_registry, rounds):
+        # The CLI's typer bounds do not guard the WebUI/embedding callers; a
+        # registered `--rounds 0` job would be rejected by `ih` at 9am.
+        with pytest.raises(ValueError, match="rounds"):
+            iterate_batch.install_schedule(cwd="/tmp", schedule="0 9 * * *", rounds=rounds)
+        assert load_cron_jobs() == []
+
+    @pytest.mark.parametrize("timeout", [0, 59, 7201, True, "3600"])  # type: ignore[list-item]
+    def test_out_of_range_timeout_rejected(self, isolated_registry, timeout):
+        # The scheduler clamps silently; refusing at registration keeps the job
+        # honest about how long it may actually run.
+        with pytest.raises(ValueError, match="timeout"):
+            iterate_batch.install_schedule(cwd="/tmp", schedule="0 9 * * *", timeout=timeout)
+        assert load_cron_jobs() == []
+
     def test_install_upserts_and_removes(self, isolated_registry):
         job = iterate_batch.install_schedule(
             cwd="/repo", schedule="0 9 * * 1-5", ref="origin/main", rounds=2

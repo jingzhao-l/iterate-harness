@@ -242,6 +242,26 @@ class FindingsTriageDismissRequest(BaseModel):
     dimension: str = ""
 
 
+class ScheduleUpsertRequest(BaseModel):
+    """Request body for registering/updating the scheduled quick review.
+
+    Mirrors ``ih iterate schedule add``: the console may only create the
+    canonical ``iterate.review-changed`` job, for a project root the console
+    is already allowed to serve. ``replace`` acknowledges that an existing
+    job pointed at a *different* directory will be moved — without it the
+    route answers 409 instead of silently retargeting someone's schedule.
+    """
+
+    project_root: str = ""
+    schedule: str = Field(..., min_length=1, max_length=120)
+    ref: str = Field(default="HEAD", min_length=1, max_length=200)
+    rounds: int = Field(default=3, ge=1, le=20)
+    mode: Literal["dry-run", "normal"] = "dry-run"
+    timezone: str = Field(default="", max_length=64)
+    timeout: int = Field(default=3600, ge=60, le=7200)
+    replace: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Chat / human-in-the-loop models (design §18.3)
 # ---------------------------------------------------------------------------

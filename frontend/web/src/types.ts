@@ -469,6 +469,18 @@ export interface SchedulesView {
   history: CronHistoryView[];
 }
 
+/** Body for registering/updating the canonical scheduled quick review. */
+export interface ScheduleUpsertInput {
+  project_root?: string;
+  schedule: string;
+  ref: string;
+  rounds: number;
+  mode: "dry-run" | "normal";
+  timezone?: string;
+  timeout: number;
+  replace?: boolean;
+}
+
 // ---- Two-run comparison (design §17.3 P2) ----
 // `runs` lists every finished run (for the pickers); `from_run`/`to_run` are
 // null until the project has two. Finding lists are worst-first.

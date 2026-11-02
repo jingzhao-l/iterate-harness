@@ -334,7 +334,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Decision replay** — `ih iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording.
 - **Changed-only quick review** — `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing.
 - **Batch ranking** — `ih iterate batch repoA repoB …` reviews multiple repos sequentially and ranks them worst-first by a severity-weighted score; one failing repo never kills the batch.
-- **Scheduled review** — `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library. The WebUI **Schedules** page (`g s`) shows the registry, the next run and the last executions, so "did last night's run pass?" no longer needs a terminal.
+- **Scheduled review** — `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library. The WebUI **Schedules** page (`g s`) shows the registry, the next run and the last executions — and is also where you register, pause or delete a plan now, so "did last night's run pass?" no longer needs a terminal (see the console page below).
 - **Cron scheduler daemon** — `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`).
 - **Environment self-check** — `ih doctor` diagnoses the local machine in one network-free pass: interpreter floor, package import, config parse, active-profile credential presence (never the secret itself), data-dir writability, project/git state, iterate config + trusted validation commands, run-lease state, Docker sandbox availability and the pre-commit hook — each with an executable `remedy`. Exit code is CI-friendly (1 on a hard failure, or on any warning with `--strict`); `--json` is for scripts. The WebUI **自检** page (`g k`) renders the same report, so "is this machine ready to iterate?" no longer needs a terminal.
 
@@ -368,9 +368,16 @@ The **Schedules** page (`g s`) is the console's view of the machine-level cron
 registry: every registered job with its cron expression, timezone, freshly
 computed next run and last result, the scheduler's liveness (a stopped daemon
 is stated as stopped — the page says nothing will fire), and the recent
-execution history with exit code, duration and bounded stdout/stderr tails. Jobs
-are still added and removed from the CLI (`ih iterate schedule`); the page is
-read-only and machine-scoped, so it does not follow the project-root selector.
+execution history with exit code, duration and bounded stdout/stderr tails. It
+is also the place to manage a plan without a terminal: a form registers (or
+updates) the canonical quick review for a project directory — cron expression,
+timezone, mode, round cap, git ref and timeout — and each job row carries
+**启用/停用** (pause just that job, leaving the daemon and the other plans
+alone) and **删除**, both behind the same secondary confirmation the rest of
+the console uses. Moving an existing plan to another directory asks before it
+happens, so a stray save can never silently retarget someone's schedule. The
+page stays machine-scoped (it does not follow the project-root selector), but
+the form records explicitly which project directory the plan is for.
 
 The **自检** page (`g k`) is the console's half of `ih doctor`: a deterministic,
 network-free report of the local machine's readiness — interpreter floor,

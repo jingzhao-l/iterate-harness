@@ -16,6 +16,7 @@ import type {
   RunDiffView,
   RunSummary,
   SchedulesView,
+  ScheduleUpsertInput,
   StartRequest,
   StatusResponse,
   StopAgentResult,
@@ -272,9 +273,42 @@ export const api = {
     request<DoctorView>(`/doctor${buildQuery(projectRoot)}`),
 
   // Scheduled reviews: the machine-level cron registry, scheduler liveness and
-  // recent executions (with bounded output tails). Read-only.
+  // recent executions (with bounded output tails). The GET is read-only; the
+  // three mutating calls below are the console's branch of
+  // `ih iterate schedule add|remove` and require the secondary-confirm flag.
   schedules: (limit = 50): Promise<SchedulesView> =>
     request<SchedulesView>(`/schedules${buildQuery(undefined, { limit })}`),
+
+  // Register/update the canonical scheduled quick review for a project root.
+  // Moving an existing job to another directory answers 409 unless
+  // `input.replace` is true, so the UI can ask before retargeting it.
+  upsertSchedule: (input: ScheduleUpsertInput): Promise<OperationResult> =>
+    request<OperationResult>(`/schedules${buildQuery(undefined, { confirm: "true" })}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  // Pause/resume one job without touching the others or the daemon.
+  setScheduleEnabled: (
+    name: string,
+    enabled: boolean,
+    projectRoot?: string,
+  ): Promise<OperationResult> =>
+    request<OperationResult>(
+      `/schedules/enabled${buildQuery(projectRoot, {
+        name,
+        enabled: enabled ? "true" : "false",
+        confirm: "true",
+      })}`,
+      { method: "POST" },
+    ),
+
+  // Remove one job from the machine-level registry.
+  removeSchedule: (name: string, projectRoot?: string): Promise<OperationResult> =>
+    request<OperationResult>(
+      `/schedules${buildQuery(projectRoot, { name, confirm: "true" })}`,
+      { method: "DELETE" },
+    ),
 
   // Team roster: one row per worker the harness is tracking. Read-only, so it
   // is safe to poll while a loop is running. `tail=0` returns sizes without

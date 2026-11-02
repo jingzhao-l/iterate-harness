@@ -1970,7 +1970,8 @@ def iterate_schedule(
         DEFAULT_SCHEDULE_TIMEOUT_SECONDS,
         "--timeout",
         min=60,
-        help="Max seconds a scheduled run may take before it is killed",
+        max=7200,
+        help="Max seconds a scheduled run may take before it is killed (60-7200)",
     ),
     timezone: str | None = typer.Option(
         None,

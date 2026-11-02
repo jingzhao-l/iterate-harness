@@ -2,9 +2,26 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
-## [Unreleased]
+## [2.17.0] - 2026-11-02
 
-（空。2.16.0 收口后没有未归号的条目。）
+**版本判断：minor。** 控制台定时任务页从只读变成可写——登记/更新、暂停、删除一条计划都能在浏览器里完成；既有命令、退出码集合与响应形状不动，读模型（`GET /api/v1/schedules`）未变。
+
+- **操作台的第三类干预通道：计划写。** 此前 `ih iterate schedule add|remove` 与 `ih cron start` 是登记/暂停/删除的唯一入口，定时任务页只能看。现在 `POST /api/v1/schedules`（登记/更新 canonical `iterate.review-changed` 快审：项目目录、cron 表达式、时区、模式、轮数、git ref、超时）与 `POST /api/v1/schedules/enabled`（只停/启那一条，不动调度器与其它计划）、`DELETE /api/v1/schedules`（删除一条）都在控制台落地，均走二次确认 + 项目审计日志。页面为每个项目目录登记一条计划；把已有计划迁到另一个目录需二次确认，否则 409——一次误保存不会悄悄改写别人指向的计划。
+- **登记即校验，不在 9 点失败。** `install_schedule` 现在直接拒绝越界 `rounds`（1–20）与 `timeout`（60–7200 秒）——此前只有 CLI 的 typer 边界挡得住，WebUI/嵌入调用可登记一个到点才被 `ih` 拒绝（`--rounds 0`）或被调度器静默钳位的任务；`--timeout` CLI 上界同步 7200。
+- **表单本地校验 + 迁移确认的文案。** `scheduleForm.ts` 在提交前拦截非 5 段 cron、非法 git ref、越界轮数/超时、畸形时区；`movesExistingSchedule` 让「保存会把计划移到另一个目录」在确认框里先说明，而不是让 409 兜底。
+- **空态与提示同步。** 没有计划时页面同时给表单路径与 `ih iterate schedule add` 命令；登记时若调度器未运行，响应与消息写明 `ih iterate cron start`（计划不会自动执行的事实不藏在徽章里）。
+- **文档同步。** 两份 README 的定时评审条目与定时任务页段落、`DESIGN-iterate-harness.md` §17.4 路由契约表补上三条写路由与 409 语义；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.17.0。
+
+**核验（本机，2026-11-02）：**
+
+- 端到端（真起 uvicorn、真令牌、临时数据目录）：`POST /api/v1/schedules?confirm=true` 以项目根目录登记
+  `0 9 * * 1-5` + Asia/Shanghai 返回 `status:ok`、`detail.job.cwd` 为该项目根、命令含 `--changed --rounds 3`、
+  消息在调度器未运行时报 `ih iterate cron start`；`POST /schedules/enabled?enabled=false` 后 `GET /schedules`
+  的该条 `enabled=false`；`DELETE /schedules` 后列表为空；不带 `confirm` 422、非法 cron 422、`rounds=0` 422、
+  跨目录未带 `replace` 409 且原计划未变、带 `replace=true` 后迁移、根目录越界 403。
+- `pytest tests/ -q` → **3221 passed, 6 skipped, 1 warning in 115.65s**（新增 17 条 schedule 写路由 + 10 条 `install_schedule` 边界用例）。
+- `ruff check .` → All checks passed；`mypy src` → Success: no issues found in 273 source files；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 11 files / 110 tests passed、`vite build` 成功。
+- 反向变异：把 `_require_confirm` 的 422 分支改成直接放行，`test_save_requires_secondary_confirmation` 变红；还原后复测通过。
 
 ## [2.16.0] - 2026-11-01
 

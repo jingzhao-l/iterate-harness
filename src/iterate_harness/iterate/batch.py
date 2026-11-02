@@ -78,6 +78,14 @@ def install_schedule(
         raise ValueError(f"invalid cron expression: {schedule!r} (5-field cron)")
     if mode not in ("dry-run", "normal"):
         raise ValueError(f"mode must be dry-run|normal (got {mode!r})")
+    # The CLI's typer bounds are not reached by the WebUI or by embedding
+    # code; an out-of-range value would register a job whose own `ih` command
+    # is rejected at run time (``--rounds 0``) or silently clamped by the
+    # scheduler (timeout). Refuse at registration instead of failing at 9am.
+    if not isinstance(rounds, int) or isinstance(rounds, bool) or not 1 <= rounds <= 20:
+        raise ValueError(f"rounds must be an integer between 1 and 20 (got {rounds!r})")
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 60 <= timeout <= 7200:
+        raise ValueError(f"timeout must be between 60 and 7200 seconds (got {timeout!r})")
     if timezone is not None and not validate_timezone(timezone):
         raise ValueError(
             f"unknown timezone: {timezone!r} (expected an IANA name like Asia/Shanghai)"
