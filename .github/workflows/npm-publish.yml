@@ -1,0 +1,62 @@
+name: npm publish (iterate-harness)
+
+# Publishes the iterate-harness npm wrapper (npm/package.json) via npm
+# Trusted Publishing (OIDC) — no long-lived token on disk.
+#
+# Provenance binding (must match the Trusted Publisher mapping):
+#   package         -> repo(workflow file)
+#   iterate-harness -> jingzhao-l/iterate-harness(.github/workflows/npm-publish.yml)
+#
+# The wrapper pip-installs the wheel published by .github/workflows/release.yml,
+# so this job must only run AFTER that wheel is up (npm publish itself does not
+# depend on the wheel; the wrapper fetches it at install time).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read    # read the tagged tree; writes nothing back
+  id-token: write   # OIDC token for `npm publish --provenance`
+
+concurrency:
+  group: npm-publish-iterate-harness
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Node 20 ships npm 10, which predates OIDC trusted publishing
+          # (added in npm 11.5.1). Do NOT pass `registry-url`: setup-node would
+          # write `_authToken=${NODE_AUTH_TOKEN}` with an unset secret, which
+          # makes npm raise ENEEDAUTH before the OIDC exchange.
+          node-version: "24"
+
+      - name: Verify wrapper version matches the release tag
+        working-directory: npm
+        run: |
+          TAG="${{ github.event.release.tag_name || github.ref_name }}"
+          TAG="${TAG#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ -n "$TAG" ] && [ "$TAG" != "$PKG" ]; then
+            echo "::error::package.json version $PKG does not match release tag $TAG"
+            exit 1
+          fi
+          echo "wrapper version $PKG (tag: ${TAG:-<none>})"
+
+      - name: Publish with provenance
+        working-directory: npm
+        run: |
+          npm install -g npm@^11.5.1
+          echo "npm $(npm --version) on node $(node --version)"
+          echo "oidc-request-url: ${ACTIONS_ID_TOKEN_REQUEST_URL:+present}"
+          npm publish --provenance --access public
