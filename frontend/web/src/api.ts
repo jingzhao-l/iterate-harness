@@ -3,6 +3,7 @@
 
 import type {
   AgentsView,
+  CapabilitiesView,
   ChatMessage,
   ChatRunStatus,
   CheckpointView,
@@ -271,6 +272,12 @@ export const api = {
   // network-free, read-only; each check carries an actionable remedy.
   doctor: (projectRoot?: string): Promise<DoctorView> =>
     request<DoctorView>(`/doctor${buildQuery(projectRoot)}`),
+
+  // Capability inventory: the exact tools/commands/skills/plugins/MCP configs
+  // this project loads, plus static MCP problems with copyable remedies.
+  // Read-only and network-free.
+  capabilities: (projectRoot?: string): Promise<CapabilitiesView> =>
+    request<CapabilitiesView>(`/capabilities${buildQuery(projectRoot)}`),
 
   // Scheduled reviews: the machine-level cron registry, scheduler liveness and
   // recent executions (with bounded output tails). The GET is read-only; the

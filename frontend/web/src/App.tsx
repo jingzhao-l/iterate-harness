@@ -14,6 +14,7 @@ import ChatPanel from "./components/ChatPanel";
 import ErrorBoundary from "./components/ErrorBoundary";
 import ThemeToggle from "./components/ThemeToggle";
 import BudgetRate from "./pages/BudgetRate";
+import Capabilities from "./pages/Capabilities";
 import Checkpoints from "./pages/Checkpoints";
 import ConfigPage from "./pages/ConfigPage";
 import Dashboard from "./pages/Dashboard";
@@ -39,6 +40,7 @@ const NAV_ITEMS = [
   { to: "/diff", label: "运行对比", end: false },
   { to: "/gate", label: "判定闸", end: false },
   { to: "/schedules", label: "定时任务", end: false },
+  { to: "/capabilities", label: "能力清单", end: false },
   { to: "/doctor", label: "自检", end: false },
 ];
 
@@ -56,6 +58,7 @@ const G_BUFFER_ROUTES: Record<string, string> = {
   v: "/diff",
   j: "/gate",
   s: "/schedules",
+  n: "/capabilities",
   k: "/doctor",
 };
 
@@ -238,6 +241,7 @@ export default function App(): React.JSX.Element {
             <Route path="/diff" element={<Diff />} />
             <Route path="/gate" element={<Gate />} />
             <Route path="/schedules" element={<Schedules />} />
+            <Route path="/capabilities" element={<Capabilities />} />
             <Route path="/doctor" element={<Doctor />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

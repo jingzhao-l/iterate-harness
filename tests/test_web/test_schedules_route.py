@@ -83,6 +83,8 @@ def test_registered_job_gets_a_fresh_next_run_and_its_last_result(
     assert job["cwd"] == "/tmp/project"
     assert job["enabled"] is True
     assert job["schedule_valid"] is True
+    assert job["timezone_valid"] is True
+    assert job["schedule_error"] is None
     assert job["last_status"] == "success"
     assert job["last_run"].startswith("2026-10-28T01:00:00")
     next_run = datetime.datetime.fromisoformat(job["next_run"])
@@ -101,8 +103,53 @@ def test_invalid_schedule_is_reported_rather_than_crashing(
     )
     job = client.get("/api/v1/schedules").json()["jobs"][0]
     assert job["schedule_valid"] is False
+    assert job["timezone_valid"] is True
+    assert job["schedule_error"] == "invalid cron expression (expected 5 fields)"
     assert job["next_run"] is None
     assert job["enabled"] is True
+
+
+def test_invalid_timezone_is_not_mislabelled_as_invalid_cron(
+    client: TestClient, data_dir: Path
+) -> None:
+    """A valid expression + unknown zone must point at the zone, not the cron.
+
+    2.17.0 collapsed every failure into ``schedule_valid:false`` and the page
+    rendered "无效表达式", sending the operator to rewrite a perfectly good
+    expression. The two causes are separate repairs, so they need separate
+    fields and wording.
+    """
+    _write_jobs(
+        data_dir,
+        [
+            {
+                "name": "bad-zone",
+                "schedule": "0 9 * * 1-5",
+                "timezone": "Mars/Olympus_Mons",
+                "command": "ih iterate run",
+            }
+        ],
+    )
+    job = client.get("/api/v1/schedules").json()["jobs"][0]
+    assert job["schedule_valid"] is False
+    assert job["timezone_valid"] is False
+    assert job["next_run"] is None
+    assert job["schedule_error"] is not None
+    assert "unknown timezone" in job["schedule_error"]
+    assert "cron" not in job["schedule_error"].lower()
+
+
+def test_valid_expression_with_no_timezone_stays_valid(
+    client: TestClient, data_dir: Path
+) -> None:
+    _write_jobs(
+        data_dir,
+        [{"name": "utc", "schedule": "0 9 * * *", "command": "ih iterate run"}],
+    )
+    job = client.get("/api/v1/schedules").json()["jobs"][0]
+    assert job["schedule_valid"] is True
+    assert job["timezone_valid"] is True
+    assert job["schedule_error"] is None
 
 
 def test_history_is_normalised_with_duration_and_bounded_tails(

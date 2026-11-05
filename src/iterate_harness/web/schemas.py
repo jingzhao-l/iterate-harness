@@ -121,6 +121,92 @@ class DoctorView(BaseModel):
     checks: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class CapabilityProblem(BaseModel):
+    """One reason a capability is missing or misconfigured (design §17.3 P12)."""
+
+    kind: str
+    name: str
+    detail: str
+    remedy: str = ""
+
+
+class CapabilityTool(BaseModel):
+    """A tool the engine registers for this project."""
+
+    name: str
+    description: str = ""
+    required_args: list[str] = Field(default_factory=list)
+    optional_args: list[str] = Field(default_factory=list)
+
+
+class CapabilityCommand(BaseModel):
+    """A slash command registered in this process."""
+
+    name: str
+    description: str = ""
+    behavior: str = "unknown"
+    behavior_detail: str = ""
+    remote_invocable: bool = True
+    remote_admin_opt_in: bool = False
+
+
+class CapabilitySkill(BaseModel):
+    """A bundled, user or plugin skill visible to this project."""
+
+    name: str
+    description: str = ""
+    source: str = ""
+    path: str = ""
+    user_invocable: bool = True
+    disable_model_invocation: bool = False
+    model: str = ""
+
+
+class CapabilityPlugin(BaseModel):
+    """One discovered plugin and the artifacts it contributes."""
+
+    name: str
+    version: str = "0.0.0"
+    description: str = ""
+    enabled: bool = True
+    path: str = ""
+    skills: int = 0
+    commands: int = 0
+    agents: int = 0
+    mcp_servers: int = 0
+
+
+class CapabilityMcpServer(BaseModel):
+    """One configured MCP server with its static validation result."""
+
+    name: str
+    transport: str = "unknown"
+    target: str = "configured"
+    status: str = "ok"
+    issues: list[str] = Field(default_factory=list)
+    remedy: str = ""
+
+
+class CapabilitiesView(BaseModel):
+    """Read-only capability inventory (design §17.3 P12).
+
+    It is the console/CLI projection of the exact registries the engine loads.
+    ``has_problems`` is true when a loader failed or an MCP server cannot start
+    as configured; ``summary`` still counts everything that loaded.
+    """
+
+    project_root: str
+    generated_at: str
+    summary: dict[str, int] = Field(default_factory=dict)
+    has_problems: bool = False
+    problems: list[CapabilityProblem] = Field(default_factory=list)
+    tools: list[CapabilityTool] = Field(default_factory=list)
+    commands: list[CapabilityCommand] = Field(default_factory=list)
+    skills: list[CapabilitySkill] = Field(default_factory=list)
+    plugins: list[CapabilityPlugin] = Field(default_factory=list)
+    mcp_servers: list[CapabilityMcpServer] = Field(default_factory=list)
+
+
 class RunSummary(BaseModel):
     """One decision-log entry in the runs overview (design §17.3 P2)."""
 

@@ -371,6 +371,22 @@ table.data tr.row-selected td {
   font-size: 12px;
 }
 
+/* Capability inventory (design §17.3 P12): long MCP targets, skill paths and
+   plugin paths must wrap instead of stretching the table past the viewport. */
+.capability-target,
+.capability-path {
+  max-width: 26rem;
+  overflow-wrap: anywhere;
+}
+
+.capability-path {
+  font-size: 12px;
+}
+
+.capability-filters input[type="search"] {
+  min-width: 18rem;
+}
+
 .chip {
   border: 1px solid var(--border-strong);
   border-radius: 999px;

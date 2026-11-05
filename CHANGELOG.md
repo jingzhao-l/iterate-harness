@@ -2,6 +2,22 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.18.0] - 2026-11-05
+
+**版本判断：minor。** 新增一个 CLI 子命令、一条只读 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih capabilities` 是新增入口，`--strict` 只在显式传入时退出 1），响应形状与 `.iterate` 数据格式不动。附带修复一个真实 UX 缺陷：定时任务把「时区非法」误报成「cron 表达式非法」，现已分开呈现。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。
+
+- **能力清单：控制台与 CLI 第一次能回答「实际加载了什么、为什么缺」。** 新增共享模块 `capabilities.py`：一次无网络、只读地加载工具（含 JSON Schema 必填/可选参数）、斜杠命令（只读/会改状态/未知）、内置/用户/插件技能、已启用插件、MCP 服务器配置，并对每个 MCP 服务器做静态校验——命令是否在 PATH、`cwd` 是否存在、HTTP/WS URL 是否合法。任一加载器失败都退化为一条带可复制 remedy 的 `problems` 行，不会把整页变成 500；单个坏插件也不会隐藏其余能力。CLI：`ih capabilities [--project-root] [--json] [--strict]`；默认人类可读，`--json` 与页面同构，`--strict` 在任一问题存在时退出 1，可直接进 CI。实测默认环境列出 45 个工具 / 63 个斜杠命令 / 9 个技能。
+- **控制台「能力清单」页（`g n`，`GET /api/v1/capabilities`）。** 复用同一个加载器与校验器，页面提供摘要卡、类别 chip（MCP / 技能 / 插件 / 工具 / 斜杠命令）与跨名称/描述/路径/schema 参数的搜索；问题优先的表格把每个坏配置与可复制修复方法放在最前。加载中、空清单、读取失败（带重试）三种状态都有独立呈现；页面明确写「只读、不启动 MCP 服务器/模型/工具」。根目录越界 403、不存在 404，与其它路由一致。
+- **定时任务不再把时区错误说成 cron 错误。** `GET /api/v1/schedules` 新增 `timezone_valid` 与 `schedule_error`，页面把「无效的 cron 表达式」与「未知时区：Mars/…」分开显示——此前一个合法 cron 配一个拼错的时区会显示「无效表达式」，把用户送去改一个本来正确的表达式。`next_run` 在两种失败下都为 `null`，`schedule_valid` 仍保持兼容语义。
+- **文档同步。** 两份 README 增加能力清单命令块、能力条目、WebUI 页面清单与 `g n` 说明；`DESIGN-iterate-harness.md` §17.3/§17.4/§17.5 补齐 P9–P12 页面、`GET /api/v1/capabilities` 与前端路由；`ih web serve --help` 的页面清单同步加入能力清单；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.18.0（实发版以 2.17.0 为基线，任务文本中的 2.6.0 为陈旧信息）。
+
+**核验（本机，2026-11-05）：**
+
+- 端到端（真起 uvicorn、真令牌、临时配置/数据目录）：`GET /api/v1/capabilities?project_root=<repo>` 返回 200，`summary` 为 `{'tools': 45, 'commands': 63, 'skills': 9, 'plugins': 0, 'enabled_plugins': 0, 'mcp_servers': 0, 'mcp_errors': 0, 'problems': 0}`；无令牌返回 401；CLI `--json` 与 API 的 summary 完全一致。注入 `mcp_servers.broken = {type: http, url: ftp://bad}` 后，CLI `--strict` 退出 1、API `has_problems=true`，两边的 `problems[0]` 均为 `kind=mcp`、`detail=invalid http url: ftp://bad` 并带可复制 remedy。构建产物 `frontend/web/dist/assets/index-*.js` 含「能力清单」。
+- `pytest tests/ -q` → **3242 passed, 6 skipped, 15 warnings in 177.18s**（新增 20 条：18 条 capability 单元/路由/CLI + 2 条时区回归）。
+- `ruff check src tests scripts` → All checks passed；`mypy src` → Success: no issues found in 275 source files；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 12 files / 120 tests passed、`vite build` 成功（77 modules）。
+- 反向验证：把 `validate_mcp_server` 的 HTTP URL 校验短路为恒真，`test_invalid_remote_url_is_an_error` 与 `test_bad_mcp_config_becomes_a_problem_not_a_crash` 变红；还原后复测通过。
+
 ## [2.17.0] - 2026-11-02
 
 **版本判断：minor。** 控制台定时任务页从只读变成可写——登记/更新、暂停、删除一条计划都能在浏览器里完成；既有命令、退出码集合与响应形状不动，读模型（`GET /api/v1/schedules`）未变。

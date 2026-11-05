@@ -445,6 +445,8 @@ export interface CronJobView {
   cwd: string;
   enabled: boolean;
   schedule_valid: boolean;
+  timezone_valid: boolean;
+  schedule_error: string | null;
   next_run: string | null;
   last_run: string | null;
   last_status: string | null;
@@ -545,3 +547,83 @@ export interface DoctorView {
   summary: Record<string, number>;
   checks: DoctorCheck[];
 }
+
+// ---- Capability inventory (design §17.3 P12) ----
+// The console's projection of `ih capabilities`: the registries the engine
+// actually loaded (tools / slash commands / skills / plugins / configured MCP
+// servers) plus static configuration problems with copyable remedies.
+
+export interface CapabilityProblem {
+  kind: string;
+  name: string;
+  detail: string;
+  remedy: string;
+}
+
+export interface CapabilityTool {
+  name: string;
+  description: string;
+  required_args: string[];
+  optional_args: string[];
+}
+
+export interface CapabilityCommand {
+  name: string;
+  description: string;
+  behavior: "read_only" | "stateful" | "unknown";
+  behavior_detail: string;
+  remote_invocable: boolean;
+  remote_admin_opt_in: boolean;
+}
+
+export interface CapabilitySkill {
+  name: string;
+  description: string;
+  source: string;
+  path: string;
+  user_invocable: boolean;
+  disable_model_invocation: boolean;
+  model: string;
+}
+
+export interface CapabilityPlugin {
+  name: string;
+  version: string;
+  description: string;
+  enabled: boolean;
+  path: string;
+  skills: number;
+  commands: number;
+  agents: number;
+  mcp_servers: number;
+}
+
+export interface CapabilityMcpServer {
+  name: string;
+  transport: string;
+  target: string;
+  status: "ok" | "error";
+  issues: string[];
+  remedy: string;
+}
+
+export interface CapabilitiesView {
+  project_root: string;
+  generated_at: string;
+  summary: Record<string, number>;
+  has_problems: boolean;
+  problems: CapabilityProblem[];
+  tools: CapabilityTool[];
+  commands: CapabilityCommand[];
+  skills: CapabilitySkill[];
+  plugins: CapabilityPlugin[];
+  mcp_servers: CapabilityMcpServer[];
+}
+
+export type CapabilityCategory =
+  | "all"
+  | "mcp"
+  | "skills"
+  | "plugins"
+  | "tools"
+  | "commands";

@@ -280,6 +280,16 @@ ih iterate report --html  # single-file HTML report (convergence curve, diffs, s
 ih iterate doctor         # skill↔harness dimension-system consistency check
 ```
 
+### Capabilities & readiness
+
+```bash
+ih capabilities                    # tools / commands / skills / plugins / MCP configs + problems
+ih capabilities --json             # machine-readable inventory (scripts / dashboards)
+ih capabilities --strict           # CI gate: exit 1 when any loader or MCP config is broken
+ih capabilities --project-root /path/to/repo
+ih doctor                          # machine readiness (credentials, data dir, sandbox, hooks)
+```
+
 ### Team & live workers
 
 ```bash
@@ -337,13 +347,14 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Scheduled review** — `ih iterate schedule add "0 9 * * 1-5"` registers a cron job that runs the changed-only quick review daily (UTC) with `--clean-ok`; new-vs-stubborn findings surface via the trend library. The WebUI **Schedules** page (`g s`) shows the registry, the next run and the last executions — and is also where you register, pause or delete a plan now, so "did last night's run pass?" no longer needs a terminal (see the console page below).
 - **Cron scheduler daemon** — `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`).
 - **Environment self-check** — `ih doctor` diagnoses the local machine in one network-free pass: interpreter floor, package import, config parse, active-profile credential presence (never the secret itself), data-dir writability, project/git state, iterate config + trusted validation commands, run-lease state, Docker sandbox availability and the pre-commit hook — each with an executable `remedy`. Exit code is CI-friendly (1 on a hard failure, or on any warning with `--strict`); `--json` is for scripts. The WebUI **自检** page (`g k`) renders the same report, so "is this machine ready to iterate?" no longer needs a terminal.
+- **Capability inventory** — `ih capabilities` answers "what can this project's agent actually use, and why is a capability missing?" in one network-free read: every registered tool (with required/optional schema arguments), slash command (read-only / stateful), bundled/user/plugin skill, enabled plugin and MCP server config, plus static MCP checks for a missing executable, malformed URL or missing `cwd` — each problem carries a copyable remedy. `--json` is stable for scripts and `--strict` exits 1 on any problem, so a broken MCP server fails CI before a run does. The WebUI **Capabilities** page (`g n`) is the same inventory with category chips, search and a problem-first table; it never starts a server, model or tool.
 
 ### WebUI management console
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
-**Run diff**, **Gate**, **Schedules**, **自检 (doctor)**, Workspaces, **Team**,
-Checkpoints, Budget & Rate, Config, Reports. The **Trend**
+**Run diff**, **Gate**, **Schedules**, **Capabilities**, **自检 (doctor)**,
+Workspaces, **Team**, Checkpoints, Budget & Rate, Config, Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
 entries arrive — no terminal needed to tell whether a loop is actually
@@ -378,6 +389,15 @@ the console uses. Moving an existing plan to another directory asks before it
 happens, so a stray save can never silently retarget someone's schedule. The
 page stays machine-scoped (it does not follow the project-root selector), but
 the form records explicitly which project directory the plan is for.
+
+The **Capabilities** page (`g n`) is the console's half of `ih capabilities`:
+every tool, slash command, skill, plugin and MCP server configuration this
+project actually loads, with category chips and a free-text search that spans
+names, descriptions, paths and schema arguments. A problem-first table lists
+each broken loader or MCP config with a copyable remedy — a missing executable
+or malformed URL is visible here before a live run turns it into a failed call.
+It is read-only and network-free: no MCP server is started and no model or tool
+is invoked.
 
 The **自检** page (`g k`) is the console's half of `ih doctor`: a deterministic,
 network-free report of the local machine's readiness — interpreter floor,

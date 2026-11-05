@@ -35,6 +35,7 @@ from ...services.cron import (
     next_run_time,
     set_job_enabled,
     validate_cron_expression,
+    validate_timezone,
 )
 from ..roots import resolve_project_root
 from ..schemas import OperationResult, ScheduleUpsertRequest, SchedulesView
@@ -72,26 +73,38 @@ def _job_view(job: Mapping[str, Any], now: datetime.datetime) -> dict[str, objec
     schedule = str(job.get("schedule") or "")
     raw_timezone = job.get("timezone")
     timezone_name = raw_timezone if isinstance(raw_timezone, str) and raw_timezone else None
-    valid = validate_cron_expression(schedule)
+    cron_valid = validate_cron_expression(schedule)
+    timezone_valid = timezone_name is None or validate_timezone(timezone_name)
+    valid = cron_valid and timezone_valid
     next_run: str | None = None
-    if valid:
+    error: str | None = None
+    if not cron_valid:
+        # The two failure modes are different repairs (rewrite the expression
+        # vs. fix the zone), so the page must not label both "invalid cron".
+        error = "invalid cron expression (expected 5 fields)"
+    elif not timezone_valid:
+        error = f"unknown timezone: {timezone_name!r} (expected an IANA name like Asia/Shanghai)"
+    else:
         try:
             # Computed fresh rather than read from ``job["next_run"]``: that
             # stored value is only refreshed when the daemon runs, so a stopped
             # scheduler would otherwise show a "next run" that is already past.
             next_run = next_run_time(schedule, base=now, tz_name=timezone_name).isoformat()
-        except ValueError:
+        except ValueError as exc:
             valid = False
+            error = str(exc)
     last_run = _parse_iso(job.get("last_run"))
     last_status = job.get("last_status")
     return {
         "name": str(job.get("name") or ""),
         "schedule": schedule,
         "timezone": timezone_name,
+        "timezone_valid": timezone_valid,
         "command": str(job.get("command") or ""),
         "cwd": str(job.get("cwd") or ""),
         "enabled": bool(job.get("enabled", True)),
         "schedule_valid": valid,
+        "schedule_error": error,
         "next_run": next_run,
         "last_run": last_run.isoformat() if last_run is not None else None,
         "last_status": str(last_status) if last_status else None,

@@ -28,6 +28,8 @@ function job(overrides: Partial<CronJobView> = {}): CronJobView {
     cwd: "/repo",
     enabled: true,
     schedule_valid: true,
+    timezone_valid: true,
+    schedule_error: null,
     next_run: "2026-11-03T01:00:00+00:00",
     last_run: null,
     last_status: null,

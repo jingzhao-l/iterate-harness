@@ -59,7 +59,16 @@ function JobRow({
       <td className="mono">{job.schedule || "—"}</td>
       <td>{job.timezone || "UTC"}</td>
       <td>
-        {job.schedule_valid ? nextRunLabel(job.next_run) : <span className="badge severity-critical">无效表达式</span>}
+        {job.schedule_valid ? (
+          nextRunLabel(job.next_run)
+        ) : (
+          <>
+            <span className="badge severity-critical">调度无效</span>
+            <div className="muted small">
+              {job.schedule_error || "无效的调度配置"}
+            </div>
+          </>
+        )}
       </td>
       <td className="mono">{job.last_run ? shortTime(job.last_run) : "从未运行"}</td>
       <td>

@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import sys
 import threading
 from contextlib import redirect_stderr
@@ -15,12 +14,16 @@ from io import StringIO
 from pathlib import Path
 from types import ModuleType
 from typing import Optional, Sequence
-from urllib.parse import urlparse
 
 import typer
 
 from iterate_harness import __version__
 from iterate_harness.auth.manager import AuthManager
+from iterate_harness.capabilities import (
+    command_behavior as _dry_run_command_behavior,
+    schema_argument_preview as _schema_argument_preview,
+    validate_mcp_server as _validate_mcp_server,
+)
 from iterate_harness.config.settings import ProviderProfile
 from iterate_harness.iterate.batch import DEFAULT_SCHEDULE_TIMEOUT_SECONDS
 from iterate_harness.iterate.decision_log import DecisionLogEntry
@@ -60,152 +63,6 @@ def _safe_short(text: str, *, limit: int = 140) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 3] + "..."
-
-
-def _schema_argument_preview(tool_schema: dict[str, object]) -> dict[str, object]:
-    input_schema = tool_schema.get("input_schema")
-    if not isinstance(input_schema, dict):
-        return {"required_args": [], "optional_args": []}
-    properties = input_schema.get("properties")
-    if not isinstance(properties, dict):
-        return {"required_args": [], "optional_args": []}
-    required_raw = input_schema.get("required")
-    required = (
-        sorted(str(name) for name in required_raw if isinstance(name, str))
-        if isinstance(required_raw, list)
-        else []
-    )
-    optional = sorted(name for name in properties if name not in required)
-    return {"required_args": required, "optional_args": optional}
-
-
-def _mcp_transport_preview(config: object) -> dict[str, str]:
-    if hasattr(config, "type"):
-        transport = str(getattr(config, "type") or "unknown")
-    elif isinstance(config, dict):
-        transport = str(config.get("type") or "unknown")
-    else:
-        transport = "unknown"
-
-    if transport == "stdio":
-        command = getattr(config, "command", None) if not isinstance(config, dict) else config.get("command")
-        args = getattr(config, "args", None) if not isinstance(config, dict) else config.get("args")
-        rendered_args = " ".join(str(item) for item in args) if isinstance(args, list) and args else ""
-        target = " ".join(part for part in (str(command or "").strip(), rendered_args.strip()) if part).strip()
-        return {"transport": "stdio", "target": target or "configured"}
-    if transport in {"http", "ws"}:
-        url = getattr(config, "url", None) if not isinstance(config, dict) else config.get("url")
-        return {"transport": transport, "target": str(url or "").strip() or "configured"}
-    return {"transport": transport, "target": "configured"}
-
-
-def _validate_mcp_server(name: str, config: object) -> dict[str, object]:
-    preview = _mcp_transport_preview(config)
-    issues: list[str] = []
-    status = "ok"
-    transport = preview["transport"]
-
-    if transport == "stdio":
-        command = getattr(config, "command", None) if not isinstance(config, dict) else config.get("command")
-        raw_cwd = getattr(config, "cwd", None) if not isinstance(config, dict) else config.get("cwd")
-        command_text = str(command or "").strip()
-        if not command_text:
-            issues.append("missing command")
-        elif shutil.which(command_text) is None:
-            issues.append(f"command not found in PATH: {command_text}")
-        if raw_cwd:
-            resolved_cwd = Path(str(raw_cwd)).expanduser()
-            if not resolved_cwd.exists():
-                issues.append(f"cwd does not exist: {resolved_cwd}")
-    elif transport in {"http", "ws"}:
-        raw_url = getattr(config, "url", None) if not isinstance(config, dict) else config.get("url")
-        parsed = urlparse(str(raw_url or "").strip())
-        expected = {"http", "https"} if transport == "http" else {"ws", "wss"}
-        if parsed.scheme not in expected or not parsed.netloc:
-            issues.append(f"invalid {transport} url: {raw_url}")
-
-    if issues:
-        status = "error"
-    return {
-        "name": name,
-        **preview,
-        "status": status,
-        "issues": issues,
-    }
-
-
-def _dry_run_command_behavior(name: str) -> dict[str, str]:
-    read_only = {
-        "help",
-        "version",
-        "status",
-        "context",
-        "cost",
-        "usage",
-        "stats",
-        "onboarding",
-        "skills",
-        "doctor",
-        "diff",
-        "branch",
-        "privacy-settings",
-        "rate-limit-options",
-        "release-notes",
-        "upgrade",
-        "keybindings",
-        "files",
-    }
-    mutating = {
-        "clear",
-        "compact",
-        "resume",
-        "session",
-        "export",
-        "share",
-        "copy",
-        "tag",
-        "rewind",
-        "init",
-        "bridge",
-        "login",
-        "logout",
-        "feedback",
-        "config",
-        "permissions",
-        "plan",
-        "fast",
-        "effort",
-        "passes",
-        "turns",
-        "continue",
-        "provider",
-        "model",
-        "theme",
-        "output-style",
-        "vim",
-        "voice",
-        "commit",
-        "issue",
-        "pr_comments",
-        "agents",
-        "subagents",
-        "tasks",
-        "memory",
-    }
-    if name in read_only:
-        return {
-            "kind": "read_only",
-            "detail": "This slash command mainly inspects current state and should not require a model turn.",
-        }
-    if name in mutating:
-        return {
-            "kind": "stateful",
-            "detail": "This slash command can mutate local state, queue work, or trigger follow-up execution depending on its arguments.",
-        }
-    return {
-        "kind": "unknown",
-        "detail": "This slash command comes from a handler or plugin that dry-run cannot classify precisely.",
-    }
 
 
 def _tokenize_preview_text(text: str) -> list[str]:
@@ -2231,8 +2088,9 @@ def web_serve(
     """Start the WebUI management console (FastAPI + React frontend).
 
     Serves the dashboard, runs timeline, trend, run comparison, the recipe gate,
-    scheduled reviews, the environment self-check, checkpoints, budget, config,
-    and reports on a local loopback address and opens the browser. The backend
+    scheduled reviews, the capability inventory, the environment self-check,
+    checkpoints, budget, config, and reports on a local loopback address and
+    opens the browser. The backend
     binds to 127.0.0.1 by default and never exposes itself externally.
     """
     from iterate_harness.web.api import serve as web_serve_backend
@@ -3173,6 +3031,53 @@ def doctor_cmd(
         if check.status == "fail" or (strict and check.status == "warn")
     ]
     if problems:
+        raise typer.Exit(1)
+    raise typer.Exit(0)
+
+
+@app.command("capabilities")
+def capabilities_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project root whose plugins/skills/MCP config to inventory (default: current directory)",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the inventory as JSON (for scripts / CI)",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit 1 when any loader or MCP configuration problem is found",
+    ),
+) -> None:
+    """Inventory the tools, slash commands, skills, plugins and MCP servers.
+
+    Answers "what can this project's agent actually use, and why is a capability
+    missing?" without starting a model, a tool or an MCP server. Static MCP
+    validation catches a missing executable / bad URL / missing cwd before a
+    live run does. Exit code: 0 normally, 1 with ``--strict`` when any problem
+    was reported.
+
+    Examples:
+        ih capabilities
+        ih capabilities --project-root /path/to/repo
+        ih capabilities --json --strict
+    """
+    from iterate_harness.capabilities import (
+        build_capability_inventory,
+        render_capability_inventory,
+    )
+
+    root = str(Path(project_root).expanduser()) if project_root else str(Path.cwd())
+    inventory = build_capability_inventory(root)
+    if as_json:
+        print(json.dumps(inventory, ensure_ascii=False, indent=2))
+    else:
+        print(render_capability_inventory(inventory))
+    if strict and inventory.get("has_problems"):
         raise typer.Exit(1)
     raise typer.Exit(0)
 
