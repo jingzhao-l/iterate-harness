@@ -34,8 +34,35 @@ CORPUS_DIR = REPO_ROOT / "tests" / "kernel_fixtures"
 MANIFEST_PATH = CORPUS_DIR / "manifest.json"
 
 
+class PinNotPublished(Exception):
+    """The pinned kernel version is not on the registry (not released yet)."""
+
+
 def sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _version_key(value: str) -> tuple[int, ...]:
+    """Parse a dotted version into a sortable tuple (``0.1.11`` -> ``(0, 1, 11)``)."""
+    parts: list[int] = []
+    for segment in value.strip().split("."):
+        digits = "".join(ch for ch in segment if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def _published_latest(package: str) -> str | None:
+    """Return the registry ``latest`` version for ``package``, or ``None``."""
+    try:
+        result = subprocess.run(
+            ["npm", "view", package, "version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+    return result.stdout.strip() or None
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -60,9 +87,15 @@ def fetch_published(package: str, version: str, destination: Path) -> Path:
     except FileNotFoundError:
         raise SystemExit("npm is not on PATH — cannot verify the pin against the registry")
     except subprocess.CalledProcessError as error:
-        raise SystemExit(
-            f"npm pack {package}@{version} failed: {error.stderr.strip() or error.stdout.strip()}"
-        )
+        stderr = error.stderr.strip() or error.stdout.strip()
+        if "notarget" in stderr or "No matching version" in stderr:
+            # A pin to a version the registry does not carry is not necessarily a
+            # stale pin: the kernel may simply not have published this version
+            # yet (the standalone repo has no kernel/ checkout to check against).
+            # main() decides between "ahead of published" (warn) and a broken
+            # pin (fail) — see the PinNotPublished handler there.
+            raise PinNotPublished(f"{package}@{version} is not published") from error
+        raise SystemExit(f"npm pack {package}@{version} failed: {stderr}")
     # npm prints the path it wrote; fall back to a glob so a changed npm still works.
     printed = result.stdout.strip().splitlines()
     if printed:
@@ -128,7 +161,35 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(entries, list) or not entries:
         raise SystemExit("manifest pins no files")
 
-    source, cleanup, label = resolve_source(args, manifest)
+    try:
+        source, cleanup, label = resolve_source(args, manifest)
+    except PinNotPublished as exc:
+        if args.source:
+            raise
+        package = str(manifest.get("package", ""))
+        version = str(manifest.get("version", ""))
+        latest = _published_latest(package)
+        if latest is not None and _version_key(version) > _version_key(latest):
+            # The pin is ahead of every published version: the kernel has not
+            # released this contract yet, so there is nothing on the registry to
+            # be *stale* against. The authoritative check runs in the monorepo CI
+            # (``--source kernel/fixtures``, where the kernel checkout lives);
+            # the standalone repo must not go red waiting for an upstream publish
+            # it does not control. Keep the stale-pin failure below.
+            print(
+                f"WARN {exc}: pin is ahead of the published latest ({latest}); the "
+                "monorepo CI verifies the same pin against kernel/fixtures (the "
+                "source of truth). Registry verification activates once the kernel "
+                "publishes this version.",
+                file=sys.stderr,
+            )
+            return 0
+        raise SystemExit(
+            f"{exc}: cannot verify a pin to an unpublished version (latest on the "
+            f"registry is {latest or 'unknown'}) — this is a broken pin, not a "
+            "stale one."
+        )
+
     with cleanup:
         failures: list[str] = []
         for entry in entries:

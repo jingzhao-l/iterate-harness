@@ -11,6 +11,7 @@ All notable changes to iterate-harness should be recorded in this file.
 - **控制台「审计」页（`g u`，`GET /api/v1/audit`）。** 复用同一个读取器：操作下拉框 + 目标搜索 + 起始时间筛选，摘要卡片（匹配/本页/偏移/类别数），表格（时间/操作/目标/参数摘要可展开复制），分页器，以及三个导出按钮（Markdown / CSV / JSON，与页面共用同一份过滤条件）。加载中、空清单（区分「无记录」与「筛选无匹配」）、读取失败（带重试）三种状态独立呈现；页面明确写「只读，不写入任何项目状态」。根目录越界 403、不存在 404，与其它路由一致。
 - **导出：`GET /api/v1/audit/export?format=md|csv|json`。** Markdown 是可贴进 PR / 事故报告的摘要；CSV 一行一条记录（`timestamp,action,target,summary`）；JSON 与页面完全一致。与页面共用筛选，`X-Audit-Total` 头携带匹配总数。
 - **文档同步。** 两份 README 增加审计命令块、能力条目、WebUI 页面清单与 `g u` 说明；`DESIGN-iterate-harness.md` §17.3 补 P13 页面、§17.4 补 `audit.py` 模块与两条路由契约；`ih web serve --help` 的页面清单同步加入审计；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.19.0。
+- **修复（发版时独立仓 CI 点名）：`check_kernel_fixtures` 把「钉了一个还没发布的内核版本」当成硬失败。** 语料钉到 `iterate-kernel@0.1.11`，而 npm 最新只到 `0.1.10`（内核 0.1.11 尚未发布）。monorepo CI 用 `--source kernel/fixtures`（真实内核源码，权威口径，实测 10 文件一致）通过；独立仓只能跑 registry 拉取模式，遇到未发布版本直接 `npm pack` ETARGET 红掉整个构建——但「钉的版本比已发布的最新还新」不是陈旧钉（陈旧钉 = 发布方已前进、本仓还断言旧字节，那种仍会红）。现把这两种情况分开：钉在前（内核尚未发布，权威源码闸已先行校验）→ 警告 + 退出 0，registry 校验等内核发布后自动激活；钉的版本不存在且不超前（坏钉）→ 仍硬失败；陈旧钉（哈希不匹配）→ 仍硬失败。
 
 **核验（本机，2026-11-07）：**
 
