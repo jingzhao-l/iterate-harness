@@ -16,7 +16,7 @@ All notable changes to iterate-harness should be recorded in this file.
 **核验（本机，2026-11-07）：**
 
 - 端到端（真起 uvicorn、真令牌、临时数据目录）：`GET /api/v1/audit?project_root=<dir>` 返回 200，`total=2`、`actions=['config','schedule']`、最新在前；无令牌返回 401；`GET /audit/export?format=csv` 下载文件名 `iterate-audit-<stamp>.csv` 且 `X-Audit-Total=2`；CLI `ih audit --json` 与 API 的 `entries`/`actions`/`total` 完全一致，`--format markdown` 与 `--action schedule` 过滤正确。
-- `pytest tests/ -q` → **3264 passed, 6 skipped, 15 warnings in 124.29s**（新增 20 条：14 条路由 + 6 条 CLI）。
+- `pytest tests/ -q` → **3268 passed, 6 skipped, 15 warnings in 115.30s**（新增 24 条：20 条审计 + 4 条内核契约闸回归）。
 - `ruff check src tests scripts` → All checks passed；`mypy src` → Success: no issues found in 277 source files；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 13 files / 129 tests passed（+9）、`vite build` 成功（79 modules）。
 - 反向验证：把 `list_audit_entries` 的 `matched.reverse()` 移除，`test_page_is_newest_first_with_total_and_actions` 变红；还原后复测通过。
 
