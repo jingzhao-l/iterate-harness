@@ -2089,8 +2089,8 @@ def web_serve(
 
     Serves the dashboard, runs timeline, trend, run comparison, the recipe gate,
     scheduled reviews, the capability inventory, the environment self-check,
-    checkpoints, budget, config, and reports on a local loopback address and
-    opens the browser. The backend
+    the audit trail, checkpoints, budget, config, and reports on a local
+    loopback address and opens the browser. The backend
     binds to 127.0.0.1 by default and never exposes itself externally.
     """
     from iterate_harness.web.api import serve as web_serve_backend
@@ -3079,6 +3079,151 @@ def capabilities_cmd(
         print(render_capability_inventory(inventory))
     if strict and inventory.get("has_problems"):
         raise typer.Exit(1)
+    raise typer.Exit(0)
+
+
+@app.command("audit")
+def audit_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose audit journal to read (default: current directory)",
+    ),
+    action: str = typer.Option(
+        "",
+        "--action",
+        help="Filter by action prefix (e.g. 'config' matches 'config.save')",
+    ),
+    target: str = typer.Option(
+        "",
+        "--target",
+        help="Filter by target substring",
+    ),
+    since: str = typer.Option(
+        "",
+        "--since",
+        help="Only entries at/after this ISO 8601 timestamp (e.g. 2026-11-01T00:00:00)",
+    ),
+    offset: int = typer.Option(
+        0,
+        "--offset",
+        min=0,
+        help="Page offset from the newest entry",
+    ),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        min=1,
+        max=500,
+        help="Max entries to show",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the page as JSON (same shape as GET /api/v1/audit)",
+    ),
+    fmt: str = typer.Option(
+        "table",
+        "--format",
+        help="Render format: table | json | markdown | csv",
+    ),
+    out: str | None = typer.Option(
+        None,
+        "--out",
+        help="Write the output to this path instead of stdout (for scripts)",
+    ),
+) -> None:
+    """Read the WebUI audit journal: every mutating operation, filtered.
+
+    The WebUI records config saves, checkpoint restores/clears, schedule
+    upserts/toggles/deletes, findings-triage decisions, agent shutdowns and
+    workspace removals into ``.iterate/web-audit.jsonl``. Until now only the
+    ten newest lines surfaced (on the dashboard); this command is the full
+    read side, so an operator (or a compliance script) can answer "who changed
+    what, when, with which parameters" without opening the console.
+
+    Entries are returned newest first. ``--action`` is a prefix match
+    (``config`` matches ``config.save``), ``--target`` a substring match, and
+    ``--since`` a lower bound. Exit code: 0 (the trail is evidence, not a
+    gate); a journal that cannot be read prints a warning to stderr.
+
+    Examples:
+        ih audit
+        ih audit --action schedule --limit 20
+        ih audit --since 2026-11-01T00:00:00 --format csv --out audit.csv
+        ih audit --json
+    """
+    from datetime import datetime, timezone
+
+    from iterate_harness.audit import (
+        audit_csv,
+        distinct_actions,
+        list_audit_entries,
+        render_audit_markdown,
+        render_audit_table,
+    )
+
+    root = str(Path(project_root).expanduser()) if project_root else str(Path.cwd())
+    since_dt: datetime | None = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since)
+        except ValueError:
+            print(f"Error: invalid --since value: {since!r} (expected ISO 8601)", file=sys.stderr)
+            raise typer.Exit(1)
+        if since_dt.tzinfo is None:
+            since_dt = since_dt.replace(tzinfo=timezone.utc)
+
+    entries, total = list_audit_entries(
+        root,
+        action=action,
+        target=target,
+        since=since_dt,
+        limit=limit,
+        offset=offset,
+    )
+
+    def _view() -> dict[str, object]:
+        return {
+            "project_root": str(Path(root).resolve()),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "total": total,
+            "returned": len(entries),
+            "offset": offset,
+            "limit": limit,
+            "truncated": offset + len(entries) < total,
+            "actions": distinct_actions(root),
+            "entries": entries,
+        }
+
+    requested_fmt = fmt.lower().strip()
+    if as_json:
+        requested_fmt = "json"
+    if requested_fmt not in {"table", "json", "markdown", "csv"}:
+        print(
+            f"Error: unknown --format {fmt!r} (allowed: table, json, markdown, csv)",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    if requested_fmt == "json":
+        body = json.dumps(_view(), ensure_ascii=False, indent=2) + "\n"
+    elif requested_fmt == "markdown":
+        body = render_audit_markdown(entries, root)
+    elif requested_fmt == "csv":
+        body = audit_csv(entries)
+    else:
+        body = render_audit_table(entries, total=total) + "\n"
+
+    if out:
+        try:
+            Path(out).write_text(body, encoding="utf-8")
+        except OSError as exc:
+            print(f"Error: cannot write {out}: {exc}", file=sys.stderr)
+            raise typer.Exit(1)
+        print(f"Wrote {len(entries)} audit entries to {out}", flush=True)
+    else:
+        print(body, end="" if body.endswith("\n") else "\n", flush=True)
     raise typer.Exit(0)
 
 

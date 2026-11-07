@@ -195,14 +195,20 @@ def _kernel_dir(explicit: str | None) -> Path | None:
     """Find a kernel whose *built* dist the driver can require, at the version the corpus pins."""
     candidates: list[Path] = []
     if explicit:
-        candidates.append(Path(explicit))
+        # Resolved here because the node driver is written to /tmp and `require()`
+        # there resolves a relative path against the driver, not against this cwd.
+        candidates.append(Path(explicit).expanduser().resolve())
     version = ""
     if MANIFEST.is_file():
         version = str(json.loads(MANIFEST.read_text()).get("version", ""))
+    # REPO is `<monorepo>/harness/iterate-harness`, so the monorepo is two levels up
+    # and the GlassPane checkout is its sibling. This was one level short, which made
+    # the documented command look for `/Volumes/Eng-Dev/kernel`, find nothing, and
+    # exit 2 without comparing either implementation — a gate that never runs.
     for root in (
         REPO,
-        REPO.parent.parent.parent,  # <monorepo>/harness/iterate-harness -> monorepo
-        REPO.parent.parent.parent.parent / "GlassPane",
+        REPO.parent.parent,  # <monorepo>/harness/iterate-harness -> monorepo
+        REPO.parent.parent.parent / "GlassPane",
     ):
         for tail in (
             "node_modules/iterate-kernel",

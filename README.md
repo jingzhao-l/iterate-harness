@@ -288,6 +288,9 @@ ih capabilities --json             # machine-readable inventory (scripts / dashb
 ih capabilities --strict           # CI gate: exit 1 when any loader or MCP config is broken
 ih capabilities --project-root /path/to/repo
 ih doctor                          # machine readiness (credentials, data dir, sandbox, hooks)
+ih audit                           # full WebUI audit trail (who changed what, when)
+ih audit --action schedule         # filter by action prefix; --target/--since too
+ih audit --format csv --out audit.csv  # export for a spreadsheet / compliance
 ```
 
 ### Team & live workers
@@ -348,13 +351,15 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Cron scheduler daemon** — `ih iterate cron start|stop|status|history` manages the background daemon that executes scheduled jobs — start it once, scheduled reviews keep running unattended, historizable (`--limit`, `--json`).
 - **Environment self-check** — `ih doctor` diagnoses the local machine in one network-free pass: interpreter floor, package import, config parse, active-profile credential presence (never the secret itself), data-dir writability, project/git state, iterate config + trusted validation commands, run-lease state, Docker sandbox availability and the pre-commit hook — each with an executable `remedy`. Exit code is CI-friendly (1 on a hard failure, or on any warning with `--strict`); `--json` is for scripts. The WebUI **自检** page (`g k`) renders the same report, so "is this machine ready to iterate?" no longer needs a terminal.
 - **Capability inventory** — `ih capabilities` answers "what can this project's agent actually use, and why is a capability missing?" in one network-free read: every registered tool (with required/optional schema arguments), slash command (read-only / stateful), bundled/user/plugin skill, enabled plugin and MCP server config, plus static MCP checks for a missing executable, malformed URL or missing `cwd` — each problem carries a copyable remedy. `--json` is stable for scripts and `--strict` exits 1 on any problem, so a broken MCP server fails CI before a run does. The WebUI **Capabilities** page (`g n`) is the same inventory with category chips, search and a problem-first table; it never starts a server, model or tool.
+- **Audit trail** — `ih audit` reads the console's full audit journal (`.iterate/web-audit.jsonl`): every mutating operation with timestamp, action, target and parameter summary, filtered by action prefix / target substring / start time, paged newest-first, and exported as Markdown / CSV / JSON for a spreadsheet or an incident report. The WebUI **审计** page (`g u`) is the same reader with the filters in the browser, so "who changed what, when?" no longer needs a terminal.
 
 ### WebUI management console
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
 **Run diff**, **Gate**, **Schedules**, **Capabilities**, **自检 (doctor)**,
-Workspaces, **Team**, Checkpoints, Budget & Rate, Config, Reports. The **Trend**
+**审计 (audit)**, Workspaces, **Team**, Checkpoints, Budget & Rate, Config,
+Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
 entries arrive — no terminal needed to tell whether a loop is actually
@@ -407,6 +412,16 @@ validation commands, run-lease state, Docker sandbox availability and the
 pre-commit hook — each with an executable remedy the operator can copy. It is
 read-only and shows a failure-first headline, so a broken machine is visible
 before a wall of green checks.
+
+The **审计** page (`g u`) is the read side of the console's audit journal: every
+mutating operation — config saves, checkpoint restore/clear, schedule
+upsert/toggle/delete, findings-triage decisions, agent shutdowns, workspace
+removals and run controls — with its timestamp, action, target and parameter
+summary. It filters by action prefix (a dropdown), target substring and start
+time, pages newest-first ("showing m of n" instead of guessing), and exports
+the filtered window as Markdown / CSV / JSON. It is read-only, so the answer
+to "who changed what, when?" no longer needs a terminal — and the same reader
+backs `ih audit`, so the CLI and the page can never disagree.
 
 ### Cost, resources & gates
 

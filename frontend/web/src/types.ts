@@ -61,6 +61,29 @@ export interface RunSummary {
   data: Record<string, unknown>;
 }
 
+// Audit trail (design §17.3 P13) — the read side of the append-only
+// web-audit.jsonl journal that every mutating console operation writes.
+export interface AuditEntry {
+  timestamp: string;
+  action: string;
+  target: string;
+  summary?: Record<string, unknown>;
+}
+
+export interface AuditView {
+  project_root: string;
+  generated_at: string;
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  actions: string[];
+  entries: AuditEntry[];
+}
+
+export type AuditExportFormat = "md" | "csv" | "json";
+
 export interface TimelineEntry {
   index: number;
   timestamp: string;

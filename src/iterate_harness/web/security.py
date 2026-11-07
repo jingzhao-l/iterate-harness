@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from iterate_harness.audit import AUDIT_DIR, AUDIT_FILE
+
 #: Python 3.10 compatibility — ``datetime.UTC`` is only available in 3.11+.
 UTC = timezone.utc
 
@@ -32,10 +34,6 @@ log = logging.getLogger(__name__)
 
 #: Loopback host names accepted as CORS origins (in addition to IP forms).
 _LOOPBACK_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"})
-
-#: Audit log file name (inside the project's ``.iterate`` directory).
-AUDIT_DIR = ".iterate"
-AUDIT_FILE = "web-audit.jsonl"
 
 #: How many trailing bytes of the audit journal :meth:`AuditLog.entries`
 #: scans. The file is append-only and never rotated, and every dashboard tick

@@ -1734,3 +1734,58 @@ button.chip:hover {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* ---- audit trail (design §17.3 P13) ---- */
+.btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.filter-bar .field-label {
+  margin-top: 0;
+  min-width: 160px;
+}
+
+.filter-bar .search-input,
+.filter-bar input[type="datetime-local"],
+.filter-bar select {
+  width: 100%;
+}
+
+.audit-row .audit-summary {
+  max-width: 360px;
+}
+
+.audit-row .audit-json {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.audit-row .audit-json pre {
+  margin: 0;
+  max-width: 300px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.audit-row .audit-json .btn {
+  flex: 0 0 auto;
+}

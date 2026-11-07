@@ -3,6 +3,8 @@
 
 import type {
   AgentsView,
+  AuditExportFormat,
+  AuditView,
   CapabilitiesView,
   ChatMessage,
   ChatRunStatus,
@@ -145,6 +147,12 @@ export interface TrendExportDownload {
   contentType: string;
 }
 
+export interface AuditExportDownload {
+  filename: string;
+  text: string;
+  contentType: string;
+}
+
 /**
  * Fetch a trend export as text plus the server's filename. The server owns the
  * filename (it stamps the report's own generated_at), so the download matches
@@ -165,6 +173,58 @@ export async function downloadTrendExport(
   const match = /filename="?([^";]+)"?/.exec(disposition);
   return {
     filename: match?.[1] ?? `iterate-trend.${format}`,
+    text: await response.text(),
+    contentType: response.headers.get("Content-Type") ?? "",
+  };
+}
+
+export interface AuditQuery {
+  action?: string;
+  target?: string;
+  since?: string;
+  offset?: number;
+  limit?: number;
+}
+
+/**
+ * Fetch the paged audit trail (newest first). Read-only; the journal is
+ * append-only and the same reader backs `ih audit`.
+ */
+export async function fetchAudit(
+  projectRoot: string | undefined,
+  query: AuditQuery = {},
+): Promise<AuditView> {
+  return request<AuditView>(
+    `/audit${buildQuery(projectRoot, {
+      action: query.action,
+      target: query.target,
+      since: query.since,
+      offset: query.offset,
+      limit: query.limit,
+    })}`,
+  );
+}
+
+/** Download the filtered audit trail as Markdown / CSV / JSON. */
+export async function downloadAuditExport(
+  projectRoot: string | undefined,
+  format: AuditExportFormat,
+  query: AuditQuery = {},
+): Promise<AuditExportDownload> {
+  const response = await fetch(
+    `${API_BASE}/audit/export${buildQuery(projectRoot, {
+      format,
+      action: query.action,
+      target: query.target,
+      since: query.since,
+    })}`,
+    withAuth(),
+  );
+  if (!response.ok) await throwApiError(response);
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+  return {
+    filename: match?.[1] ?? `iterate-audit.${format}`,
     text: await response.text(),
     contentType: response.headers.get("Content-Type") ?? "",
   };

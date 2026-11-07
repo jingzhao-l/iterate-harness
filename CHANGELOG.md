@@ -2,6 +2,23 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.19.0] - 2026-11-07
+
+**版本判断：minor。** 新增一个 CLI 子命令、一条只读 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih audit` 是新增入口），响应形状与 `.iterate` 数据格式不动。附带修复一个展示缺陷：审计时间戳在 CLI 表格里保留了 `T` 分隔符。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。
+
+- **审计台账：控制台与 CLI 第一次能回答「谁改了什么、何时」。** 此前 WebUI 的每一次写操作（配置保存、检查点恢复/清除、计划登记/启停/删除、分诊决定、子代理停止、工作区移除、运行控制）都追加进 `.iterate/web-audit.jsonl`，但仪表盘只显示最新 10 条——台账对操作者而言是**只写不可读**的。新增共享模块 `audit.py`：一次只读、流式、防御式地读取整本日志（坏行跳过，绝不 500），支持操作前缀（`config` 匹配 `config.save`）、目标子串、起始时间三种筛选，最新在前分页，并诚实报告「显示 m / n 条」；`distinct_actions` 提供筛选下拉框的稳定类别。同一份读取器同时驱动 CLI 与页面，二者永不各说各话。
+- **CLI：`ih audit [--project-root] [--action] [--target] [--since] [--offset] [--limit] [--json] [--format table|json|markdown|csv] [--out PATH]`。** 默认人类可读表格；`--json` 与 `GET /api/v1/audit` 同构；`--format markdown|csv` 是合规/事故报告导出，`--out` 落盘给脚本；退出码恒 0（台账是证据，不是门禁），坏 `--since`/`--format` 明确报错退出 1。
+- **控制台「审计」页（`g u`，`GET /api/v1/audit`）。** 复用同一个读取器：操作下拉框 + 目标搜索 + 起始时间筛选，摘要卡片（匹配/本页/偏移/类别数），表格（时间/操作/目标/参数摘要可展开复制），分页器，以及三个导出按钮（Markdown / CSV / JSON，与页面共用同一份过滤条件）。加载中、空清单（区分「无记录」与「筛选无匹配」）、读取失败（带重试）三种状态独立呈现；页面明确写「只读，不写入任何项目状态」。根目录越界 403、不存在 404，与其它路由一致。
+- **导出：`GET /api/v1/audit/export?format=md|csv|json`。** Markdown 是可贴进 PR / 事故报告的摘要；CSV 一行一条记录（`timestamp,action,target,summary`）；JSON 与页面完全一致。与页面共用筛选，`X-Audit-Total` 头携带匹配总数。
+- **文档同步。** 两份 README 增加审计命令块、能力条目、WebUI 页面清单与 `g u` 说明；`DESIGN-iterate-harness.md` §17.3 补 P13 页面、§17.4 补 `audit.py` 模块与两条路由契约；`ih web serve --help` 的页面清单同步加入审计；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.19.0。
+
+**核验（本机，2026-11-07）：**
+
+- 端到端（真起 uvicorn、真令牌、临时数据目录）：`GET /api/v1/audit?project_root=<dir>` 返回 200，`total=2`、`actions=['config','schedule']`、最新在前；无令牌返回 401；`GET /audit/export?format=csv` 下载文件名 `iterate-audit-<stamp>.csv` 且 `X-Audit-Total=2`；CLI `ih audit --json` 与 API 的 `entries`/`actions`/`total` 完全一致，`--format markdown` 与 `--action schedule` 过滤正确。
+- `pytest tests/ -q` → **3264 passed, 6 skipped, 15 warnings in 124.29s**（新增 20 条：14 条路由 + 6 条 CLI）。
+- `ruff check src tests scripts` → All checks passed；`mypy src` → Success: no issues found in 277 source files；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 13 files / 129 tests passed（+9）、`vite build` 成功（79 modules）。
+- 反向验证：把 `list_audit_entries` 的 `matched.reverse()` 移除，`test_page_is_newest_first_with_total_and_actions` 变红；还原后复测通过。
+
 ## [2.18.0] - 2026-11-05
 
 **版本判断：minor。** 新增一个 CLI 子命令、一条只读 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih capabilities` 是新增入口，`--strict` 只在显式传入时退出 1），响应形状与 `.iterate` 数据格式不动。附带修复一个真实 UX 缺陷：定时任务把「时区非法」误报成「cron 表达式非法」，现已分开呈现。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。

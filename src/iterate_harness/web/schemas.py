@@ -506,9 +506,46 @@ class StopAgentResult(BaseModel):
     return_code: int | None = None
 
 
+class AuditEntry(BaseModel):
+    """One persisted audit-journal record (design §17.3 P13).
+
+    The journal is append-only; this is the read-side projection shared by
+    ``ih audit`` and ``GET /api/v1/audit``. ``summary`` is a free-form mapping
+    of operation parameters (already redacted server-side on write).
+    """
+
+    timestamp: str = ""
+    action: str = ""
+    target: str = ""
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class AuditView(BaseModel):
+    """Paged, filterable audit trail (design §17.3 P13).
+
+    ``entries`` is newest-first; ``total`` is the count of *matching* entries
+    before pagination, so the page can say "showing m of n" and page correctly.
+    ``actions`` lists every distinct action prefix seen, for the filter
+    dropdown; ``truncated`` is True when more matching entries exist beyond the
+    page (offset + len(entries) < total).
+    """
+
+    project_root: str
+    generated_at: str
+    total: int = 0
+    returned: int = 0
+    offset: int = 0
+    limit: int = 50
+    truncated: bool = False
+    actions: list[str] = Field(default_factory=list)
+    entries: list[AuditEntry] = Field(default_factory=list)
+
+
 __all__ = [
     "AgentRow",
     "AgentsView",
+    "AuditEntry",
+    "AuditView",
     "ChatMessage",
     "ChatRunStatus",
     "CheckpointView",
