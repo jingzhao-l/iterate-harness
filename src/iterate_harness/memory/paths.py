@@ -8,11 +8,21 @@ from pathlib import Path
 from iterate_harness.config.paths import get_data_dir
 
 
-def get_project_memory_dir(cwd: str | Path) -> Path:
-    """Return the persistent memory directory for a project."""
+def project_memory_dir(cwd: str | Path) -> Path:
+    """Return the persistent memory directory for a project *without* creating it.
+
+    Read-only surfaces (``ih memory list``, the console memory page) must not
+    create directories as a side effect of looking at an empty project; the
+    inventory reports ``exists: false`` instead.
+    """
     path = Path(cwd).resolve()
     digest = sha1(str(path).encode("utf-8")).hexdigest()[:12]
-    memory_dir = get_data_dir() / "memory" / f"{path.name}-{digest}"
+    return get_data_dir() / "memory" / f"{path.name}-{digest}"
+
+
+def get_project_memory_dir(cwd: str | Path) -> Path:
+    """Return the persistent memory directory for a project, creating it."""
+    memory_dir = project_memory_dir(cwd)
     memory_dir.mkdir(parents=True, exist_ok=True)
     return memory_dir
 

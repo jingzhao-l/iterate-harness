@@ -354,7 +354,13 @@ def append_decision_log_entry(log_path: str, draft: Mapping[str, object]) -> Dec
         _fail(DECISION_LOG_CODES["write"], log_path, f"short write: {written} of {len(payload)} bytes reached the fd",
               f"the tail may be torn — do not delete {log_path}; call read_decision_log() to see where verification stops")
 
-    stored = Path(log_path).read_text(encoding="utf-8").splitlines()
+    # Split only on "\n", exactly as the TS kernel's ledgerLines() does. Python's
+    # str.splitlines() would also break at U+2028/U+2029/U+0085 — all of which are
+    # legal raw inside a JSON string, so a ledger line carrying one of them would be
+    # cut into several and this read-back would report a false mismatch/corruption.
+    stored = Path(log_path).read_text(encoding="utf-8").split("\n")
+    if stored and stored[-1] == "":
+        stored.pop()
     if not stored or stored[-1] != line:
         _fail(DECISION_LOG_CODES["write"], log_path,
               f"read-back mismatch at line {len(stored)}: the bytes on disk are not what this call wrote",

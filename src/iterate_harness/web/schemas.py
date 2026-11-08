@@ -541,6 +541,103 @@ class AuditView(BaseModel):
     entries: list[AuditEntry] = Field(default_factory=list)
 
 
+class MemoryEntry(BaseModel):
+    """One persistent memory file (design §17.3 P14)."""
+
+    name: str
+    title: str
+    description: str = ""
+    type: str = ""
+    modified_at: str = ""
+    body_preview: str = ""
+    bytes: int = 0
+    path: str = ""
+
+
+class MemoryEntryPoint(BaseModel):
+    """The project's MEMORY.md index."""
+
+    name: str
+    path: str
+    exists: bool = False
+    lines: int = 0
+    bytes: int = 0
+    preview: str = ""
+    error: str | None = None
+
+
+class MemoryInjectionFile(BaseModel):
+    """One memory file as it appears in the prompt injection."""
+
+    name: str
+    title: str = ""
+    chars_total: int = 0
+    chars_included: int = 0
+    truncated: bool = False
+
+
+class MemoryInjectionView(BaseModel):
+    """What the runtime prompt would inject for a given task (design §17.3 P14).
+
+    Built by the same code path as the prompt itself, so the preview cannot
+    drift from the model's actual context. ``truncated_files`` lists the
+    memories that were clipped by the per-file character budget.
+    """
+
+    enabled: bool
+    prompt: str = ""
+    rendered: str = ""
+    chars: int = 0
+    files: int = 0
+    max_files: int = 0
+    max_entry_chars: int = 0
+    entrypoint_lines_total: int = 0
+    entrypoint_lines_included: int = 0
+    entrypoint_truncated: bool = False
+    truncated_files: list[dict[str, Any]] = Field(default_factory=list)
+    included_files: list[MemoryInjectionFile] = Field(default_factory=list)
+    reason: str = ""
+
+
+class MemoryProblem(BaseModel):
+    """A broken memory file or a dead MEMORY.md link."""
+
+    name: str
+    detail: str
+    remedy: str = ""
+
+
+class MemoryView(BaseModel):
+    """Read-only project memory inventory (design §17.3 P14).
+
+    The engine injects this bank into every runtime prompt; the console and
+    ``ih memory`` share this model. ``matches`` is rank-ordered by the
+    engine's relevance scorer when ``query`` is set; ``injection`` is present
+    when ``prompt`` is set and carries the exact rendered prompt section.
+    """
+
+    project_root: str
+    generated_at: str
+    memory_dir: str
+    exists: bool
+    query: str = ""
+    prompt: str = ""
+    summary: dict[str, Any] = Field(default_factory=dict)
+    entrypoint: MemoryEntryPoint
+    entries: list[MemoryEntry] = Field(default_factory=list)
+    matches: list[MemoryEntry] = Field(default_factory=list)
+    injection: MemoryInjectionView | None = None
+    problems: list[MemoryProblem] = Field(default_factory=list)
+
+
+class MemoryCreateRequest(BaseModel):
+    """Create/overwrite a memory file from the console (design §17.3 P14)."""
+
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1)
+    overwrite: bool = False
+
+
 __all__ = [
     "AgentRow",
     "AgentsView",
@@ -554,6 +651,13 @@ __all__ = [
     "DoctorView",
     "FindingsTriageDismissRequest",
     "FindingsTriageRequest",
+    "MemoryCreateRequest",
+    "MemoryEntry",
+    "MemoryEntryPoint",
+    "MemoryInjectionFile",
+    "MemoryInjectionView",
+    "MemoryProblem",
+    "MemoryView",
     "OperationResult",
     "ReportView",
     "RunDriver",

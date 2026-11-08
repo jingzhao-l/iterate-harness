@@ -1789,3 +1789,47 @@ button.chip:hover {
 .audit-row .audit-json .btn {
   flex: 0 0 auto;
 }
+
+/* ---- memory page (design §17.3 P14) ---- */
+.memory-filters {
+  margin: 12px 0;
+}
+.memory-filters .spacer {
+  flex: 1 1 auto;
+}
+.memory-desc {
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.memory-preview,
+.memory-content {
+  margin: 8px 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.memory-content {
+  max-height: 420px;
+}
+.memory-add-content {
+  width: 100%;
+  min-height: 120px;
+  font-family: var(--mono);
+}
+.warn-text {
+  color: var(--critical);
+}

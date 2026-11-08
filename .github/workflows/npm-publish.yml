@@ -14,6 +14,14 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+  # Unattended path: the local npm token is long-lived and can expire between
+  # releases, so publishing must not depend on it. Pushing a v* tag needs no
+  # token at all and triggers both this workflow and release.yml (which builds
+  # the wheel the wrapper pip-installs). OIDC trusted publishing (npm 11.5.1+)
+  # authenticates without any stored credential.
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read    # read the tagged tree; writes nothing back

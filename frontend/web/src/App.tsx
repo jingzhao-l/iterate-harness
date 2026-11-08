@@ -27,6 +27,7 @@ import Runs from "./pages/Runs";
 import Schedules from "./pages/Schedules";
 import Trend from "./pages/Trend";
 import Workspaces from "./pages/Workspaces";
+import Memory from "./pages/Memory";
 
 const NAV_ITEMS = [
   { to: "/", label: "仪表盘", end: true },
@@ -44,6 +45,7 @@ const NAV_ITEMS = [
   { to: "/capabilities", label: "能力清单", end: false },
   { to: "/doctor", label: "自检", end: false },
   { to: "/audit", label: "审计", end: false },
+  { to: "/memory", label: "记忆", end: false },
 ];
 
 // Single-key → route map for the "g <key>" jump shortcuts.
@@ -63,6 +65,7 @@ const G_BUFFER_ROUTES: Record<string, string> = {
   n: "/capabilities",
   k: "/doctor",
   u: "/audit",
+  m: "/memory",
 };
 
 const CONN_LABELS: Record<string, string> = {
@@ -247,6 +250,7 @@ export default function App(): React.JSX.Element {
             <Route path="/capabilities" element={<Capabilities />} />
             <Route path="/doctor" element={<Doctor />} />
             <Route path="/audit" element={<Audit />} />
+            <Route path="/memory" element={<Memory />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </ErrorBoundary>

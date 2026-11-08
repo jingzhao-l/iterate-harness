@@ -115,6 +115,29 @@ def test_append_builds_a_chain_whose_links_the_reader_recomputes(tmp_path: Path)
     assert hashlib.sha256(lines[0].encode("utf-8")).hexdigest() == json.loads(lines[1])["prevEntryHash"]
 
 
+def test_append_read_back_survives_a_payload_carrying_u2028(tmp_path: Path) -> None:
+    # A raw U+2028/U+2029 is legal inside a JSON string, and the TS kernel splits the ledger
+    # on "\n" only (decision-log.ts ledgerLines). Python's str.splitlines() would also cut at
+    # U+2028, so the append read-back would slice that entry into two and falsely report a
+    # read-back mismatch / corruption on a ledger the TS side reads as healthy. The first entry
+    # therefore carries the U+2028, and the append that follows must still read it back intact.
+    path = str(_ledger_dir(tmp_path) / "decisions.jsonl")
+    append_decision_log_entry(path, _draft(new_decision_entry_id(), payload={"note": "sep\u2028here"}))
+    text = Path(path).read_text(encoding="utf-8")
+
+    # The split we rely on must not cut the U+2028 line in two (the old splitlines() did).
+    entries = [line for line in text.split("\n") if line]
+    assert any("\u2028" in line for line in entries), "fixture must carry a raw U+2028"
+    assert len([line for line in text.splitlines() if line]) > len(entries), \
+        "str.splitlines() really does cut the U+2028 line, so this test would fail against the old code"
+
+    second = append_decision_log_entry(path, _draft(new_decision_entry_id()))
+    assert second.sequence == 1, "append succeeded across a U+2028 line"
+    verified = read_decision_log(path)
+    assert verified.ok, f"U+2028 payload must not corrupt the chain: {verified.reason}"
+    assert len(verified.entries) == 2
+
+
 def test_the_file_is_0600_in_a_directory_that_is_not_group_writable(tmp_path: Path) -> None:
     d = _ledger_dir(tmp_path)
     path = str(d / "decisions.jsonl")

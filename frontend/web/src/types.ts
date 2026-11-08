@@ -643,6 +643,87 @@ export interface CapabilitiesView {
   mcp_servers: CapabilityMcpServer[];
 }
 
+export interface MemoryEntry {
+  name: string;
+  title: string;
+  description: string;
+  type: string;
+  modified_at: string;
+  body_preview: string;
+  bytes: number;
+  path: string;
+}
+
+export interface MemoryEntryPoint {
+  name: string;
+  path: string;
+  exists: boolean;
+  lines: number;
+  bytes: number;
+  preview: string;
+  error?: string | null;
+}
+
+export interface MemoryInjectionFile {
+  name: string;
+  title: string;
+  chars_total: number;
+  chars_included: number;
+  truncated: boolean;
+}
+
+export interface MemoryInjectionView {
+  enabled: boolean;
+  prompt: string;
+  rendered: string;
+  chars: number;
+  files: number;
+  max_files: number;
+  max_entry_chars: number;
+  entrypoint_lines_total: number;
+  entrypoint_lines_included: number;
+  entrypoint_truncated: boolean;
+  truncated_files: Array<{ name: string; chars_total: number; chars_included: number }>;
+  included_files: MemoryInjectionFile[];
+  reason: string;
+}
+
+export interface MemoryProblem {
+  name: string;
+  detail: string;
+  remedy: string;
+}
+
+export interface MemoryView {
+  project_root: string;
+  generated_at: string;
+  memory_dir: string;
+  exists: boolean;
+  query: string;
+  prompt: string;
+  summary: Record<string, number | boolean>;
+  entrypoint: MemoryEntryPoint;
+  entries: MemoryEntry[];
+  matches: MemoryEntry[];
+  injection: MemoryInjectionView | null;
+  problems: MemoryProblem[];
+}
+
+export interface MemoryCreateInput {
+  title: string;
+  content: string;
+  overwrite: boolean;
+}
+
+export interface MemoryEntryDetail {
+  name: string;
+  path: string;
+  bytes: number;
+  content: string;
+  truncated: boolean;
+  modified_at: string;
+}
+
 export type CapabilityCategory =
   | "all"
   | "mcp"

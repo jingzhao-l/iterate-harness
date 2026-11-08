@@ -709,11 +709,13 @@ auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
 iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/diff/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
 web_app = typer.Typer(name="web", help="WebUI management console")
+memory_app = typer.Typer(name="memory", help="Read and write the project memory bank (list/search/show/preview/add/remove)")
 
 app.add_typer(auth_app)
 app.add_typer(provider_app)
 app.add_typer(iterate_app)
 app.add_typer(web_app)
+app.add_typer(memory_app)
 
 
 # ---- iterate subcommands ----
@@ -2089,8 +2091,8 @@ def web_serve(
 
     Serves the dashboard, runs timeline, trend, run comparison, the recipe gate,
     scheduled reviews, the capability inventory, the environment self-check,
-    the audit trail, checkpoints, budget, config, and reports on a local
-    loopback address and opens the browser. The backend
+    the audit trail, the project memory bank, checkpoints, budget, config, and
+    reports on a local loopback address and opens the browser. The backend
     binds to 127.0.0.1 by default and never exposes itself externally.
     """
     from iterate_harness.web.api import serve as web_serve_backend
@@ -3225,6 +3227,310 @@ def audit_cmd(
     else:
         print(body, end="" if body.endswith("\n") else "\n", flush=True)
     raise typer.Exit(0)
+
+
+# ---------------------------------------------------------------------------
+# Memory subcommands
+# ---------------------------------------------------------------------------
+
+def _memory_project_root(project_root: str | None) -> str:
+    return str(Path(project_root).expanduser()) if project_root else str(Path.cwd())
+
+
+@memory_app.command("list")
+def memory_list_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose memory bank to read (default: current directory)",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the inventory as JSON"),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        min=1,
+        max=1000,
+        help="Max entries to list (default 50)",
+    ),
+) -> None:
+    """List the project's persistent memory files.
+
+    Shows the same bank the engine injects into the runtime prompt: the
+    MEMORY.md index plus each topic file, with per-file size and modification
+    time. Read-only; never creates the memory directory.
+
+    Examples:
+        ih memory list
+        ih memory list --project-root /path/to/repo --json
+    """
+    from iterate_harness.memory.inventory import (
+        build_memory_inventory,
+        render_memory_inventory,
+    )
+
+    inventory = build_memory_inventory(_memory_project_root(project_root), max_entries=max(limit * 2, 500))
+    if as_json:
+        print(json.dumps(inventory, ensure_ascii=False, indent=2))
+    else:
+        print(render_memory_inventory(inventory, limit=limit))
+    raise typer.Exit(0)
+
+
+@memory_app.command("search")
+def memory_search_cmd(
+    query: str = typer.Argument(..., help="Search text (the engine's relevance scoring)"),
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose memory bank to read (default: current directory)",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the inventory as JSON"),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        min=1,
+        max=200,
+        help="Max matches to show (default 20)",
+    ),
+) -> None:
+    """Rank memories by relevance to a query, using the engine's scorer.
+
+    Answers "which of my memories would surface for this topic, and in what
+    order" — the exact search the runtime prompt runs against the latest user
+    prompt.
+
+    Examples:
+        ih memory search "fix pytest fixtures"
+        ih memory search "docker compose" --json
+    """
+    from iterate_harness.memory.inventory import (
+        build_memory_inventory,
+        render_memory_inventory,
+    )
+
+    inventory = build_memory_inventory(
+        _memory_project_root(project_root),
+        query=query,
+        max_entries=500,
+    )
+    if as_json:
+        print(json.dumps(inventory, ensure_ascii=False, indent=2))
+    else:
+        print(render_memory_inventory(inventory, limit=limit))
+    raise typer.Exit(0)
+
+
+@memory_app.command("show")
+def memory_show_cmd(
+    name: str = typer.Argument(..., help="Memory file name (e.g. pytest_tips or pytest_tips.md)"),
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose memory bank to read (default: current directory)",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the entry as JSON"),
+    raw: bool = typer.Option(
+        False,
+        "--raw",
+        help="Print only the file content (no metadata, for scripting)",
+    ),
+) -> None:
+    """Print one memory file's full content.
+
+    Rejects names that escape the memory directory; ``MEMORY.md`` is readable
+    (it is the index), but traversal and non-markdown names are refused.
+
+    Examples:
+        ih memory show pytest_tips
+        ih memory show MEMORY.md --raw
+    """
+    from iterate_harness.memory.inventory import read_memory_entry
+
+    root = _memory_project_root(project_root)
+    entry = read_memory_entry(root, name)
+    if entry is None:
+        print(f"Error: memory not found: {name}", file=sys.stderr)
+        raise typer.Exit(1)
+    if raw:
+        print(entry["content"], end="")
+        raise typer.Exit(0)
+    if as_json:
+        print(json.dumps(entry, ensure_ascii=False, indent=2))
+    else:
+        print(
+            f"{entry['name']} — {entry['bytes']} bytes, modified "
+            f"{str(entry['modified_at'])[:19]}"
+        )
+        if entry.get("truncated"):
+            print(f"(content truncated at {entry['bytes']} bytes)")
+        print("---")
+        print(entry["content"], end="")
+    raise typer.Exit(0)
+
+
+@memory_app.command("preview")
+def memory_preview_cmd(
+    prompt: str = typer.Argument(..., help="The task text to preview memory injection for"),
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose memory bank to read (default: current directory)",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the preview as JSON"),
+) -> None:
+    """Show exactly what memory would be injected into the prompt for a task.
+
+    Uses the runtime prompt's own builder (and the project's configured
+    budgets), so the preview cannot disagree with what the model is told.
+    Clipped files are called out with their included/total character counts.
+
+    Examples:
+        ih memory preview "why is the test suite flaky on CI"
+    """
+    from iterate_harness.memory.inventory import (
+        build_memory_injection_preview,
+        build_memory_inventory,
+        render_memory_inventory,
+    )
+
+    root = _memory_project_root(project_root)
+    preview = build_memory_injection_preview(root, prompt)
+    if as_json:
+        print(json.dumps(preview, ensure_ascii=False, indent=2))
+    else:
+        if not preview.get("enabled"):
+            print(f"Memory injection is disabled — {preview.get('reason')}")
+            raise typer.Exit(0)
+        print(render_memory_inventory(build_memory_inventory(root, prompt=prompt)))
+        print("---")
+        print(str(preview.get("rendered") or ""))
+    raise typer.Exit(0)
+
+
+@memory_app.command("add")
+def memory_add_cmd(
+    title: str = typer.Argument(..., help="Title / slug for the memory file"),
+    content: str | None = typer.Option(
+        None,
+        "--content",
+        help="Memory content (inline). Use --content-file or a here-doc for longer text.",
+    ),
+    content_file: Path | None = typer.Option(
+        None,
+        "--content-file",
+        help="Read memory content from this file (UTF-8)",
+    ),
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose memory bank to write (default: current directory)",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing memory file with the same title (default: refuse)",
+    ),
+    prune_index: bool = typer.Option(
+        False,
+        "--prune-index",
+        help="Also remove a dead MEMORY.md link for the same name (with --force)",
+    ),
+) -> None:
+    """Add a memory file and link it in MEMORY.md.
+
+    The engine injects this bank into every future runtime prompt, so a memory
+    added here is durable project context, not a session note. Refuses to
+    overwrite an existing file unless ``--force``.
+
+    Examples:
+        ih memory add "pytest quirks" --content "fixtures are slow; use -x for fast feedback"
+        ih memory add "deploy" --content-file ./deploy-notes.md
+    """
+    from iterate_harness.memory.manager import add_memory_entry, list_memory_files
+
+    root = _memory_project_root(project_root)
+    if content is None and content_file is None:
+        print("Error: provide --content or --content-file", file=sys.stderr)
+        raise typer.Exit(1)
+    if content is not None and content_file is not None:
+        print("Error: --content and --content-file are mutually exclusive", file=sys.stderr)
+        raise typer.Exit(1)
+    if content_file is not None:
+        try:
+            content = content_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"Error: cannot read {content_file}: {exc}", file=sys.stderr)
+            raise typer.Exit(1)
+    if content is None or not content.strip():
+        print("Error: memory content is empty", file=sys.stderr)
+        raise typer.Exit(1)
+
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", title.strip().lower()).strip("_") or "memory"
+    existing = [p for p in list_memory_files(root) if p.stem == slug]
+    if existing and not force:
+        print(
+            f"Error: memory '{slug}.md' already exists (use --force to overwrite it)",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    path = add_memory_entry(root, title, content)
+    print(f"Wrote {path}")
+    if existing:
+        print("(overwrote existing file)")
+    raise typer.Exit(0)
+
+
+@memory_app.command("remove")
+def memory_remove_cmd(
+    name: str = typer.Argument(..., help="Memory file name to remove (e.g. pytest_tips)"),
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose memory bank to write (default: current directory)",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+    prune_index: bool = typer.Option(
+        False,
+        "--prune-index",
+        help="Remove the dead MEMORY.md link even when the file is already gone",
+    ),
+) -> None:
+    """Delete a memory file and unlink it from MEMORY.md.
+
+    Without ``--yes`` the command asks for confirmation (interactive only).
+    ``--prune-index`` removes an index entry whose file no longer exists
+    without requiring the file to be present.
+
+    Examples:
+        ih memory remove pytest_tips --yes
+        ih memory remove stale_notes --prune-index
+    """
+    from iterate_harness.memory.manager import prune_memory_index, remove_memory_entry
+
+    root = _memory_project_root(project_root)
+    target = Path(name).name
+    if target.endswith(".md"):
+        target = target[: -len(".md")]
+    if not yes:
+        try:
+            confirmed = typer.confirm(f"Remove memory '{target}' and its MEMORY.md link?")
+        except typer.Abort:
+            raise typer.Exit(1)
+        if not confirmed:
+            print("Aborted.")
+            raise typer.Exit(1)
+    removed = remove_memory_entry(root, target)
+    if removed:
+        print(f"Removed {target}")
+        raise typer.Exit(0)
+    if prune_index:
+        pruned = prune_memory_index(root, target)
+        if pruned:
+            print(f"Removed dead MEMORY.md link for {target}")
+            raise typer.Exit(0)
+    print(f"Error: memory not found: {target}", file=sys.stderr)
+    raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

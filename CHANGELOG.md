@@ -2,6 +2,24 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.20.0] - 2026-11-08
+
+**版本判断：minor。** 新增一个 CLI 子命令组、一个只读 + 受控写 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih memory` 是新增入口），响应形状与 `.iterate` 数据格式不动。附带修复一个真实缺陷：只读记忆清单此前不读取配置，`memory.enabled=false` 时仍把注入预览显示为「已启用」。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。
+
+- **项目记忆库：引擎注入的持久化上下文，操作台第一次能看见。** 引擎一直把项目记忆（`MEMORY.md` 索引 + 主题文件，位于 harness 数据目录）注入每次运行提示词，但操作者只能从 REPL 的 `/memory` 命令看到它——记忆被每文件预算截断、索引链接已失效，在其它地方都不可见。新增共享模块 `memory/inventory.py`：一次只读、不创建目录地列出记忆库（条目/大小/修改时间/描述），运行引擎自己的相关度搜索（`find_relevant_memories`）按排名返回匹配，并把 `MEMORY.md` 的失效链接（索引指向不存在的文件）列为带可复制 remedy 的问题。新增 `memory/inject.py`：**提示词与注入预览共用的记忆段落构造器**——`build_runtime_system_prompt` 现在调用它，`ih memory preview` 与控制台注入预览也调用它，因此预览不可能与模型实际读到的内容漂移；它逐文件报告包含/总字符数与截断标记。
+- **CLI：`ih memory list|search|show|preview|add|remove`。** `list` 列出记忆库；`search <query>` 用引擎评分器排名；`show <name>` 打印单条全文（越界/非 markdown 名拒绝退出 1）；`preview <task>` 输出该任务会被注入的精确记忆段落（含每文件截断点名）；`add <title> --content|--content-file` 写一条并登记索引，**默认拒绝覆盖已存在文件（`--force` 才覆盖）**——一次误保存不会悄悄替换已记住的上下文；`remove <name> --yes` 删除并解除索引链接，`--prune-index` 修复索引指向已缺失文件的断链。退出码面向脚本：正常 0，找不到/未提供内容 1。
+- **控制台「记忆」页（`g m`，`GET /api/v1/memory`）。** 复用同一份清单：状态卡（就绪/需处理/尚未创建，绝不创建目录）、注入开关与预算、条目表格（大小/修改时间/描述，行内查看/删除）、引擎相关度搜索（回车执行，按排名排列）、以及**注入预览**——输入任务文本，渲染运行时提示词将注入的精确记忆段落，点名被每文件字符预算截断的记忆。失效链接问题带可复制 remedy。两个写操作在页面上：新增/覆盖（显式 `overwrite`，409 否则）与删除，均走二次确认 + 审计日志。加载中、空清单（区分「无记忆」与「搜索无匹配」）、读取失败（带重试）三态独立呈现；只读面明确写「不创建记忆目录」。根目录越界 403、不存在 404，与其它路由一致。
+- **写入：`POST /api/v1/memory` 与 `DELETE /api/v1/memory`。** 新增/覆盖走备份语义（`add_memory_entry(overwrite=…)` 默认拒绝覆盖），删除同时解除 `MEMORY.md` 链接；两者都记入 `.iterate/web-audit.jsonl`（`memory.add` / `memory.remove` / `memory.prune-index`），都要求 `confirm=true`。`GET /api/v1/memory/entry?name=` 读取单条全文（越界名 404）。
+- **账本读回修复（随本版一并发布）。** `iterate/kernel_decision_log.py` 的 append read-back 此前用 `str.splitlines()`，会按 U+2028/U+2029/U+0085 额外切分——这三个码位在 JSON 字符串内合法，一条 payload 合法含 U+2028 的账本行会被切成多行并误报 read-back mismatch。现改为只按 `\n` 切（与 TS 内核 `ledgerLines` 同规则）并去掉尾部空 artifact；新增回归测试 `test_append_read_back_survives_a_payload_carrying_u2028`。该修复来自主仓库提交 `fix(consumers)`，位于 v2.19.0 之后、随本版首次进入独立发布仓。
+- **文档同步。** 两份 README 增加记忆命令块、能力条目、WebUI 页面清单与 `g m` 说明；`DESIGN-iterate-harness.md` §17.3 补 P14 页面、§17.4 补 `memory/inject.py`、`memory/inventory.py` 模块与四条路由契约；`ih web serve --help` 的页面清单同步加入记忆；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.20.0。
+
+**核验（本机，2026-11-08）：**
+
+- 端到端（真起 uvicorn、真令牌、临时数据目录）：`GET /api/v1/memory?project_root=<dir>` 返回 200，`entries=['pytest_quirks.md']`、`summary.entries=1`；`?query=fix+pytest` 的 `matches` 排名正确；`?prompt=fix+pytest+fixtures` 的 `injection.enabled=true`、`rendered` 含 `pytest_quirks.md`；`GET /memory/entry?name=pytest_quirks.md` 返回全文；`POST /memory?confirm=true` 创建 `canary.md`、`DELETE /memory?confirm=true` 删除，审计日志含 `memory.add` 与 `memory.remove`；无令牌返回 401。CLI `ih memory list --json` 与 API 的 `entries` 完全一致，`search`/`show`/`preview`/`add`/`remove` 全链路可用（含重复 `add` 无 `--force` 退出 1、越界 `show` 退出 1）。
+- `pytest tests/ -q` → **3291 passed, 6 skipped, 1 warning in 467.34s**（新增 22 条：14 条记忆清单/注入/CLI + 8 条记忆路由）。
+- `ruff check src tests` → All checks passed；`mypy src` → Success: no issues found in 280 source files；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 14 files / 140 tests passed（+11）、`vite build` 成功（81 modules）。
+- 反向验证：把 `build_memory_injection` 的截断标记恒为 False，`test_injection_preview_reports_clipped_files` 变红；还原后复测通过。把 `_settings_memory` 的 enabled 恒 True，`test_injection_preview_respects_disabled_memory` 变红（修复前该缺陷存在）。
+
 ## [2.19.0] - 2026-11-07
 
 **版本判断：minor。** 新增一个 CLI 子命令、一条只读 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih audit` 是新增入口），响应形状与 `.iterate` 数据格式不动。附带修复一个展示缺陷：审计时间戳在 CLI 表格里保留了 `T` 分隔符。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。

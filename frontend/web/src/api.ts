@@ -13,6 +13,9 @@ import type {
   DoctorView,
   FindingsResponse,
   GateView,
+  MemoryCreateInput,
+  MemoryEntryDetail,
+  MemoryView,
   OperationResult,
   ReportPreview,
   ReportView,
@@ -338,6 +341,44 @@ export const api = {
   // Read-only and network-free.
   capabilities: (projectRoot?: string): Promise<CapabilitiesView> =>
     request<CapabilitiesView>(`/capabilities${buildQuery(projectRoot)}`),
+
+  // Project memory bank: the persistent context the engine injects into every
+  // runtime prompt. Read-only; `query` ranks matches with the engine's scorer
+  // and `prompt` returns the exact injection preview for a task.
+  memory: (
+    projectRoot?: string,
+    opts: { query?: string; prompt?: string } = {},
+  ): Promise<MemoryView> =>
+    request<MemoryView>(
+      `/memory${buildQuery(projectRoot, { query: opts.query, prompt: opts.prompt })}`,
+    ),
+
+  // One memory file's full content (for the console's detail pane).
+  memoryEntry: (name: string, projectRoot?: string): Promise<MemoryEntryDetail> =>
+    request<MemoryEntryDetail>(
+      `/memory/entry${buildQuery(projectRoot, { name })}`,
+    ),
+
+  // Create/overwrite a memory file. Mutating and audited; `input.overwrite`
+  // is required to replace an existing file (409 otherwise).
+  createMemory: (
+    input: MemoryCreateInput,
+    projectRoot?: string,
+  ): Promise<OperationResult> =>
+    request<OperationResult>(
+      `/memory${buildQuery(projectRoot, { confirm: "true" })}`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  // Delete a memory file and unlink it from MEMORY.md. Mutating and audited.
+  deleteMemory: (
+    name: string,
+    projectRoot?: string,
+  ): Promise<OperationResult> =>
+    request<OperationResult>(
+      `/memory${buildQuery(projectRoot, { name, confirm: "true" })}`,
+      { method: "DELETE" },
+    ),
 
   // Scheduled reviews: the machine-level cron registry, scheduler liveness and
   // recent executions (with bounded output tails). The GET is read-only; the

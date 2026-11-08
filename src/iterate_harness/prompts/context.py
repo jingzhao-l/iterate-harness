@@ -11,7 +11,7 @@ from iterate_harness.config.paths import (
 )
 from iterate_harness.config.settings import Settings
 from iterate_harness.coordinator.coordinator_mode import get_coordinator_system_prompt, is_coordinator_mode
-from iterate_harness.memory import find_relevant_memories, load_memory_prompt
+from iterate_harness.memory.inject import build_memory_injection
 from iterate_harness.personalization.rules import load_local_rules
 from iterate_harness.prompts.claudemd import load_claude_md_prompt
 from iterate_harness.prompts.system_prompt import build_system_prompt
@@ -173,32 +173,14 @@ def build_runtime_system_prompt(
                 sections.append(f"# {title}\n\n```md\n{content[:12000]}\n```")
 
     if include_project_memory and settings.memory.enabled:
-        memory_section = load_memory_prompt(
+        # One shared builder with `ih memory preview` / the console memory
+        # page, so the preview cannot drift from what the model is told.
+        injection = build_memory_injection(
             cwd,
+            latest_user_prompt,
             max_entrypoint_lines=settings.memory.max_entrypoint_lines,
+            max_files=settings.memory.max_files,
         )
-        if memory_section:
-            sections.append(memory_section)
-
-        if latest_user_prompt:
-            relevant = find_relevant_memories(
-                latest_user_prompt,
-                cwd,
-                max_results=settings.memory.max_files,
-            )
-            if relevant:
-                lines = ["# Relevant Memories"]
-                for header in relevant:
-                    content = header.path.read_text(encoding="utf-8", errors="replace").strip()
-                    lines.extend(
-                        [
-                            "",
-                            f"## {header.path.name}",
-                            "```md",
-                            content[:8000],
-                            "```",
-                        ]
-                    )
-                sections.append("\n".join(lines))
+        sections.extend(injection.sections)
 
     return "\n\n".join(section for section in sections if section.strip())
