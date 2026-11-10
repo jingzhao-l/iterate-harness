@@ -205,6 +205,7 @@ class CapabilitiesView(BaseModel):
     skills: list[CapabilitySkill] = Field(default_factory=list)
     plugins: list[CapabilityPlugin] = Field(default_factory=list)
     mcp_servers: list[CapabilityMcpServer] = Field(default_factory=list)
+    hooks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class RunSummary(BaseModel):
@@ -638,11 +639,100 @@ class MemoryCreateRequest(BaseModel):
     overwrite: bool = False
 
 
+class HookDefinitionRow(BaseModel):
+    """One registered lifecycle hook (design §17.3 P15)."""
+
+    event: str = ""
+    type: str = ""
+    raw_type: str = ""
+    matcher: str = ""
+    detail: str = ""
+    command: str = ""
+    prompt: str = ""
+    url: str = ""
+    model: str = ""
+    timeout_seconds: int = 30
+    block_on_failure: bool = False
+    source: str = "settings"
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
+class HookEventGroup(BaseModel):
+    """All hooks registered for one lifecycle event."""
+
+    event: str
+    count: int = 0
+    hooks: list[HookDefinitionRow] = Field(default_factory=list)
+
+
+class HookLogEntry(BaseModel):
+    """One persisted hook-execution journal record."""
+
+    timestamp: str = ""
+    event: str = ""
+    hook_type: str = ""
+    matcher: str = ""
+    detail: str = ""
+    model: str = ""
+    success: bool = False
+    blocked: bool = False
+    reason: str = ""
+    output: str = ""
+    duration_ms: int = 0
+    returncode: int | None = None
+    status_code: int | None = None
+    source: str = "settings"
+
+
+class HooksView(BaseModel):
+    """Read-only lifecycle-hook inventory (design §17.3 P15).
+
+    The engine loads these hooks and runs them inline in front of tool calls
+    and turn boundaries; the console and ``ih hooks list`` share this model.
+    ``has_problems`` is true when a hook event name is unknown (which the
+    loader would silently drop) or a loader failed; ``journal`` aggregates the
+    project's hook-execution trail.
+    """
+
+    project_root: str
+    generated_at: str
+    summary: dict[str, Any] = Field(default_factory=dict)
+    has_problems: bool = False
+    problems: list[CapabilityProblem] = Field(default_factory=list)
+    events: list[HookEventGroup] = Field(default_factory=list)
+    journal: dict[str, Any] = Field(default_factory=dict)
+    journal_events: list[str] = Field(default_factory=list)
+    journal_types: list[str] = Field(default_factory=list)
+
+
+class HookLogView(BaseModel):
+    """Paged, filterable hook-execution trail (design §17.3 P15).
+
+    ``entries`` is newest-first; ``total`` is the count of *matching* entries
+    before pagination, so the page can say "showing m of n" and page correctly.
+    ``events`` / ``types`` list the distinct values seen, for the filter
+    dropdowns.
+    """
+
+    project_root: str
+    generated_at: str
+    total: int = 0
+    returned: int = 0
+    offset: int = 0
+    limit: int = 50
+    truncated: bool = False
+    events: list[str] = Field(default_factory=list)
+    types: list[str] = Field(default_factory=list)
+    entries: list[HookLogEntry] = Field(default_factory=list)
+
+
 __all__ = [
     "AgentRow",
     "AgentsView",
     "AuditEntry",
     "AuditView",
+    "CapabilityProblem",
+    "CapabilitiesView",
     "ChatMessage",
     "ChatRunStatus",
     "CheckpointView",
@@ -651,6 +741,11 @@ __all__ = [
     "DoctorView",
     "FindingsTriageDismissRequest",
     "FindingsTriageRequest",
+    "HookDefinitionRow",
+    "HookEventGroup",
+    "HookLogEntry",
+    "HookLogView",
+    "HooksView",
     "MemoryCreateRequest",
     "MemoryEntry",
     "MemoryEntryPoint",

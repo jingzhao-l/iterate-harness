@@ -641,6 +641,71 @@ export interface CapabilitiesView {
   skills: CapabilitySkill[];
   plugins: CapabilityPlugin[];
   mcp_servers: CapabilityMcpServer[];
+  hooks?: HookDefinitionRow[];
+}
+
+export interface HookDefinitionRow {
+  event: string;
+  type: string;
+  raw_type: string;
+  matcher: string;
+  detail: string;
+  command: string;
+  prompt: string;
+  url: string;
+  model: string;
+  timeout_seconds: number;
+  block_on_failure: boolean;
+  source: string;
+  headers: Record<string, string>;
+}
+
+export interface HookEventGroup {
+  event: string;
+  count: number;
+  hooks: HookDefinitionRow[];
+}
+
+export interface HookLogEntry {
+  timestamp: string;
+  event: string;
+  hook_type: string;
+  matcher: string;
+  detail: string;
+  model: string;
+  success: boolean;
+  blocked: boolean;
+  reason: string;
+  output: string;
+  duration_ms: number;
+  returncode: number | null;
+  status_code: number | null;
+  source: string;
+}
+
+export interface HooksView {
+  project_root: string;
+  generated_at: string;
+  summary: Record<string, number>;
+  has_problems: boolean;
+  problems: CapabilityProblem[];
+  events: HookEventGroup[];
+  journal: Record<string, unknown>;
+  journal_events: string[];
+  journal_types: string[];
+}
+
+export interface HookLogView {
+  project_root: string;
+  generated_at: string;
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  events: string[];
+  types: string[];
+  entries: HookLogEntry[];
 }
 
 export interface MemoryEntry {

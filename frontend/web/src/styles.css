@@ -393,6 +393,17 @@ table.data tr.row-selected td {
   padding: 2px 10px;
 }
 
+/* Lifecycle hooks (design §17.3 P15): type badges use the severity palette so
+   a blocking hook reads as a gate, and the log filters align like the other
+   pages' filter rows. */
+.hook-type-command,
+.hook-type-agent { color: var(--critical); }
+.hook-type-prompt { color: var(--medium); }
+.hook-type-http { color: var(--text-muted); }
+.hook-type-unknown { color: var(--text-muted); }
+.hooks-filters select { min-width: 11rem; }
+.hooks-filters { flex-wrap: wrap; gap: 8px; }
+
 .direction-good { color: #16a34a; }
 .direction-bad { color: var(--critical); }
 .direction-neutral { color: var(--text-muted); }

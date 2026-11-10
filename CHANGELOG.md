@@ -2,6 +2,22 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.21.0] - 2026-11-10
+
+**版本判断：minor。** 新增一个 CLI 子命令组、两条只读 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih hooks` 是新增入口），响应形状与 `.iterate` 数据格式不动（能力清单响应新增 `hooks` 段，纯加法）。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。
+
+- **生命周期钩子的可观测性：操作台第一次能回答「我的钩子是否触发、是否通过、为什么拦截」。** 引擎一直从 `settings.hooks` 与已启用插件加载生命周期钩子（`session_start` / `pre_tool_use` / `post_tool_use` / `notification` / `stop` 等），并在工具调用 / 回合边界内联执行——但每次执行的结果都被丢弃：一个拒绝了工具调用的钩子只表现为运行内的一次神秘拒绝，一个静默失败的钩子（命令缺失、超时、模型调用无响应）只出现在日志行里。注册在拼错事件名（`pre-tool-use` 而非 `pre_tool_use`）下的钩子被加载器静默丢弃，只有一行日志。新增共享模块 `hooks/journal.py`：追加式执行台账 `.iterate/hook-journal.jsonl`（记录事件/类型/匹配器/命令或提示/结果/拦截/耗时/退出码/HTTP 状态，带大小上限的惰性轮转，坏行防御式跳过，绝不让整页变 500），由 `HookExecutor` 在执行每个钩子后落一笔——因此 CLI、页面与真实执行永远一致。新增 `hooks/inventory.py`：一次只读、无网络地列出每个事件下已注册的钩子（类型/来源 settings|plugin/匹配器/命令或提示或 URL/模型/超时/失败拦截），并把未知事件名列为带可复制 remedy 的 `problems`（这是加载器静默丢弃、操作者看不见的钩子配置缺陷）。
+- **CLI：`ih hooks list|log`。** `list` 列出已注册钩子（按事件分组、来源、匹配器、命令/提示/URL、超时、失败拦截），未知事件名带 remedy，`--strict` 在任一问题时退出 1（可直接进 CI）；`log` 读执行台账（`--event` / `--type` / `--success` 过滤，最新在前分页，`--format table|json|markdown|csv`，`--out` 落盘给脚本），坏 `--success` 明确报错退出 1。退出码面向脚本：正常 0。
+- **控制台「生命周期钩子」页（`g h`，`GET /api/v1/hooks` 与 `GET /api/v1/hooks/log`）。** 复用同一份清单与同一个台账读取器：摘要卡（已注册/事件/已执行/失败·拦截）、事件分组的钩子表格（类型徽章、来源、匹配器、命令/提示/URL、超时、失败拦截）、执行记录页（事件/类型/结果三筛选，最新在前，显示 m/n 分页）。问题优先：未知事件名带可复制 remedy 排在最前。加载中、空清单（区分「尚未注册」与「筛选无匹配」）、读取失败（带重试）三态独立呈现；页面明确写「只读，不启动任何钩子命令或模型」。根目录越界 403、不存在 404，与其它路由一致。能力清单页与 `ih capabilities` 的摘要同步加入 `hooks` 计数与「生命周期钩子」段——一个断链钩子配置在能力清单里也是可见问题。
+- **文档同步。** 两份 README 增加 `ih hooks` 命令块、能力条目、WebUI 页面清单与 `g h` 说明；`DESIGN-iterate-harness.md` §17.3 补 P15 页面、§17.4 补 `hooks/journal.py`、`hooks/inventory.py` 模块与两条路由契约；`ih web serve --help` 的页面清单同步加入生命周期钩子；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.21.0。
+
+**核验（本机，2026-11-10）：**
+
+- 端到端（真起 uvicorn、真令牌、临时数据目录）：`GET /api/v1/hooks?project_root=<dir>` 返回 200，`summary.total=3`、`events` 含 `session_start` 与 `pre_tool_use`、`has_problems=false`；注入拼错事件 `pre-tool-use` 后 `has_problems=true`、`problems[0].kind=event` 带 remedy；无令牌返回 401；`GET /hooks/log` 过滤 `success=true`/`event=` 正确，最新在前；CLI `ih hooks list --json` 与 API 的 `summary` 完全一致，`--strict` 在问题存在时退出 1，`log --format csv` 落盘。
+- `pytest tests/ -q` → **3336 passed, 6 skipped**（新增 44 条：27 条台账/清单/执行记录 + 17 条路由与回归）。
+- `ruff check src tests scripts` → All checks passed；`mypy src` → Success；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 15 files / 146 tests passed（+6）、`vite build` 成功（83 modules）。
+- 反向验证：把 `HookExecutor.execute` 的 `_record_execution` 短路为 no-op，`test_command_hook_records_to_journal` 变红；还原后复测通过。把 `build_hook_inventory` 的未知事件检查恒为 True，`test_inventory_reports_unknown_event_as_problem` 变红。
+
 ## [2.20.0] - 2026-11-08
 
 **版本判断：minor。** 新增一个 CLI 子命令组、一个只读 + 受控写 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih memory` 是新增入口），响应形状与 `.iterate` 数据格式不动。附带修复一个真实缺陷：只读记忆清单此前不读取配置，`memory.enabled=false` 时仍把注入预览显示为「已启用」。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。

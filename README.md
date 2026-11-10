@@ -296,6 +296,10 @@ ih memory search "fix pytest"      # rank memories by relevance (engine's own sc
 ih memory preview "why is CI flaky"  # exactly what memory the prompt would inject
 ih memory add "pytest quirks" --content "fixtures are slow; use -x"
 ih memory remove pytest_quirks --yes
+ih hooks list                     # lifecycle hooks registered (event/type/matcher/block)
+ih hooks list --strict            # CI gate: exit 1 on an unknown hook event name
+ih hooks log                      # the hook-execution trail: did my hook fire, and why not?
+ih hooks log --event pre_tool_use --success false
 ```
 
 ### Team & live workers
@@ -358,13 +362,14 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Capability inventory** — `ih capabilities` answers "what can this project's agent actually use, and why is a capability missing?" in one network-free read: every registered tool (with required/optional schema arguments), slash command (read-only / stateful), bundled/user/plugin skill, enabled plugin and MCP server config, plus static MCP checks for a missing executable, malformed URL or missing `cwd` — each problem carries a copyable remedy. `--json` is stable for scripts and `--strict` exits 1 on any problem, so a broken MCP server fails CI before a run does. The WebUI **Capabilities** page (`g n`) is the same inventory with category chips, search and a problem-first table; it never starts a server, model or tool.
 - **Audit trail** — `ih audit` reads the console's full audit journal (`.iterate/web-audit.jsonl`): every mutating operation with timestamp, action, target and parameter summary, filtered by action prefix / target substring / start time, paged newest-first, and exported as Markdown / CSV / JSON for a spreadsheet or an incident report. The WebUI **审计** page (`g u`) is the same reader with the filters in the browser, so "who changed what, when?" no longer needs a terminal.
 - **Project memory bank** — the engine injects persistent project memory (a `MEMORY.md` index plus topic files, under the harness data dir) into every runtime prompt, but until now the operator could only see it from the REPL's `/memory` command. `ih memory list|search|show|preview|add|remove` and the WebUI **记忆** page (`g m`) expose the same bank read-only, run the engine's own relevance search, and preview — through the *same code path as the prompt* — exactly what the model would be told for a task, including which memories were clipped by the per-file budget. `ih memory add`/the console's create form refuse to overwrite an existing file unless asked, so a stray save never silently replaces remembered context.
+- **Lifecycle-hook observability** — the engine loads lifecycle hooks from `settings.hooks` and enabled plugins and runs them inline in front of tool calls and turn boundaries, but until now the result of every execution was discarded: a hook that rejected a tool call surfaced only as a mystery refusal inside a run, and a hook registered under a misspelled event name was silently dropped. `ih hooks list|log` and the WebUI **生命周期钩子** page (`g h`) close that gap: the inventory lists every registered hook (event, type, source, matcher, command/prompt/url, timeout, block-on-failure) with unknown event names reported as copyable problems, and the log pages `.iterate/hook-journal.jsonl` — the exact trail the engine writes for every hook it runs — filtered by event/type/outcome and exported as Markdown / CSV / JSON. The same section feeds `ih capabilities`, so a broken hook config fails CI (`--strict`) before a run does.
 
 ### WebUI management console
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
 **Run diff**, **Gate**, **Schedules**, **Capabilities**, **自检 (doctor)**,
-**审计 (audit)**, **记忆 (memory)**, Workspaces, **Team**, Checkpoints,
+**审计 (audit)**, **记忆 (memory)**, **生命周期钩子 (hooks)**, Workspaces, **Team**, Checkpoints,
 Budget & Rate, Config, Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
@@ -445,6 +450,17 @@ overwriting an existing file requires an explicit flag, so a stray save can
 never silently replace remembered context. Read-only surfaces never create the
 memory directory: an empty project shows 尚未创建 rather than writing to disk
 just because someone looked.
+
+The **生命周期钩子** page (`g h`) is the console's half of `ih hooks`: every
+lifecycle hook the engine loads from `settings.hooks` and enabled plugins,
+grouped by event with its type, source, matcher, command/prompt/url, timeout
+and block-on-failure, plus the execution trail the engine writes for every hook
+it runs — filtered by event / type / outcome and paged newest-first, so "did my
+hook fire, did it pass, and why not?" is answered without a terminal. A hook
+registered under a misspelled event name (which the loader silently drops) is
+reported as a problem with a copyable remedy rather than hidden. It is
+read-only and network-free: no hook command is spawned and no model is
+invoked.
 
 ### Cost, resources & gates
 

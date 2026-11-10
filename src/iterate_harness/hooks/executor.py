@@ -9,6 +9,7 @@ import logging
 import os
 import shlex
 import signal
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from iterate_harness.hooks.schemas import (
 from iterate_harness.hooks.types import AggregatedHookResult, HookResult
 from iterate_harness.sandbox import SandboxUnavailableError
 from iterate_harness.utils.shell import create_shell_subprocess
+from iterate_harness.hooks.journal import record_hook_execution
 
 log = logging.getLogger(__name__)
 
@@ -91,15 +93,23 @@ class HookExecutor:
         for hook in self._registry.get(event):
             if not _matches_hook(hook, payload):
                 continue
+            started = time.monotonic()
             try:
                 if isinstance(hook, CommandHookDefinition):
-                    results.append(await self._run_command_hook(hook, event, payload))
+                    result = await self._run_command_hook(hook, event, payload)
                 elif isinstance(hook, HttpHookDefinition):
-                    results.append(await self._run_http_hook(hook, event, payload))
+                    result = await self._run_http_hook(hook, event, payload)
                 elif isinstance(hook, PromptHookDefinition):
-                    results.append(await self._run_prompt_like_hook(hook, event, payload, agent_mode=False))
+                    result = await self._run_prompt_like_hook(hook, event, payload, agent_mode=False)
                 elif isinstance(hook, AgentHookDefinition):
-                    results.append(await self._run_prompt_like_hook(hook, event, payload, agent_mode=True))
+                    result = await self._run_prompt_like_hook(hook, event, payload, agent_mode=True)
+                else:  # pragma: no cover - a future hook kind must still be contained
+                    result = HookResult(
+                        hook_type=getattr(hook, "type", "unknown"),
+                        success=False,
+                        blocked=getattr(hook, "block_on_failure", False),
+                        reason=f"unsupported hook definition: {getattr(hook, 'type', type(hook).__name__)}",
+                    )
             except Exception as exc:
                 # A hook failure must never escape the executor: callers (tool
                 # execution, prompt submission, turn boundaries) run hooks
@@ -108,15 +118,55 @@ class HookExecutor:
                 # Degrade to a failed hook result instead, matching the
                 # per-hook-kind containment the sub-runners already do.
                 log.warning("hook %r raised during %s", getattr(hook, "type", hook), event.value, exc_info=True)
-                results.append(
-                    HookResult(
-                        hook_type=getattr(hook, "type", "unknown"),
-                        success=False,
-                        blocked=getattr(hook, "block_on_failure", False),
-                        reason=f"hook raised {exc.__class__.__name__}: {_bounded_hook_output(str(exc))}",
-                    )
+                result = HookResult(
+                    hook_type=getattr(hook, "type", "unknown"),
+                    success=False,
+                    blocked=getattr(hook, "block_on_failure", False),
+                    reason=f"hook raised {exc.__class__.__name__}: {_bounded_hook_output(str(exc))}",
                 )
+            self._record_execution(hook, event, result, started)
+            results.append(result)
         return AggregatedHookResult(results=results)
+
+    def _record_execution(
+        self,
+        hook: HookDefinition,
+        event: HookEvent,
+        result: HookResult,
+        started: float,
+    ) -> None:
+        """Append one hook execution to the project's hook journal (best-effort).
+
+        The journal is what lets an operator answer "did my hook fire, did it
+        pass, and why not?" from the CLI or the console. A failing append is a
+        warning, never a raise: hook execution is inline in front of a tool
+        call or turn boundary, and the result must reach the caller even when
+        the journal is on a read-only mount.
+        """
+        metadata = result.metadata or {}
+        try:
+            record_hook_execution(
+                self._context.cwd,
+                event=event.value,
+                hook_type=result.hook_type,
+                matcher=str(getattr(hook, "matcher", None) or ""),
+                detail=str(
+                    getattr(hook, "command", None)
+                    or getattr(hook, "prompt", None)
+                    or getattr(hook, "url", None)
+                    or ""
+                ),
+                model=str(getattr(hook, "model", None) or ""),
+                success=result.success,
+                blocked=result.blocked,
+                reason=result.reason,
+                output=result.output,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                returncode=metadata.get("returncode"),
+                status_code=metadata.get("status_code"),
+            )
+        except Exception:  # noqa: BLE001 - the journal must never break the caller
+            log.debug("failed to record hook execution to journal", exc_info=True)
 
     async def _run_command_hook(
         self,

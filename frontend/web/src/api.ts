@@ -13,6 +13,8 @@ import type {
   DoctorView,
   FindingsResponse,
   GateView,
+  HookLogView,
+  HooksView,
   MemoryCreateInput,
   MemoryEntryDetail,
   MemoryView,
@@ -341,6 +343,32 @@ export const api = {
   // Read-only and network-free.
   capabilities: (projectRoot?: string): Promise<CapabilitiesView> =>
     request<CapabilitiesView>(`/capabilities${buildQuery(projectRoot)}`),
+
+  // Lifecycle hooks: what the engine registers (settings + enabled plugins)
+  // and the execution trail. Read-only; no hook command is spawned and no
+  // model is invoked. `success` filters the log by outcome.
+  hooks: (projectRoot?: string): Promise<HooksView> =>
+    request<HooksView>(`/hooks${buildQuery(projectRoot)}`),
+
+  hookLog: (
+    projectRoot?: string,
+    opts: {
+      event?: string;
+      hookType?: string;
+      success?: string;
+      offset?: number;
+      limit?: number;
+    } = {},
+  ): Promise<HookLogView> =>
+    request<HookLogView>(
+      `/hooks/log${buildQuery(projectRoot, {
+        event: opts.event,
+        hook_type: opts.hookType,
+        success: opts.success,
+        offset: opts.offset,
+        limit: opts.limit,
+      })}`,
+    ),
 
   // Project memory bank: the persistent context the engine injects into every
   // runtime prompt. Read-only; `query` ranks matches with the engine's scorer

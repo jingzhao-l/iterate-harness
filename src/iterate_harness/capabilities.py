@@ -353,6 +353,16 @@ def build_capability_inventory(
         "mcp_errors": sum(1 for row in mcp_rows if row["status"] == "error"),
         "problems": len(problems),
     }
+
+    hook_rows: list[dict[str, Any]] = []
+    try:
+        from .hooks.inventory import hook_rows_for_capabilities
+
+        hook_rows = hook_rows_for_capabilities(root, settings=resolved_settings)
+    except Exception as exc:  # noqa: BLE001
+        problems.append(_loader_problem("hooks", exc))
+    summary["hooks"] = len(hook_rows)
+
     return {
         "project_root": str(root),
         "generated_at": now.isoformat(),
@@ -364,6 +374,7 @@ def build_capability_inventory(
         "skills": sorted(skill_rows, key=lambda row: str(row["name"])),
         "plugins": sorted(plugin_rows, key=lambda row: str(row["name"])),
         "mcp_servers": sorted(mcp_rows, key=lambda row: str(row["name"])),
+        "hooks": sorted(hook_rows, key=lambda row: (str(row.get("event")), str(row.get("type")))),
     }
 
 
@@ -375,7 +386,8 @@ def render_capability_inventory(inventory: dict[str, Any]) -> str:
         (
             f"tools: {summary.get('tools', 0)} · commands: {summary.get('commands', 0)} · "
             f"skills: {summary.get('skills', 0)} · plugins: {summary.get('plugins', 0)} "
-            f"({summary.get('enabled_plugins', 0)} enabled) · MCP servers: {summary.get('mcp_servers', 0)}"
+            f"({summary.get('enabled_plugins', 0)} enabled) · MCP servers: {summary.get('mcp_servers', 0)} · "
+            f"hooks: {summary.get('hooks', 0)}"
         ),
     ]
 
@@ -441,6 +453,16 @@ def render_capability_inventory(inventory: dict[str, Any]) -> str:
         "Slash commands",
         "commands",
         lambda row: f"/{row.get('name')} [{row.get('behavior')}] {row.get('description')}",
+    )
+    section(
+        "Lifecycle hooks",
+        "hooks",
+        lambda row: (
+            f"{row.get('event')} / {row.get('type')} [{row.get('source')}] "
+            f"{row.get('detail')}"
+            + (f" matcher={row.get('matcher')}" if row.get("matcher") else "")
+            + (" [blocks on failure]" if row.get("block_on_failure") else "")
+        ),
     )
     return "\n".join(lines)
 

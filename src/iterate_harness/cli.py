@@ -710,12 +710,14 @@ provider_app = typer.Typer(name="provider", help="Manage provider profiles")
 iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/diff/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
 web_app = typer.Typer(name="web", help="WebUI management console")
 memory_app = typer.Typer(name="memory", help="Read and write the project memory bank (list/search/show/preview/add/remove)")
+hooks_app = typer.Typer(name="hooks", help="Inspect lifecycle hooks (list/log)")
 
 app.add_typer(auth_app)
 app.add_typer(provider_app)
 app.add_typer(iterate_app)
 app.add_typer(web_app)
 app.add_typer(memory_app)
+app.add_typer(hooks_app)
 
 
 # ---- iterate subcommands ----
@@ -2091,8 +2093,9 @@ def web_serve(
 
     Serves the dashboard, runs timeline, trend, run comparison, the recipe gate,
     scheduled reviews, the capability inventory, the environment self-check,
-    the audit trail, the project memory bank, checkpoints, budget, config, and
-    reports on a local loopback address and opens the browser. The backend
+    the audit trail, the project memory bank, the lifecycle-hook inventory and
+    hook-execution trail, checkpoints, budget, config, and reports on a local
+    loopback address and opens the browser. The backend
     binds to 127.0.0.1 by default and never exposes itself externally.
     """
     from iterate_harness.web.api import serve as web_serve_backend
@@ -3224,6 +3227,213 @@ def audit_cmd(
             print(f"Error: cannot write {out}: {exc}", file=sys.stderr)
             raise typer.Exit(1)
         print(f"Wrote {len(entries)} audit entries to {out}", flush=True)
+    else:
+        print(body, end="" if body.endswith("\n") else "\n", flush=True)
+    raise typer.Exit(0)
+
+
+# ---------------------------------------------------------------------------
+# Hooks subcommands
+# ---------------------------------------------------------------------------
+
+def _hooks_project_root(project_root: str | None) -> str:
+    return str(Path(project_root).expanduser()) if project_root else str(Path.cwd())
+
+
+@hooks_app.command("list")
+def hooks_list_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose hooks to inventory (default: current directory)",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the inventory as JSON (same shape as GET /api/v1/hooks)",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit 1 when any hook event name is unknown or a loader failed",
+    ),
+) -> None:
+    """List the lifecycle hooks this project has registered.
+
+    The engine loads hooks from ``settings.hooks`` and from every enabled
+    plugin, then runs them inline in front of tool calls and turn boundaries.
+    This is the read-only inventory: what is registered, for which event, what
+    it matches, and whether a failure blocks the run. A hook registered under a
+    misspelled event name (which the loader silently drops) is reported as a
+    problem with a copyable remedy. Exit code: 0 normally, 1 with ``--strict``
+    when any problem was reported.
+
+    Examples:
+        ih hooks list
+        ih hooks list --project-root /path/to/repo
+        ih hooks list --json --strict
+    """
+    from iterate_harness.hooks.inventory import (
+        build_hook_inventory,
+        render_hook_inventory,
+    )
+
+    root = _hooks_project_root(project_root)
+    inventory = build_hook_inventory(root)
+    if as_json:
+        print(json.dumps(inventory, ensure_ascii=False, indent=2))
+    else:
+        print(render_hook_inventory(inventory))
+    if strict and inventory.get("has_problems"):
+        raise typer.Exit(1)
+    raise typer.Exit(0)
+
+
+@hooks_app.command("log")
+def hooks_log_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose hook journal to read (default: current directory)",
+    ),
+    event: str = typer.Option(
+        "",
+        "--event",
+        help="Filter by lifecycle event (e.g. pre_tool_use)",
+    ),
+    hook_type: str = typer.Option(
+        "",
+        "--type",
+        help="Filter by hook type (command / prompt / http / agent)",
+    ),
+    success: str = typer.Option(
+        "",
+        "--success",
+        help="Filter by outcome: true | false (empty means all)",
+    ),
+    offset: int = typer.Option(
+        0,
+        "--offset",
+        min=0,
+        help="Page offset from the newest entry",
+    ),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        min=1,
+        max=500,
+        help="Max entries to show",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the page as JSON (same shape as GET /api/v1/hooks/log)",
+    ),
+    fmt: str = typer.Option(
+        "table",
+        "--format",
+        help="Render format: table | json | markdown | csv",
+    ),
+    out: str | None = typer.Option(
+        None,
+        "--out",
+        help="Write the output to this path instead of stdout (for scripts)",
+    ),
+) -> None:
+    """Read the hook-execution journal: did my hook fire, and did it pass?
+
+    The engine runs lifecycle hooks inline; until now the result of each
+    execution was discarded — a hook that rejected a tool call surfaced only as
+    a mystery refusal inside a run, and a hook that silently failed (missing
+    command, timeout, a model call that never answered) was visible only as a
+    log line. This command is the read side of ``.iterate/hook-journal.jsonl``,
+    so an operator can answer "what ran, when, and why not" without opening the
+    console.
+
+    Entries are returned newest first. ``--event`` / ``--type`` are exact
+    matches, ``--success`` filters by outcome. Exit code: 0 (the trail is
+    evidence, not a gate); a journal that cannot be read prints a warning to
+    stderr.
+
+    Examples:
+        ih hooks log
+        ih hooks log --event pre_tool_use --success false --limit 20
+        ih hooks log --format csv --out hooks.csv
+        ih hooks log --json
+    """
+    from datetime import datetime, timezone
+
+    from iterate_harness.hooks.journal import (
+        distinct_events,
+        distinct_hook_types,
+        hook_log_csv,
+        list_hook_executions,
+        render_hook_log_markdown,
+        render_hook_log_table,
+    )
+
+    root = _hooks_project_root(project_root)
+    success_filter: bool | None = None
+    if success.strip().lower() == "true":
+        success_filter = True
+    elif success.strip().lower() == "false":
+        success_filter = False
+    elif success.strip():
+        print(
+            f"Error: invalid --success value {success!r} (allowed: true, false, or empty for all)",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    entries, total = list_hook_executions(
+        root,
+        event=event,
+        hook_type=hook_type,
+        success=success_filter,
+        limit=limit,
+        offset=offset,
+    )
+
+    def _view() -> dict[str, object]:
+        return {
+            "project_root": str(Path(root).resolve()),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "total": total,
+            "returned": len(entries),
+            "offset": offset,
+            "limit": limit,
+            "truncated": offset + len(entries) < total,
+            "events": distinct_events(root),
+            "types": distinct_hook_types(root),
+            "entries": entries,
+        }
+
+    requested_fmt = fmt.lower().strip()
+    if as_json:
+        requested_fmt = "json"
+    if requested_fmt not in {"table", "json", "markdown", "csv"}:
+        print(
+            f"Error: unknown --format {fmt!r} (allowed: table, json, markdown, csv)",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    if requested_fmt == "json":
+        body = json.dumps(_view(), ensure_ascii=False, indent=2) + "\n"
+    elif requested_fmt == "markdown":
+        body = render_hook_log_markdown(entries, total, limit, offset)
+    elif requested_fmt == "csv":
+        body = hook_log_csv(entries, total, limit, offset)
+    else:
+        body = render_hook_log_table(entries, total, limit, offset) + "\n"
+
+    if out:
+        try:
+            Path(out).write_text(body, encoding="utf-8")
+        except OSError as exc:
+            print(f"Error: cannot write {out}: {exc}", file=sys.stderr)
+            raise typer.Exit(1)
+        print(f"Wrote {len(entries)} hook executions to {out}", flush=True)
     else:
         print(body, end="" if body.endswith("\n") else "\n", flush=True)
     raise typer.Exit(0)
