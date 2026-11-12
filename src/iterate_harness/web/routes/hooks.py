@@ -14,10 +14,13 @@ model or a hook command.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from ..roots import resolve_project_root
 from ..schemas import HookLogEntry, HookLogView, HooksView
@@ -25,7 +28,10 @@ from ...hooks.inventory import build_hook_inventory
 from ...hooks.journal import (
     distinct_events,
     distinct_hook_types,
+    hook_export_filename,
+    hook_log_csv,
     list_hook_executions,
+    render_hook_log_markdown,
 )
 
 UTC = timezone.utc
@@ -39,6 +45,26 @@ def _resolve_project(request: Request, project_root: str) -> Path:
     if not root.is_dir():
         raise HTTPException(status_code=404, detail=f"Project root not found: {root}")
     return root
+
+
+def _parse_success(success: str) -> bool | None:
+    """Parse the ``success`` filter; a bogus value is a 422, not "all".
+
+    The CLI already rejects a bad ``--success`` value explicitly; a page that
+    silently shows every row for a filter the operator typed is a worse answer
+    than a clear error.
+    """
+    value = success.strip().lower()
+    if value in {"", "all"}:
+        return None
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise HTTPException(
+        status_code=422,
+        detail=f"invalid success value: {success!r} (expected true, false, or empty)",
+    )
 
 
 @router.get("/hooks", response_model=HooksView)
@@ -66,16 +92,12 @@ def get_hook_log(
 ) -> HookLogView:
     """Page the hook-execution trail, newest first.
 
-    ``success`` accepts ``true``/``false`` (case-insensitive); any other value
-    means "all". A missing journal is an empty page with ``total`` 0 — never an
-    error.
+    ``success`` accepts ``true``/``false`` (case-insensitive); empty means all,
+    anything else is a 422. A missing journal is an empty page with ``total`` 0
+    — never an error.
     """
     root = _resolve_project(request, project_root)
-    success_filter: bool | None = None
-    if success.strip().lower() == "true":
-        success_filter = True
-    elif success.strip().lower() == "false":
-        success_filter = False
+    success_filter = _parse_success(success)
     page, total = list_hook_executions(
         root,
         event=event,
@@ -95,6 +117,64 @@ def get_hook_log(
         events=distinct_events(root),
         types=distinct_hook_types(root),
         entries=[HookLogEntry(**entry) for entry in page],
+    )
+
+
+@router.get("/hooks/log/export")
+def export_hook_log(
+    request: Request,
+    project_root: str = "",
+    event: str = Query("", description="Filter by lifecycle event"),
+    hook_type: str = Query("", description="Filter by hook type"),
+    success: str = Query("", description="Filter by outcome: true / false / '' (all)"),
+    fmt: Literal["md", "csv", "json"] = Query("md", alias="format"),
+) -> Response:
+    """Download the filtered hook-execution trail as Markdown / CSV / JSON.
+
+    The export is not paginated: a diagnostic export must carry the whole
+    filtered window, not page 1. Read-only, same reader and filters as the page.
+    """
+    root = _resolve_project(request, project_root)
+    success_filter = _parse_success(success)
+    entries, total = list_hook_executions(
+        root,
+        event=event,
+        hook_type=hook_type,
+        success=success_filter,
+        limit=100_000,
+        offset=0,
+    )
+    if fmt == "json":
+        body = json.dumps(
+            {
+                "project_root": str(root),
+                "generated_at": datetime.now(UTC).isoformat(),
+                "total": total,
+                "returned": len(entries),
+                "offset": 0,
+                "limit": len(entries),
+                "truncated": False,
+                "events": distinct_events(root),
+                "types": distinct_hook_types(root),
+                "entries": entries,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+        media_type = "application/json"
+    elif fmt == "csv":
+        body = hook_log_csv(entries, total, len(entries), 0)
+        media_type = "text/csv; charset=utf-8"
+    else:
+        body = render_hook_log_markdown(entries, total, len(entries), 0)
+        media_type = "text/markdown; charset=utf-8"
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{hook_export_filename(fmt)}"',
+            "X-Hooks-Total": str(total),
+        },
     )
 
 

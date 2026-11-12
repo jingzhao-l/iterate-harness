@@ -300,6 +300,9 @@ ih hooks list                     # lifecycle hooks registered (event/type/match
 ih hooks list --strict            # CI gate: exit 1 on an unknown hook event name
 ih hooks log                      # the hook-execution trail: did my hook fire, and why not?
 ih hooks log --event pre_tool_use --success false
+ih hooks test session_start       # run that event's hooks now — no full run needed
+ih hooks test pre_tool_use --tool-name bash --dry-run
+ih hooks test stop --require-match --json   # CI gate: fail if nothing is registered
 ```
 
 ### Team & live workers
@@ -362,7 +365,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Capability inventory** — `ih capabilities` answers "what can this project's agent actually use, and why is a capability missing?" in one network-free read: every registered tool (with required/optional schema arguments), slash command (read-only / stateful), bundled/user/plugin skill, enabled plugin and MCP server config, plus static MCP checks for a missing executable, malformed URL or missing `cwd` — each problem carries a copyable remedy. `--json` is stable for scripts and `--strict` exits 1 on any problem, so a broken MCP server fails CI before a run does. The WebUI **Capabilities** page (`g n`) is the same inventory with category chips, search and a problem-first table; it never starts a server, model or tool.
 - **Audit trail** — `ih audit` reads the console's full audit journal (`.iterate/web-audit.jsonl`): every mutating operation with timestamp, action, target and parameter summary, filtered by action prefix / target substring / start time, paged newest-first, and exported as Markdown / CSV / JSON for a spreadsheet or an incident report. The WebUI **审计** page (`g u`) is the same reader with the filters in the browser, so "who changed what, when?" no longer needs a terminal.
 - **Project memory bank** — the engine injects persistent project memory (a `MEMORY.md` index plus topic files, under the harness data dir) into every runtime prompt, but until now the operator could only see it from the REPL's `/memory` command. `ih memory list|search|show|preview|add|remove` and the WebUI **记忆** page (`g m`) expose the same bank read-only, run the engine's own relevance search, and preview — through the *same code path as the prompt* — exactly what the model would be told for a task, including which memories were clipped by the per-file budget. `ih memory add`/the console's create form refuse to overwrite an existing file unless asked, so a stray save never silently replaces remembered context.
-- **Lifecycle-hook observability** — the engine loads lifecycle hooks from `settings.hooks` and enabled plugins and runs them inline in front of tool calls and turn boundaries, but until now the result of every execution was discarded: a hook that rejected a tool call surfaced only as a mystery refusal inside a run, and a hook registered under a misspelled event name was silently dropped. `ih hooks list|log` and the WebUI **生命周期钩子** page (`g h`) close that gap: the inventory lists every registered hook (event, type, source, matcher, command/prompt/url, timeout, block-on-failure) with unknown event names reported as copyable problems, and the log pages `.iterate/hook-journal.jsonl` — the exact trail the engine writes for every hook it runs — filtered by event/type/outcome and exported as Markdown / CSV / JSON. The same section feeds `ih capabilities`, so a broken hook config fails CI (`--strict`) before a run does.
+- **Lifecycle-hook observability & test** — the engine loads lifecycle hooks from `settings.hooks` and enabled plugins and runs them inline in front of tool calls and turn boundaries, but until now the result of every execution was discarded: a hook that rejected a tool call surfaced only as a mystery refusal inside a run, and a hook registered under a misspelled event name was silently dropped. `ih hooks list|log|test` and the WebUI **生命周期钩子** page (`g h`) close that gap: the inventory lists every registered hook (event, type, source, matcher, command/prompt/url, timeout, block-on-failure) and statically flags the ones that can never run (missing executable, malformed URL, empty prompt) with copyable remedies; the log pages `.iterate/hook-journal.jsonl` — the exact trail the engine writes — filtered by event/type/outcome and exported as Markdown / CSV / JSON; and `ih hooks test <event>` runs that event's hooks **now** through the engine's own executor with a synthetic payload (`--tool-name` / `--prompt` / `--notification-type` / `--payload`), so a broken `block_on_failure` gate is caught before a run instead of during one. Prompt/agent hooks are reported as skipped unless `--with-model` is passed, `--dry-run` only reports what would run, and `--require-match` turns "nothing is registered for this event" into a CI failure. The same section feeds `ih capabilities`, so a broken hook config fails CI (`--strict`) before a run does.
 
 ### WebUI management console
 
@@ -453,14 +456,19 @@ just because someone looked.
 
 The **生命周期钩子** page (`g h`) is the console's half of `ih hooks`: every
 lifecycle hook the engine loads from `settings.hooks` and enabled plugins,
-grouped by event with its type, source, matcher, command/prompt/url, timeout
-and block-on-failure, plus the execution trail the engine writes for every hook
-it runs — filtered by event / type / outcome and paged newest-first, so "did my
-hook fire, did it pass, and why not?" is answered without a terminal. A hook
-registered under a misspelled event name (which the loader silently drops) is
-reported as a problem with a copyable remedy rather than hidden. It is
-read-only and network-free: no hook command is spawned and no model is
-invoked.
+grouped by event with its type, source, matcher, command/prompt/url, timeout,
+block-on-failure and a static **检查** badge that names a missing executable,
+malformed URL or empty prompt instead of letting it fail later, plus the
+execution trail the engine writes for every hook it runs — filtered by event /
+type / outcome, paged newest-first, and exportable as Markdown / CSV / JSON.
+Each event group carries a one-click **复制试运行命令** button that hands you
+the exact `ih hooks test <event> …` invocation for that event's payload (tool
+name / prompt / notification type), so "will this hook pass?" is answerable
+before committing to a run. A hook registered under a misspelled event name
+(which the loader silently drops) is reported as a problem with a copyable
+remedy rather than hidden. The page stays read-only and network-free: no hook
+command is spawned and no model is invoked (the copied command is run
+deliberately from a terminal).
 
 ### Cost, resources & gates
 

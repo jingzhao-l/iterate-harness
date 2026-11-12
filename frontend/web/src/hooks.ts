@@ -50,3 +50,36 @@ export function hookHeadline(view: HooksView): HookHeadline {
 export function eventLabel(event: string): string {
   return event.replace(/_/g, " ");
 }
+
+/**
+ * A copyable `ih hooks test` command tailored to one event (design §17.3 P15).
+ *
+ * A hook normally only fires deep inside a real run; the console can hand the
+ * operator the exact command that exercises it *now*, with the payload field
+ * that event's matchers read (tool name / prompt / notification type). This is
+ * the console half of the "test before you run" channel.
+ */
+export function hookTestCommand(event: string): string {
+  if (event === "pre_tool_use" || event === "post_tool_use") {
+    return `ih hooks test ${event} --tool-name bash`;
+  }
+  if (event === "user_prompt_submit") {
+    return `ih hooks test ${event} --prompt "describe the task"`;
+  }
+  if (event === "notification") {
+    return `ih hooks test ${event} --notification-type permission_prompt`;
+  }
+  return `ih hooks test ${event}`;
+}
+
+export interface HookRowStatus {
+  text: string;
+  cls: string;
+}
+
+/** Static-validation badge for a registered hook row. */
+export function hookRowStatus(issues: string[] | undefined): HookRowStatus {
+  return issues && issues.length > 0
+    ? { text: "问题", cls: "warn" }
+    : { text: "就绪", cls: "neutral" };
+}

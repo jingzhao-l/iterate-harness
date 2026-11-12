@@ -5,7 +5,14 @@
 // never collapses into one ambiguous message.
 
 import { describe, expect, it } from "vitest";
-import { eventLabel, hookHeadline, hookTypeClass, statusLabel } from "../hooks";
+import {
+  eventLabel,
+  hookHeadline,
+  hookRowStatus,
+  hookTestCommand,
+  hookTypeClass,
+  statusLabel,
+} from "../hooks";
 import type { HookLogEntry, HooksView } from "../types";
 
 function entry(overrides: Partial<HookLogEntry> = {}): HookLogEntry {
@@ -106,5 +113,32 @@ describe("eventLabel", () => {
   it("humanizes snake_case events", () => {
     expect(eventLabel("pre_tool_use")).toBe("pre tool use");
     expect(eventLabel("session_start")).toBe("session start");
+  });
+});
+
+describe("hookTestCommand", () => {
+  it("supplies the payload field each event's matchers read", () => {
+    expect(hookTestCommand("pre_tool_use")).toBe(
+      "ih hooks test pre_tool_use --tool-name bash",
+    );
+    expect(hookTestCommand("post_tool_use")).toBe(
+      "ih hooks test post_tool_use --tool-name bash",
+    );
+    expect(hookTestCommand("user_prompt_submit")).toBe(
+      'ih hooks test user_prompt_submit --prompt "describe the task"',
+    );
+    expect(hookTestCommand("notification")).toBe(
+      "ih hooks test notification --notification-type permission_prompt",
+    );
+    expect(hookTestCommand("session_start")).toBe("ih hooks test session_start");
+  });
+});
+
+describe("hookRowStatus", () => {
+  it("marks a hook with static issues as a problem", () => {
+    expect(hookRowStatus([]).text).toBe("就绪");
+    expect(hookRowStatus(undefined).cls).toBe("neutral");
+    expect(hookRowStatus(["command not found on PATH: nope"]).text).toBe("问题");
+    expect(hookRowStatus(["command not found on PATH: nope"]).cls).toBe("warn");
   });
 });

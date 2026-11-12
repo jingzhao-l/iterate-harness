@@ -658,6 +658,9 @@ export interface HookDefinitionRow {
   block_on_failure: boolean;
   source: string;
   headers: Record<string, string>;
+  /** Static validation: "ok", or "warn" when the hook can never run as configured. */
+  status?: string;
+  issues?: string[];
 }
 
 export interface HookEventGroup {

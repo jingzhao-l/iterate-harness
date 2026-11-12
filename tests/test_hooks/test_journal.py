@@ -134,21 +134,62 @@ def test_journal_summary(tmp_path: Path) -> None:
     assert summary["by_event"] == {"pre_tool_use": 2}
 
 
-def test_rotation_trims_to_newest(tmp_path: Path) -> None:
+def test_rotation_trims_to_newest(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "repo"
     project.mkdir()
-    # Force a tiny cap by writing many large records.
-    for index in range(200):
+    # Force a tiny cap so the assertion exercises real rotation rather than
+    # the default 5 MiB ceiling (200 × 1 KB records never approached it).
+    monkeypatch.setattr("iterate_harness.hooks.journal.MAX_JOURNAL_BYTES", 4_000)
+    for index in range(30):
         record_hook_execution(
             project,
             event="pre_tool_use",
             hook_type="command",
-            detail="x" * 1000 + str(index),
+            detail="x" * 400 + str(index),
             success=True,
         )
     path = journal_path(project)
-    # The journal is bounded (rotation trims on append once over the cap).
-    assert path.stat().st_size <= 5 * 1024 * 1024 + 4096
+    assert path.stat().st_size <= 4_000
+    remaining = [entry["detail"] for entry in iter_hook_executions(project)]
+    # Rotation keeps the newest lines and never fabricates entries.
+    assert remaining
+    assert remaining[-1].endswith("29")
+    assert all("x" * 400 in detail for detail in remaining)
+    # The rewrite is atomic: no temp file survives a successful rotation.
+    assert not list((project / ".iterate").glob("hook-journal.jsonl.tmp-*"))
+
+
+def test_rotation_happens_after_the_first_append(tmp_path: Path, monkeypatch) -> None:
+    """A pre-existing journal must still be trimmed (regression).
+
+    The first implementation only rotated when the append *created* the file,
+    so the cap was enforced once and never again: a long-lived project grew
+    ``hook-journal.jsonl`` without bound.
+    """
+    project = tmp_path / "repo"
+    project.mkdir()
+    record_hook_execution(
+        project,
+        event="session_start",
+        hook_type="command",
+        detail="first",
+        success=True,
+    )
+    path = journal_path(project)
+    assert path.exists()
+    monkeypatch.setattr("iterate_harness.hooks.journal.MAX_JOURNAL_BYTES", 600)
+    for index in range(10):
+        record_hook_execution(
+            project,
+            event="stop",
+            hook_type="command",
+            detail="y" * 300 + str(index),
+            success=True,
+        )
+    assert path.stat().st_size <= 600
+    drafts = [entry["detail"] for entry in iter_hook_executions(project)]
+    assert drafts[-1].endswith("9")
+    assert "first" not in drafts
 
 
 def test_render_shapes(tmp_path: Path) -> None:

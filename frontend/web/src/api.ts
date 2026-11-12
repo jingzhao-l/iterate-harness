@@ -183,6 +183,49 @@ export async function downloadTrendExport(
   };
 }
 
+export type HookExportFormat = "md" | "csv" | "json";
+
+export interface HookExportDownload {
+  filename: string;
+  text: string;
+  contentType: string;
+}
+
+export interface HookLogQuery {
+  event?: string;
+  hookType?: string;
+  success?: string;
+}
+
+/**
+ * Download the filtered hook-execution trail as Markdown / CSV / JSON.
+ * Unlike the page it is not paginated: a diagnostic export carries the whole
+ * filtered window. The server owns the filename (it stamps the export time).
+ */
+export async function downloadHookLogExport(
+  projectRoot: string | undefined,
+  format: HookExportFormat,
+  query: HookLogQuery = {},
+): Promise<HookExportDownload> {
+  const response = await fetch(
+    `${API_BASE}/hooks/log/export${buildQuery(projectRoot, {
+      format,
+      event: query.event,
+      hook_type: query.hookType,
+      success: query.success,
+    })}`,
+    withAuth(),
+  );
+  if (!response.ok) await throwApiError(response);
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+  return {
+    filename: match?.[1] ?? `iterate-hooks.${format}`,
+    text: await response.text(),
+    contentType: response.headers.get("Content-Type") ?? "",
+  };
+}
+
 export interface AuditQuery {
   action?: string;
   target?: string;

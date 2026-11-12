@@ -655,6 +655,11 @@ class HookDefinitionRow(BaseModel):
     block_on_failure: bool = False
     source: str = "settings"
     headers: dict[str, str] = Field(default_factory=dict)
+    # Static validation (dead command / bad URL / empty prompt). ``status`` is
+    # "ok" or "warn"; ``issues`` names the concrete reason so the console can
+    # show why a listed hook can never run.
+    status: str = "ok"
+    issues: list[str] = Field(default_factory=list)
 
 
 class HookEventGroup(BaseModel):

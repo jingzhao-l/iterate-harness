@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -125,14 +126,16 @@ def record_hook_execution(
     line = json.dumps(record, ensure_ascii=False)
     try:
         with exclusive_file_lock(Path(str(path) + ".lock")):
-            existed = path.exists()
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
                 handle.flush()
-            # Rotate lazily after an append so the trail stays bounded even for
-            # a chatty hook; only ever trims to the newest lines.
-            if not existed:
-                _trim_journal(path)
+            # Rotate lazily after *every* append so the trail stays bounded even
+            # for a chatty hook; only ever trims to the newest lines. (The
+            # previous `if not existed` guard only rotated the very first write
+            # into a fresh journal, so a long-lived project could grow the file
+            # without bound; the 5 MiB cap was never enforced after that first
+            # line.)
+            _trim_journal(path)
     except OSError as exc:
         log.warning("cannot append hook journal %s: %s", path, exc)
     return record
@@ -159,10 +162,19 @@ def _trim_journal(path: Path) -> None:
         kept.append(line)
         size += line_bytes
     kept.reverse()
+    # Replace atomically: truncating the live file would let a concurrent
+    # reader (or a crash mid-write) observe a half-written journal, and a
+    # failed write would destroy the whole trail. A sibling temp file + rename
+    # means readers always see either the old file or the complete new one.
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
     try:
-        path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        tmp_path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        os.replace(tmp_path, path)
     except OSError:
-        pass
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def iter_hook_executions(project_root: str | Path) -> Iterator[dict[str, Any]]:
@@ -397,3 +409,10 @@ def hook_log_csv(page: list[dict[str, Any]], total: int, limit: int, offset: int
 def hook_execution_time_ms(started: float) -> int:
     """Return the elapsed milliseconds since *started* (monotonic)."""
     return int((time.monotonic() - started) * 1000)
+
+
+def hook_export_filename(fmt: str, *, now: datetime | None = None) -> str:
+    """Server-side filename for a hook-journal export (``md`` / ``csv`` / ``json``)."""
+    stamp = (now or datetime.now(tz=UTC)).strftime("%Y%m%d-%H%M%S")
+    suffix = "md" if fmt == "md" else fmt
+    return f"iterate-hooks-{stamp}.{suffix}"

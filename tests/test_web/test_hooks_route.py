@@ -120,6 +120,72 @@ def test_log_filters(client: TestClient, project: Path) -> None:
     assert by_event["entries"][0]["hook_type"] == "http"
 
 
+def test_log_rejects_an_unknown_success_filter(client: TestClient, project: Path) -> None:
+    """A bogus filter is an error, not a silent "show everything"."""
+    response = client.get(
+        "/api/v1/hooks/log",
+        params={"project_root": str(project), "success": "maybe"},
+    )
+    assert response.status_code == 422
+
+
+def test_log_export_markdown_csv_json(client: TestClient, project: Path) -> None:
+    record_hook_execution(
+        project, event="pre_tool_use", hook_type="command", detail="printf ok", success=True
+    )
+    record_hook_execution(
+        project,
+        event="post_tool_use",
+        hook_type="http",
+        detail="https://example.com/hook",
+        success=False,
+        blocked=True,
+    )
+    md = client.get(
+        "/api/v1/hooks/log/export",
+        params={"project_root": str(project), "format": "md"},
+    )
+    assert md.status_code == 200
+    assert "text/markdown" in md.headers["content-type"]
+    assert "attachment; filename=\"iterate-hooks-" in md.headers["content-disposition"]
+    assert md.headers["X-Hooks-Total"] == "2"
+    assert "| pre_tool_use |" in md.text
+
+    csv_response = client.get(
+        "/api/v1/hooks/log/export",
+        params={"project_root": str(project), "format": "csv", "success": "false"},
+    )
+    assert csv_response.status_code == 200
+    assert "text/csv" in csv_response.headers["content-type"]
+    assert csv_response.headers["X-Hooks-Total"] == "1"
+    assert "post_tool_use" in csv_response.text
+    assert "pre_tool_use" not in csv_response.text
+
+    payload = client.get(
+        "/api/v1/hooks/log/export",
+        params={"project_root": str(project), "format": "json"},
+    ).json()
+    assert payload["total"] == 2
+    assert len(payload["entries"]) == 2
+
+
+def test_page_exposes_static_hook_validation(client: TestClient, project: Path) -> None:
+    from iterate_harness.config.paths import get_config_file_path
+
+    settings = Settings()
+    settings.hooks = {
+        "session_start": [CommandHookDefinition(command="iterate-missing-binary-xyz")]
+    }
+    path = get_config_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
+    payload = client.get("/api/v1/hooks", params={"project_root": str(project)}).json()
+    row = payload["events"][0]["hooks"][0]
+    assert row["status"] == "warn"
+    assert "not found on PATH" in row["issues"][0]
+    assert any(problem["kind"] == "hook" for problem in payload["problems"])
+
+
 def test_root_outside_allowlist_is_403(client: TestClient, tmp_path: Path) -> None:
     allowed = tmp_path / "repo"
     allowed.mkdir()

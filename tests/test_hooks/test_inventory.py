@@ -130,6 +130,66 @@ def test_cli_list_and_json(tmp_path: Path) -> None:
     assert payload["summary"]["total"] == 3
 
 
+def test_inventory_flags_a_dead_command_with_a_remedy(tmp_path: Path) -> None:
+    """A hook whose executable does not exist is a visible problem, not a mystery."""
+    project = tmp_path / "repo"
+    project.mkdir()
+    settings = Settings()
+    settings.hooks = {
+        "pre_tool_use": [
+            CommandHookDefinition(command="iterate-definitely-missing-binary --check")
+        ]
+    }
+    inventory = build_hook_inventory(project, settings=settings)
+    assert inventory["has_problems"] is True
+    row = inventory["events"][0]["hooks"][0]
+    assert row["status"] == "warn"
+    assert "not found on PATH" in row["issues"][0]
+    problem = inventory["problems"][0]
+    assert problem["kind"] == "hook"
+    assert "iterate-definitely-missing-binary" in problem["detail"]
+    assert "settings.hooks.pre_tool_use" in problem["remedy"]
+    rendered = render_hook_inventory(inventory)
+    assert "not found on PATH" in rendered
+
+
+def test_inventory_accepts_shell_builtins_and_installed_programs(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    settings = Settings()
+    settings.hooks = {
+        "session_start": [
+            CommandHookDefinition(command="cd . && echo ok"),
+            CommandHookDefinition(command="/bin/sh -c 'echo ok'"),
+        ]
+    }
+    inventory = build_hook_inventory(project, settings=settings)
+    assert inventory["has_problems"] is False
+    rows = inventory["events"][0]["hooks"]
+    assert all(row["status"] == "ok" and row["issues"] == [] for row in rows)
+
+
+def test_inventory_flags_a_bad_http_url_and_empty_prompt(tmp_path: Path) -> None:
+    from iterate_harness.hooks.schemas import HttpHookDefinition
+
+    project = tmp_path / "repo"
+    project.mkdir()
+    settings = Settings()
+    settings.hooks = {
+        "stop": [
+            HttpHookDefinition(url="ftp://example.com/hook"),
+            PromptHookDefinition(prompt="   "),
+        ]
+    }
+    inventory = build_hook_inventory(project, settings=settings)
+    assert inventory["has_problems"] is True
+    rows = inventory["events"][0]["hooks"]
+    assert rows[0]["status"] == "warn"
+    assert "invalid http(s) url" in rows[0]["issues"][0]
+    assert rows[1]["status"] == "warn"
+    assert "empty prompt" in rows[1]["issues"][0]
+
+
 def test_cli_strict_exits_1_on_problem(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     project.mkdir()

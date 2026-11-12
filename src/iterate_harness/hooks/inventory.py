@@ -24,8 +24,12 @@ two surfaces can never disagree about how many hooks are live.
 from __future__ import annotations
 
 import datetime
+import os
+import shlex
+import shutil
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .events import HookEvent
 from .journal import distinct_events, distinct_hook_types, journal_summary
@@ -34,6 +38,132 @@ UTC = datetime.timezone.utc
 
 #: Recognized hook definition types (for inventory rendering).
 _KNOWN_HOOK_TYPES = frozenset({"command", "prompt", "http", "agent"})
+
+#: POSIX shell builtins that a hook command may legitimately start with even
+#: though ``shutil.which`` cannot find them (command hooks run through a shell).
+_SHELL_BUILTINS = frozenset(
+    {
+        ":",
+        ".",
+        "[",
+        "alias",
+        "break",
+        "cd",
+        "command",
+        "continue",
+        "echo",
+        "eval",
+        "exec",
+        "exit",
+        "export",
+        "false",
+        "getopts",
+        "hash",
+        "kill",
+        "let",
+        "local",
+        "printf",
+        "pwd",
+        "read",
+        "readonly",
+        "return",
+        "set",
+        "shift",
+        "source",
+        "test",
+        "times",
+        "trap",
+        "true",
+        "type",
+        "ulimit",
+        "umask",
+        "unalias",
+        "unset",
+        "wait",
+    }
+)
+
+
+def _command_issues(command: str) -> list[str]:
+    """Return static problems with a command hook (empty list when plausible).
+
+    The inventory exists to surface a broken setup *before* a run, so a hook
+    pointing at a binary that does not exist is a problem here rather than a
+    mystery failure on the first matching tool call. The checks are deliberately
+    conservative: a command is only flagged when the shell would certainly fail
+    to start it (unparseable, empty, missing absolute path, or a first token
+    that is neither a shell builtin nor on ``PATH``).
+    """
+    try:
+        parts = shlex.split(command)
+    except ValueError as exc:
+        return [f"command is not parseable: {exc}"]
+    if not parts:
+        return ["command is empty"]
+    program = parts[0]
+    if "$" in program or "{" in program:
+        # Shell/parameter expansion is resolved at execution time; a static
+        # inventory cannot (and must not) guess its value.
+        return []
+    expanded = Path(program).expanduser()
+    if program.startswith("~") or "/" in program or "\\" in program:
+        if "~" in program and not expanded.exists():
+            return [f"command path does not exist: {expanded}"]
+        if expanded.is_absolute():
+            if not expanded.exists():
+                return [f"command path does not exist: {expanded}"]
+            if not os.access(expanded, os.X_OK):
+                return [f"command path is not executable: {expanded}"]
+        return []
+    if program in _SHELL_BUILTINS:
+        return []
+    if shutil.which(program) is None:
+        return [f"command not found on PATH: {program}"]
+    return []
+
+
+def _url_issues(url: str) -> list[str]:
+    """Return static problems with an HTTP hook URL."""
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return [f"invalid http(s) url: {url or '(empty)'}"]
+    return []
+
+
+def _row_issues(row: dict[str, Any]) -> list[str]:
+    """Static validation for one normalized hook row."""
+    hook_type = str(row.get("type") or row.get("raw_type") or "")
+    if hook_type == "command":
+        return _command_issues(str(row.get("command") or ""))
+    if hook_type == "http":
+        return _url_issues(str(row.get("url") or ""))
+    if hook_type in {"prompt", "agent"}:
+        if not str(row.get("prompt") or "").strip():
+            return [f"{hook_type} hook has an empty prompt"]
+    return []
+
+
+def _apply_validation(row: dict[str, Any], *, problems: list[dict[str, str]]) -> None:
+    """Attach per-row validation and mirror issues into the top-level list."""
+    issues = _row_issues(row)
+    row["issues"] = issues
+    row["status"] = "warn" if issues else "ok"
+    if not issues:
+        return
+    detail = " ".join(issues)
+    event = str(row.get("event") or "")
+    source = str(row.get("source") or "settings")
+    problems.append(
+        _problem(
+            "hook",
+            f"{event}:{row.get('type', 'hook')}",
+            f"{source} hook can never run as configured: {detail}",
+            (
+                f"Fix `settings.hooks.{event}` (or the plugin hook) so the first token "
+                f"is an installed executable / absolute path, or register it under a valid event."
+            ),
+        )
+    )
 
 
 def _hook_detail(hook: object) -> str:
@@ -143,14 +273,18 @@ def build_hook_inventory(
     for event in HookEvent:
         event_rows: list[dict[str, Any]] = []
         for raw_hook in raw_settings_hooks.get(event.value, []) or []:
-            event_rows.append(_hook_row(raw_hook, source="settings", event=event.value))
+            row = _hook_row(raw_hook, source="settings", event=event.value)
+            _apply_validation(row, problems=problems)
+            event_rows.append(row)
             total += 1
         for plugin in plugins:
             if not getattr(plugin, "enabled", True):
                 continue
             for raw_hook in (getattr(plugin, "hooks", {}) or {}).get(event.value, []) or []:
                 source = f"plugin:{getattr(plugin, 'name', 'unknown')}"
-                event_rows.append(_hook_row(raw_hook, source=source, event=event.value))
+                row = _hook_row(raw_hook, source=source, event=event.value)
+                _apply_validation(row, problems=problems)
+                event_rows.append(row)
                 total += 1
         if event_rows:
             events.append(
@@ -247,6 +381,8 @@ def render_hook_inventory(inventory: dict[str, Any]) -> str:
             block = " [blocks on failure]" if row.get("block_on_failure") else ""
             matcher_suffix = f" matcher={matcher}" if matcher else ""
             lines.append(f"  - {hook_type} ({source}){matcher_suffix}: {detail}{block}")
+            for issue in row.get("issues") or []:
+                lines.append(f"    ! {issue}")
     return "\n".join(lines)
 
 
@@ -268,6 +404,8 @@ def hook_rows_for_capabilities(
                     "matcher": row.get("matcher", ""),
                     "detail": row.get("detail", ""),
                     "block_on_failure": row.get("block_on_failure", False),
+                    "status": row.get("status", "ok"),
+                    "issues": row.get("issues", []),
                 }
             )
     return rows

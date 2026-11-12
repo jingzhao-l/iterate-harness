@@ -7,9 +7,16 @@
 // model is invoked.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "../api";
-import { hookHeadline, hookTypeClass, statusLabel } from "../hooks";
+import { api, downloadHookLogExport } from "../api";
+import {
+  hookHeadline,
+  hookRowStatus,
+  hookTestCommand,
+  hookTypeClass,
+  statusLabel,
+} from "../hooks";
 import { useWebUi } from "../store";
+import type { HookExportFormat } from "../api";
 import type { HookLogView, HooksView } from "../types";
 
 const PAGE_SIZE = 50;
@@ -19,6 +26,77 @@ type Tab = "registered" | "log";
 function HookTypeBadge({ type }: { type: string }): React.JSX.Element {
   const safe = type || "unknown";
   return <span className={`badge ${hookTypeClass(safe)}`}>{safe}</span>;
+}
+
+function CopyTestCommand({ event }: { event: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const pushToast = useWebUi((state) => state.pushToast);
+  const command = hookTestCommand(event);
+  const copy = (): void => {
+    const clipboard = navigator.clipboard;
+    if (!clipboard) {
+      // No Clipboard API (insecure origin / older browser): show the command
+      // instead of a button that silently does nothing.
+      pushToast("info", command);
+      return;
+    }
+    void clipboard
+      .writeText(command)
+      .then(() => {
+        setCopied(true);
+        pushToast("success", "已复制试运行命令");
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {
+        pushToast("info", command);
+      });
+  };
+  return (
+    <button className="btn small" onClick={copy} title={command}>
+      {copied ? "已复制" : "复制试运行命令"}
+    </button>
+  );
+}
+
+function HookExportButton({
+  format,
+  label,
+  projectRoot,
+  query,
+}: {
+  format: HookExportFormat;
+  label: string;
+  projectRoot: string;
+  query: { event?: string; hookType?: string; success?: string };
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const pushToast = useWebUi((state) => state.pushToast);
+
+  const download = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const result = await downloadHookLogExport(projectRoot, format, query);
+      const url = URL.createObjectURL(new Blob([result.text], { type: result.contentType }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = result.filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      pushToast("success", `已导出 ${result.filename}`);
+    } catch (caught) {
+      pushToast("error", caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button className="btn small" onClick={() => void download()} disabled={busy}>
+      {busy ? "导出中…" : label}
+    </button>
+  );
 }
 
 export default function Hooks(): React.JSX.Element {
@@ -162,6 +240,7 @@ export default function Hooks(): React.JSX.Element {
                   <section className="panel" key={group.event}>
                     <h2>
                       <code>{group.event}</code> <span className="muted">（{group.count}）</span>
+                      <CopyTestCommand event={group.event} />
                     </h2>
                     <div className="table-wrap">
                       <table className="data">
@@ -173,21 +252,35 @@ export default function Hooks(): React.JSX.Element {
                             <th>命令 / 提示 / URL</th>
                             <th>超时</th>
                             <th>失败拦截</th>
+                            <th>检查</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {group.hooks.map((hook, index) => (
-                            <tr key={`${group.event}-${hook.source}-${index}`}>
-                              <td>
-                                <HookTypeBadge type={hook.type} />
-                              </td>
-                              <td className="mono">{hook.source}</td>
-                              <td className="mono">{hook.matcher || "—"}</td>
-                              <td className="mono">{hook.detail || "—"}</td>
-                              <td className="mono">{hook.timeout_seconds}s</td>
-                              <td>{hook.block_on_failure ? "是" : "否"}</td>
-                            </tr>
-                          ))}
+                          {group.hooks.map((hook, index) => {
+                            const check = hookRowStatus(hook.issues);
+                            return (
+                              <tr key={`${group.event}-${hook.source}-${index}`}>
+                                <td>
+                                  <HookTypeBadge type={hook.type} />
+                                </td>
+                                <td className="mono">{hook.source}</td>
+                                <td className="mono">{hook.matcher || "—"}</td>
+                                <td className="mono">
+                                  {hook.detail || "—"}
+                                  {(hook.issues ?? []).map((issue) => (
+                                    <div className="remedy" key={issue}>
+                                      {issue}
+                                    </div>
+                                  ))}
+                                </td>
+                                <td className="mono">{hook.timeout_seconds}s</td>
+                                <td>{hook.block_on_failure ? "是" : "否"}</td>
+                                <td>
+                                  <span className={`badge ${check.cls}`}>{check.text}</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -247,6 +340,24 @@ export default function Hooks(): React.JSX.Element {
             <button className="btn small" onClick={() => void loadLog()} disabled={logLoading}>
               {logLoading ? "刷新中…" : "刷新"}
             </button>
+            <HookExportButton
+              format="md"
+              label="导出 Markdown"
+              projectRoot={projectRoot}
+              query={{ event: eventFilter, hookType: typeFilter, success: successFilter }}
+            />
+            <HookExportButton
+              format="csv"
+              label="导出 CSV"
+              projectRoot={projectRoot}
+              query={{ event: eventFilter, hookType: typeFilter, success: successFilter }}
+            />
+            <HookExportButton
+              format="json"
+              label="导出 JSON"
+              projectRoot={projectRoot}
+              query={{ event: eventFilter, hookType: typeFilter, success: successFilter }}
+            />
           </div>
 
           {logLoading && <div className="loading-block">加载中…</div>}

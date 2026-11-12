@@ -2,6 +2,24 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.22.0] - 2026-11-12
+
+**版本判断：minor。** 新增一个 CLI 子命令、一条导出 API、页面上的静态检查与导出/试运行入口；既有命令、参数与退出码集合不动（`ih hooks test` 是新增入口），既有响应形状与 `.iterate` 数据格式不动（钩子清单行新增 `status`/`issues`，纯加法）。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。
+
+- **钩子可以在运行前试跑了（`ih hooks test <event>`）。** 此前一个钩子只有等真实生命周期事件发生才第一次执行——`pre_tool_use` 要等模型真的调工具，可能已经是几分钟、几美元之后；操作台只能事后从台账里看到它失败。新增 `hooks/testing.py`：用与引擎完全相同的注册表（settings + 已启用插件）、相同的匹配器、相同的 `HookExecutor` 执行器，对合成载荷跑该事件的钩子。载荷字段按事件给出（`--tool-name` / `--prompt` / `--notification-type` / `--message` / 任意 `--payload JSON`），并带 `test: true` 让钩子能识别这是一次试跑。command/http 钩子真跑（输出、退出码、HTTP 状态、耗时逐条返回）；prompt/agent 钩子在没有 `--with-model` 时明确 `skipped` 并说明原因，传了才用配置的 provider；`--dry-run` 只报告会跑哪些、绝不执行、不写台账；每次真实试跑都写入同一本 `.iterate/hook-journal.jsonl`，因此在 `ih hooks log` 与控制台立即可见。退出码面向脚本：全部通过 0，任一失败/拦截 1，`--require-match` 把「这个事件没有任何钩子」也判为 1（可直接进 CI）。输出支持 `--json` / `--format table|markdown` / `--out`。
+- **静态检查：跑不起来的钩子配置在清单里就会被点名。** `hooks/inventory.py` 现在对每条钩子做保守的静态校验：command 首 token 既不是 shell 内建也不在 `PATH`、绝对路径不存在或不可执行、http URL 不是 http(s) 绝对地址、prompt/agent 提示为空——都作为 `problems`（`kind: "hook"`）带可复制 remedy 返回，并附着在该行的 `status: "warn"` / `issues` 上。`ih hooks list --strict` 因此能在运行前拦住一个必然失败的钩子，而不只是拦住拼错的事件名。校验刻意保守：含 `$` 展开、相对路径的合法命令不会被误报。
+- **控制台：导出与一键试运行命令。** 新增 `GET /api/v1/hooks/log/export`（Markdown / CSV / JSON，沿用事件/类型/结果筛选、不分页，`X-Hooks-Total` 带头部）与页面上的三个导出按钮——诊断/事故记录不必再开终端抄表。每个事件分组新增「复制试运行命令」，按该事件的匹配字段生成精确的 `ih hooks test …` 调用（工具事件带 `--tool-name bash`、提示事件带 `--prompt`、通知事件带 `--notification-type`）。已注册表格新增「检查」列与行内 issue 文本，一个死命令/坏 URL 不再只是看起来很正常的字符串。页面仍只读：复制命令由操作者在终端自行执行，页面本身不 spawn 钩子、不调用模型。
+- **修复：钩子台账的大小上限此前只在第一次写入时生效。** `record_hook_execution` 的轮转被 `if not existed` 守卫包住，只有「本次追加创建了文件」才会执行 trim；一个长期项目在写下第一行之后，`hook-journal.jsonl` 再也不会被截断，5 MiB 上限形同虚设。现在每次追加后都按大小惰性轮转（先 `stat`，未超限不读文件）。轮转改为同目录临时文件 + `os.replace` 原子替换：并发读取方永远看到旧的完整文件或新的完整文件，写一半崩溃也不会把整本台账截断。
+- **修复：`GET /api/v1/hooks/log` 的非法 `success` 值不再静默当作「全部」。** 与 CLI 的显式报错对齐，`success=maybe` 现在是 422；空值与 `all` 仍表示不过滤。
+- **文档同步。** 两份 README 增加 `ih hooks test` 命令块、能力条目与页面说明（静态检查列、导出、复制试运行命令）；`DESIGN-iterate-harness.md` §17.3 P15、§17.4 `hooks/testing.py` 与导出路由契约同步。版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.22.0。
+
+**核验（本机，2026-11-12）：**
+
+- 端到端（真实 `ih` 进程、临时配置与项目）：`ih hooks test session_start` 真跑 `printf 'boot-ok'` → `passed: 1`、退出 0；`ih hooks test stop --dry-run --json` 返回 `would_run: 1` 且未创建台账；同一 stop 钩子（指向不存在的可执行文件）实跑 → `failed: 1`、退出 1，并在 `ih hooks log` 中按最新在前出现；`ih hooks list --strict` 对该死命令退出 1，remedy 指向 `settings.hooks.stop`。
+- `pytest tests/ -q` → **3341 passed, 6 skipped**（新增 22 条：JSON/CSV/Markdown 导出与 422、静态校验、台账轮转两次回归、`hooks test` 的 dry-run/真实 command/失败拦截/匹配器/HTTP 真实本地服务/prompt 跳过/CLI 退出码与 typo 建议/渲染）。
+- `ruff check src tests scripts` → All checks passed；`mypy src` → Success: no issues found in 284 source files；`node --test test/bootstrap.test.js` → 68/68 pass；前端 `tsc --noEmit` 通过、`vitest run` → 15 files / 148 tests passed（+2）、`vite build` 成功（83 modules）。
+- 反向验证：把 `_trim_journal` 的调用改回 `if not existed`，`test_rotation_happens_after_the_first_append` 变红；把 `_command_issues` 的 `shutil.which` 检查短路为空，`test_inventory_flags_a_dead_command_with_a_remedy` 与 `test_dead_command_is_named_before_spawning` 变红；还原后复测通过。
+
 ## [2.21.0] - 2026-11-10
 
 **版本判断：minor。** 新增一个 CLI 子命令组、两条只读 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih hooks` 是新增入口），响应形状与 `.iterate` 数据格式不动（能力清单响应新增 `hooks` 段，纯加法）。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。

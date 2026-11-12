@@ -3439,6 +3439,195 @@ def hooks_log_cmd(
     raise typer.Exit(0)
 
 
+@hooks_app.command("test")
+def hooks_test_cmd(
+    event: str = typer.Argument(
+        ...,
+        help="Lifecycle event to test (e.g. pre_tool_use, session_start, stop)",
+    ),
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose hooks to test (default: current directory)",
+    ),
+    tool_name: str = typer.Option(
+        "",
+        "--tool-name",
+        help="Synthetic tool name for pre_tool_use / post_tool_use matchers",
+    ),
+    prompt_text: str = typer.Option(
+        "",
+        "--prompt",
+        help="Synthetic prompt text for user_prompt_submit / stop matchers",
+    ),
+    notification_type: str = typer.Option(
+        "",
+        "--notification-type",
+        help="Synthetic notification type for notification matchers",
+    ),
+    message: str = typer.Option(
+        "",
+        "--message",
+        help="Synthetic message delivered in the hook payload",
+    ),
+    payload: str = typer.Option(
+        "",
+        "--payload",
+        help="Extra JSON object merged into the synthetic event payload",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Only report which hooks would run; never execute a hook or call a model",
+    ),
+    with_model: bool = typer.Option(
+        False,
+        "--with-model",
+        help="Also run prompt/agent hooks through the configured model provider",
+    ),
+    require_match: bool = typer.Option(
+        False,
+        "--require-match",
+        help="Exit 1 when no registered hook matches the synthetic payload (CI gate)",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the test result as JSON",
+    ),
+    fmt: str = typer.Option(
+        "table",
+        "--format",
+        help="Render format: table | json | markdown",
+    ),
+    out: str | None = typer.Option(
+        None,
+        "--out",
+        help="Write the output to this path instead of stdout (for scripts)",
+    ),
+) -> None:
+    """Run the hooks registered for one lifecycle event, without starting a run.
+
+    A hook normally fires only when the real event happens — a ``pre_tool_use``
+    hook waits for the model to call a tool, possibly minutes into an expensive
+    run. This command builds the same registry the engine builds (settings +
+    enabled plugins), applies the event's matchers to a synthetic payload and
+    executes the matching hooks through the same executor. Command and HTTP
+    hooks really run; prompt/agent hooks are reported as ``skipped`` unless
+    ``--with-model`` is passed. Every execution lands in the regular hook
+    journal, so it is visible in ``ih hooks log`` and the console.
+
+    Exit code: 0 when every executed hook passed (or ``--dry-run``), 1 when any
+    hook failed or blocked, or when ``--require-match`` found nothing to run.
+
+    Examples:
+        ih hooks test session_start
+        ih hooks test pre_tool_use --tool-name bash --dry-run
+        ih hooks test stop --prompt "fix the failing tests" --require-match
+        ih hooks test notification --notification-type permission_prompt --json
+    """
+    import asyncio
+    import difflib
+
+    from iterate_harness.hooks.events import HookEvent
+    from iterate_harness.hooks.testing import (
+        build_test_payload,
+        render_hook_test_markdown,
+        render_hook_test_table,
+        run_hook_test,
+    )
+
+    root = _hooks_project_root(project_root)
+    try:
+        hook_event = HookEvent(event)
+    except ValueError:
+        valid = [candidate.value for candidate in HookEvent]
+        suggestions = difflib.get_close_matches(event, valid, n=3, cutoff=0.5)
+        hint = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
+        print(
+            f"Error: unknown hook event {event!r} (valid: {', '.join(valid)}).{hint}",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    extra: dict[str, object] = {}
+    if payload.strip():
+        try:
+            parsed_payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            print(f"Error: --payload is not valid JSON: {exc}", file=sys.stderr)
+            raise typer.Exit(1)
+        if not isinstance(parsed_payload, dict):
+            print("Error: --payload must be a JSON object", file=sys.stderr)
+            raise typer.Exit(1)
+        extra = parsed_payload
+
+    requested_fmt = fmt.lower().strip()
+    if as_json:
+        requested_fmt = "json"
+    if requested_fmt not in {"table", "json", "markdown"}:
+        print(
+            f"Error: unknown --format {fmt!r} (allowed: table, json, markdown)",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    event_payload = build_test_payload(
+        hook_event,
+        tool_name=tool_name,
+        prompt=prompt_text,
+        notification_type=notification_type,
+        message=message,
+        extra=extra,
+    )
+    try:
+        view = asyncio.run(
+            run_hook_test(
+                root,
+                hook_event,
+                payload=event_payload,
+                dry_run=dry_run,
+                with_model=with_model,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - a broken config is a one-line error here
+        print(
+            f"Error: cannot test hooks: {type(exc).__name__}: {exc}\n"
+            f"  Run `ih hooks list` to inspect the registry, or `ih doctor` for the environment.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    if requested_fmt == "json":
+        body = json.dumps(view, ensure_ascii=False, indent=2) + "\n"
+    elif requested_fmt == "markdown":
+        body = render_hook_test_markdown(view)
+    else:
+        body = render_hook_test_table(view)
+
+    if out:
+        try:
+            Path(out).write_text(body, encoding="utf-8")
+        except OSError as exc:
+            print(f"Error: cannot write {out}: {exc}", file=sys.stderr)
+            raise typer.Exit(1)
+        print(f"Wrote hook test to {out}", flush=True)
+    else:
+        print(body, end="" if body.endswith("\n") else "\n", flush=True)
+
+    summary = view.get("summary") or {}
+    matched = int(summary.get("matched") or 0)
+    if require_match and matched == 0:
+        print(
+            f"Error: no hook matched event {hook_event.value!r} (--require-match)",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+    if not dry_run and bool(summary.get("has_failures")):
+        raise typer.Exit(1)
+    raise typer.Exit(0)
+
+
 # ---------------------------------------------------------------------------
 # Memory subcommands
 # ---------------------------------------------------------------------------
