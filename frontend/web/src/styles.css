@@ -1844,3 +1844,92 @@ button.chip:hover {
 .warn-text {
   color: var(--critical);
 }
+
+/* Permission policy + decision simulator (design §17.3 P16). The verdict
+   border makes "allowed / needs confirmation / denied" readable at a glance,
+   and the form collapses to one column on narrow viewports. */
+.permission-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.permission-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.permission-form .permission-wide,
+.permission-form .permission-actions {
+  grid-column: 1 / -1;
+}
+.permission-form textarea {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  width: 100%;
+  background: var(--panel);
+  color: var(--text);
+  resize: vertical;
+}
+.permission-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.permission-presets {
+  margin: 12px 0 0;
+}
+.permission-result {
+  margin-top: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-strong);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: var(--panel);
+}
+.permission-result.verdict-allowed { border-left-color: #16a34a; }
+.permission-result.verdict-confirm { border-left-color: var(--medium); }
+.permission-result.verdict-denied { border-left-color: var(--critical); }
+.permission-result-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.permission-reason {
+  margin: 8px 0;
+}
+.permission-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 6px 16px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.permission-facts div {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.permission-facts dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.permission-facts dd {
+  margin: 0;
+  min-width: 0;
+}
+.permission-path {
+  overflow-wrap: anywhere;
+}
+.permission-sensitive {
+  margin-top: 12px;
+}
+.permission-sensitive summary {
+  cursor: pointer;
+  font-size: 13px;
+}

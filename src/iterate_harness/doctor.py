@@ -520,6 +520,49 @@ def _hook_check(project_root: Path) -> DoctorCheck:
     )
 
 
+def _permission_check(project_root: Path) -> DoctorCheck:
+    """Permission policy integrity (design §17.3 P16).
+
+    A rule that can never take effect (empty pattern, allow/deny collision,
+    invalid regex, iterate boundaries disabled) is silently skipped by the
+    engine at run time. Doctor surfaces it so the pre-flight check catches a
+    degraded security posture, not just a missing credential.
+    """
+    try:
+        from iterate_harness.permissions.inventory import build_permission_policy
+
+        policy = build_permission_policy(project_root)
+    except Exception as exc:  # noqa: BLE001 - doctor must never raise
+        return _check(
+            "permission_policy",
+            "权限策略",
+            WARN,
+            detail=f"策略加载失败：{type(exc).__name__}: {exc}",
+            remedy="运行 `ih permissions show --strict` 查看具体问题；修复配置后重跑 `ih doctor`",
+        )
+    problems = policy.get("problems") or []
+    if not problems:
+        return _check(
+            "permission_policy",
+            "权限策略",
+            OK,
+            detail=(
+                f"模式 {policy.get('mode')} · {len(policy.get('path_rules') or [])} 条路径规则 · "
+                f"{len(policy.get('sensitive_paths') or [])} 个敏感路径"
+            ),
+        )
+    summary = "; ".join(f"{item.get('kind')}:{item.get('name')}" for item in problems[:3])
+    if len(problems) > 3:
+        summary += " …"
+    return _check(
+        "permission_policy",
+        "权限策略",
+        WARN,
+        detail=f"{len(problems)} 条规则永远不会生效 — {summary}",
+        remedy=f"{problems[0].get('remedy', '修复配置后重跑 `ih doctor`')} （完整列表：`ih permissions show --strict`）",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -542,6 +585,7 @@ def run_doctor(
         _iterate_config_check(root),
         _validation_check(root),
         _lease_check(root),
+        _permission_check(root),
         _sandbox_check(),
         _hook_check(root),
     ]

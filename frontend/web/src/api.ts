@@ -19,6 +19,9 @@ import type {
   MemoryEntryDetail,
   MemoryView,
   OperationResult,
+  PermissionCheckInput,
+  PermissionCheckView,
+  PermissionsView,
   ReportPreview,
   ReportView,
   RunDiffView,
@@ -386,6 +389,31 @@ export const api = {
   // Read-only and network-free.
   capabilities: (projectRoot?: string): Promise<CapabilitiesView> =>
     request<CapabilitiesView>(`/capabilities${buildQuery(projectRoot)}`),
+
+  // Permission policy + decision simulator. Returns the merged policy the
+  // engine enforces (settings lists + iterate boundaries) and answers "would
+  // this call run / ask / be refused, and why?" with the real checker.
+  // Read-only; never writes settings or executes a tool.
+  permissions: (projectRoot?: string): Promise<PermissionsView> =>
+    request<PermissionsView>(`/permissions${buildQuery(projectRoot)}`),
+
+  checkPermission: (
+    input: PermissionCheckInput,
+  ): Promise<PermissionCheckView> => {
+    const extra: Record<string, string | undefined> = {
+      tool: input.tool,
+      path: input.path,
+      command: input.command,
+      content: input.content,
+      mode: input.mode,
+    };
+    if (input.readOnly !== undefined) {
+      extra.read_only = input.readOnly ? "true" : "false";
+    }
+    return request<PermissionCheckView>(
+      `/permissions/check${buildQuery(input.projectRoot, extra)}`,
+    );
+  },
 
   // Lifecycle hooks: what the engine registers (settings + enabled plugins)
   // and the execution trail. Read-only; no hook command is spawned and no

@@ -2,6 +2,24 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.23.0] - 2026-11-17
+
+**版本判断：minor。** 新增一个 CLI 子命令组、两条只读 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih permissions` 是新增入口），响应形状与 `.iterate` 数据格式不动（`build_permission_checker` 增可选 `cwd` 参数，纯加法）。附带一个正确性修复：权限检查器现在能针对任意项目根构建，策略投影不再依赖进程 cwd。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。
+
+- **权限策略可见 + 决策预演：操作台第一次能回答「这条调用会被允许吗」。** 分层权限策略（模式、显式工具允许/拒绝列表、路径与命令规则、内置敏感路径边界、iterate `protected_paths` / `risk_areas` / `forbidden_fix_patterns`）此前只能作为一次真实工具调用的**结果**被观察到——「会不会被允许」意味着跑一次 agent 然后看调用停下来，一个被静默跳过的规则（空模式、允许/拒绝冲突、非法正则、iterate 边界停用）只在日志里留一行。新增共享模块 `permissions/inventory.py`：`build_permission_policy` 用引擎**同一个**检查器（`build_permission_checker`，新增 `cwd` 参数让策略可针对任意项目根构建）投影**合并后**的策略——边界合并在内，因此页面永远不会声称「没有这条规则」而运行时却生效；`simulate_permission_decision` 用引擎自己的检查器 + 引擎自己的路径/命令/内容归一化跑一次假想调用，判定与真实运行一致。静态校验把永远无法生效的规则列为带可复制 remedy 的 `problems`。
+- **CLI：`ih permissions show|check`。** `show` 输出合并策略（模式、允许/拒绝工具、路径规则、命令规则、风险区、禁止内容模式、内置敏感路径）与配置问题；`--json` 与 `GET /api/v1/permissions` 同构，`--strict` 在任一问题存在时退出 1。`check <tool> [--path] [--command] [--content] [--read-only|--mutating] [--mode]` 返回判定：**退出码面向脚本**（0 允许 / 2 需确认 / 1 拒绝或非法输入），`--mode` 模拟「切换到另一种配置模式」（不经过会话 override 通道——那条通道按设计拒绝 `full_auto`，模拟器不能暗示它能）；未知工具或无法推断的 schema 按可写处理（fail-closed）。
+- **控制台「权限」页（`g x`，`GET /api/v1/permissions` 与 `GET /api/v1/permissions/check`）。** 复用同一份策略与同一个模拟器：摘要卡（状态/路径规则/风险区/敏感路径/工具），配置问题优先的表格带可复制 remedy，生效策略分节（路径规则表、工具/命令 chip、风险区、禁止内容模式、可折叠的敏感路径），以及**策略预演**表单——工具名（带只读/可写标注的下拉提示）、模式、只读判定、路径、命令、写入内容；一键示例覆盖每条边界（读 `.env`、改写源码、写入风险区、执行 shell、读文档）；判定为徽章（允许/需确认/拒绝）+ 精确原因 + 可复制的 `ih permissions check …` 等价命令。加载中、空清单、读取失败（带重试）三态独立呈现；页面明确写「只读，不写设置、不执行工具、不启动模型」。根目录越界 403、不存在 404，与其它路由一致。
+- **自检覆盖：`ih doctor` 新增 `permission_policy` 检查。** 一个永远不会生效的权限规则（空模式、允许/拒绝冲突、非法正则、iterate 边界停用）此前 `ih doctor` 看不到；现在它作为 `warn` 检查带可复制 remedy 出现，开跑预检能发现降级的安全姿态，而不只是缺凭证。
+- **修复：`build_permission_checker` 无法针对显式项目根构建。** 它从进程 cwd 读取 `personalization.protected_paths` / `risk_areas`，因此 WebUI/`--project-root` 场景下策略投影会基于错误的项目；新增可选 `cwd` 参数并贯穿 `_project_*` 辅助函数。默认行为（cwd）不变。
+- **文档同步。** 两份 README 增加 `ih permissions` 命令块、能力条目、WebUI 页面清单与 `g x` 说明；`DESIGN-iterate-harness.md` §17.3 补 P16 页面、§17.4 补 `permissions/inventory.py` 模块与两条路由契约；`ih web serve --help` 的页面清单同步加入权限；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.23.0。
+
+**核验（本机，2026-11-17）：**
+
+- 端到端（真实 `ih` 进程、临时目录）：`ih permissions show` 输出模式/路径规则/敏感路径计数与 Problems；`ih permissions check read_file --path .env` → `DENIED`、退出 1（敏感路径边界，任何模式都拒绝）；`check bash --command 'git push --force origin main' --mode default` → `NEEDS CONFIRMATION`、退出 2；`check read_file --path README.md` → `ALLOWED`、退出 0；`ih doctor` 含 `[ok] 权限策略`；`ih --help` 与 `ih permissions --help` 列出 `show/check`。
+- `pytest tests/ -q` → **3379 passed, 6 skipped**（基线 3341，新增 38 条：17 策略/模拟 + 10 CLI 退出码与 typo 防御 + 9 路由（200/403/404/422）+ 2 doctor）。
+- `ruff check src tests scripts` → All checks passed；`mypy src` → Success: no issues found in 286 source files；`node --test test/bootstrap.test.js` 待跑；前端 `tsc --noEmit` 通过、`vitest run` → 16 files / 160 tests passed（+1 文件 +12）、`vite build` 成功（85 modules）。
+- 反向验证：把 `_infer_read_only` 恒返回 `None`，`test_simulation_infers_read_only_from_the_registered_tool` 变红；把 `simulate_permission_decision` 的 `mode` 分支短路为不覆盖，`test_simulated_mode_overrides_the_configured_mode` 变红；还原后复测通过。
+
 ## [2.22.0] - 2026-11-12
 
 **版本判断：minor。** 新增一个 CLI 子命令、一条导出 API、页面上的静态检查与导出/试运行入口；既有命令、参数与退出码集合不动（`ih hooks test` 是新增入口），既有响应形状与 `.iterate` 数据格式不动（钩子清单行新增 `status`/`issues`，纯加法）。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。

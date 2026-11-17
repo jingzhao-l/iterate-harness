@@ -303,6 +303,10 @@ ih hooks log --event pre_tool_use --success false
 ih hooks test session_start       # run that event's hooks now — no full run needed
 ih hooks test pre_tool_use --tool-name bash --dry-run
 ih hooks test stop --require-match --json   # CI gate: fail if nothing is registered
+ih permissions                     # the merged policy the engine enforces
+ih permissions show --json --strict  # CI gate: exit 1 on a rule that can never win
+ih permissions check read_file --path .env  # would this call run / ask / be refused?
+ih permissions check bash --command 'rm -rf build' --mode full_auto
 ```
 
 ### Team & live workers
@@ -366,13 +370,14 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Audit trail** — `ih audit` reads the console's full audit journal (`.iterate/web-audit.jsonl`): every mutating operation with timestamp, action, target and parameter summary, filtered by action prefix / target substring / start time, paged newest-first, and exported as Markdown / CSV / JSON for a spreadsheet or an incident report. The WebUI **审计** page (`g u`) is the same reader with the filters in the browser, so "who changed what, when?" no longer needs a terminal.
 - **Project memory bank** — the engine injects persistent project memory (a `MEMORY.md` index plus topic files, under the harness data dir) into every runtime prompt, but until now the operator could only see it from the REPL's `/memory` command. `ih memory list|search|show|preview|add|remove` and the WebUI **记忆** page (`g m`) expose the same bank read-only, run the engine's own relevance search, and preview — through the *same code path as the prompt* — exactly what the model would be told for a task, including which memories were clipped by the per-file budget. `ih memory add`/the console's create form refuse to overwrite an existing file unless asked, so a stray save never silently replaces remembered context.
 - **Lifecycle-hook observability & test** — the engine loads lifecycle hooks from `settings.hooks` and enabled plugins and runs them inline in front of tool calls and turn boundaries, but until now the result of every execution was discarded: a hook that rejected a tool call surfaced only as a mystery refusal inside a run, and a hook registered under a misspelled event name was silently dropped. `ih hooks list|log|test` and the WebUI **生命周期钩子** page (`g h`) close that gap: the inventory lists every registered hook (event, type, source, matcher, command/prompt/url, timeout, block-on-failure) and statically flags the ones that can never run (missing executable, malformed URL, empty prompt) with copyable remedies; the log pages `.iterate/hook-journal.jsonl` — the exact trail the engine writes — filtered by event/type/outcome and exported as Markdown / CSV / JSON; and `ih hooks test <event>` runs that event's hooks **now** through the engine's own executor with a synthetic payload (`--tool-name` / `--prompt` / `--notification-type` / `--payload`), so a broken `block_on_failure` gate is caught before a run instead of during one. Prompt/agent hooks are reported as skipped unless `--with-model` is passed, `--dry-run` only reports what would run, and `--require-match` turns "nothing is registered for this event" into a CI failure. The same section feeds `ih capabilities`, so a broken hook config fails CI (`--strict`) before a run does.
+- **Permission policy & decision simulator** — the layered policy (mode, explicit tool allow/deny lists, path and command rules, the built-in sensitive-path boundary, iterate `protected_paths` / `risk_areas` and `forbidden_fix_patterns`) was previously observable only as the *outcome* of a live tool call: "would this be allowed?" meant running the agent and watching a call stop. `ih permissions show` and the WebUI **权限** page (`g x`) project the **merged** policy the engine actually enforces (boundaries included), and `ih permissions check` / the page's 预演 form run the engine's **own** checker over a hypothetical call — same path/command/content normalization, so the verdict matches a live one. `--json` is stable for scripts; exit codes are CI-friendly (0 allowed / 2 needs confirmation / 1 denied or invalid input); `--strict`/`--mode` let a CI job assert "this command is blocked in this mode" before a run. A rule that can never take effect (empty pattern, allow/deny collision, invalid regex, iterate boundaries disabled) is reported with a copyable remedy instead of a silent log line — the same check now also runs inside `ih doctor` (`permission_policy`). The page is read-only: it never writes settings, executes a tool or contacts a provider.
 
 ### WebUI management console
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
 **Run diff**, **Gate**, **Schedules**, **Capabilities**, **自检 (doctor)**,
-**审计 (audit)**, **记忆 (memory)**, **生命周期钩子 (hooks)**, Workspaces, **Team**, Checkpoints,
+**审计 (audit)**, **记忆 (memory)**, **生命周期钩子 (hooks)**, **权限 (permissions)**, Workspaces, **Team**, Checkpoints,
 Budget & Rate, Config, Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
@@ -469,6 +474,20 @@ before committing to a run. A hook registered under a misspelled event name
 remedy rather than hidden. The page stays read-only and network-free: no hook
 command is spawned and no model is invoked (the copied command is run
 deliberately from a terminal).
+
+The **权限** page (`g x`) is the console's half of `ih permissions`: the merged
+policy the engine enforces (mode, allow/deny tool lists, path and command
+rules, the built-in sensitive-path set, iterate `protected_paths` /
+`risk_areas` / `forbidden_fix_patterns`) with counts, plus a **策略预演** form
+that answers "would this call run, ask me first, or be refused — and why?"
+through the engine's own checker. One-click scenarios (read `.env`, rewrite a
+source file, write into a risk area, run a shell command, read a doc) exercise
+each boundary, the verdict is a badge (允许 / 需确认 / 拒绝) with the exact
+reason and the copyable `ih permissions check …` equivalent, and a rule that
+can never take effect is listed with a copyable remedy instead of a silent log
+line. The page is read-only: it never writes settings, executes a tool or
+contacts a provider, and it shows 项目/读取时间 so the operator knows which
+config the policy came from.
 
 ### Cost, resources & gates
 

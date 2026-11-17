@@ -99,6 +99,27 @@ class PermissionChecker:
                     rule,
                 )
 
+    # ---- Read-only accessors -------------------------------------------------
+    # The policy inspector (``ih permissions`` / the console page) must show the
+    # *effective* rules — including the iterate protected-path / risk-area
+    # boundaries merged in by :func:`build_permission_checker` — instead of
+    # re-deriving them from settings and drifting from what is enforced. These
+    # accessors are the only public view into the compiled policy.
+    @property
+    def path_rules(self) -> tuple[PathRule, ...]:
+        """The effective allow/deny path rules, in evaluation order."""
+        return tuple(self._path_rules)
+
+    @property
+    def forbidden_content_patterns(self) -> tuple[re.Pattern[str], ...]:
+        """Compiled ``iterate.forbidden_fix_patterns`` regexes."""
+        return self._forbidden_content_patterns
+
+    @property
+    def risk_area_patterns(self) -> tuple[str, ...]:
+        """Absolute-glob risk-area patterns that force confirmation."""
+        return self._risk_area_patterns
+
     def _resolve_mode(self, mode_override: str | None) -> PermissionMode:
         """Return the effective permission mode for one decision.
 
@@ -318,7 +339,7 @@ class PermissionChecker:
         )
 
 
-def build_permission_checker(settings: Settings) -> PermissionChecker:
+def build_permission_checker(settings: Settings, *, cwd: str | Path | None = None) -> PermissionChecker:
     """Build a :class:`PermissionChecker` with iterate security boundaries wired in.
 
     Auto-assembles the iterate harness settings into the permission layer so
@@ -350,6 +371,12 @@ def build_permission_checker(settings: Settings) -> PermissionChecker:
     list of the current project's ``iterate.config.yaml`` is ALSO merged into
     the deny rules, so wizard-configured protected paths are enforced as a
     hard boundary — not just a prompt-side instruction.
+
+    ``cwd`` selects the project whose ``iterate.config.yaml`` supplies the
+    personalization boundaries. It defaults to the process working directory
+    (the live engine's behavior); the policy inspector passes an explicit
+    project root so ``ih permissions --project-root X`` reports the rules that
+    would apply in X, not in the shell's directory.
     """
     permission = settings.permission
     iterate = settings.iterate
@@ -358,7 +385,7 @@ def build_permission_checker(settings: Settings) -> PermissionChecker:
 
     merged = permission.model_copy(deep=True)
     existing_patterns = {rule.pattern for rule in merged.path_rules}
-    for pattern in (*iterate.protected_paths, *_project_protected_paths()):
+    for pattern in (*iterate.protected_paths, *_project_protected_paths(cwd)):
         normalized = _to_deny_path_glob(pattern)
         if normalized and normalized not in existing_patterns:
             merged.path_rules.append(PathRuleConfig(pattern=normalized, allow=False))
@@ -372,7 +399,7 @@ def build_permission_checker(settings: Settings) -> PermissionChecker:
             log.warning("Skipping invalid iterate forbidden_fix_pattern: %r", raw_pattern)
 
     risk_area_patterns: list[str] = []
-    for raw in (*iterate.risk_area_paths, *_project_risk_area_paths()):
+    for raw in (*iterate.risk_area_paths, *_project_risk_area_paths(cwd)):
         normalized = _to_deny_path_glob(raw)
         if normalized and normalized not in risk_area_patterns:
             risk_area_patterns.append(normalized)
@@ -384,28 +411,28 @@ def build_permission_checker(settings: Settings) -> PermissionChecker:
     )
 
 
-def _project_protected_paths() -> tuple[str, ...]:
-    """``personalization.protected_paths`` from the cwd's iterate.config.yaml.
+def _project_protected_paths(cwd: str | Path | None = None) -> tuple[str, ...]:
+    """``personalization.protected_paths`` from the project's iterate.config.yaml.
 
     Never raises: an unreadable/missing config simply contributes no rules
     (fail-open for availability, the kernel deny list above still applies).
     """
-    personalization = _project_personalization()
+    personalization = _project_personalization(cwd)
     raw = personalization.get("protected_paths") if personalization else None
     if not isinstance(raw, list):
         return ()
     return tuple(pattern for pattern in raw if isinstance(pattern, str) and pattern.strip())
 
 
-def _project_risk_area_paths() -> tuple[str, ...]:
-    """``personalization.risk_areas`` from the cwd's iterate.config.yaml.
+def _project_risk_area_paths(cwd: str | Path | None = None) -> tuple[str, ...]:
+    """``personalization.risk_areas`` from the project's iterate.config.yaml.
 
     Accepts both a list of plain path globs (``["db/*"]``) and a list of
     ``{"path": ..., "reason": ...}`` entries so the wizard's structured shape
     round-trips into the permission gate. Never raises: a missing/unreadable
     config contributes no rules (fail-open).
     """
-    personalization = _project_personalization()
+    personalization = _project_personalization(cwd)
     raw = personalization.get("risk_areas") if personalization else None
     if not isinstance(raw, list):
         return ()
@@ -420,8 +447,8 @@ def _project_risk_area_paths() -> tuple[str, ...]:
     return tuple(paths)
 
 
-def _project_personalization(cwd: str | None = None) -> dict[str, object]:
-    """The current project's ``personalization`` config block (or ``{}``).
+def _project_personalization(cwd: str | Path | None = None) -> dict[str, object]:
+    """The selected project's ``personalization`` config block (or ``{}``).
 
     Args:
         cwd: Optional working directory. If None, uses ``Path.cwd()``.
@@ -429,7 +456,7 @@ def _project_personalization(cwd: str | None = None) -> dict[str, object]:
     try:
         from iterate_harness.iterate.config_loader import load_effective_config
 
-        personalization = load_effective_config(cwd or str(Path.cwd())).config.personalization
+        personalization = load_effective_config(str(cwd or Path.cwd())).config.personalization
     except Exception:  # noqa: BLE001 - permission bootstrap must never crash
         return {}
     return personalization if isinstance(personalization, dict) else {}

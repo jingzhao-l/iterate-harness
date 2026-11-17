@@ -799,3 +799,79 @@ export type CapabilityCategory =
   | "plugins"
   | "tools"
   | "commands";
+
+// ---- Permission policy (design §17.3 P16) ----
+// The console's projection of the merged permission policy plus a simulator
+// that runs the engine's own checker over a hypothetical tool call. Read-only:
+// no settings are written, no tool is executed, no provider is contacted.
+
+export interface PermissionProblem {
+  kind: string;
+  name: string;
+  detail: string;
+  remedy: string;
+}
+
+export interface PermissionPathRule {
+  pattern: string;
+  allow: boolean;
+}
+
+export interface PermissionToolRow {
+  name: string;
+  description: string;
+  /** null = cannot infer from the schema; the simulator treats it as mutating. */
+  read_only: boolean | null;
+}
+
+export interface PermissionsView {
+  project_root: string;
+  generated_at: string;
+  mode: string;
+  mode_label: string;
+  mode_detail: string;
+  iterate_enabled: boolean;
+  summary: Record<string, number>;
+  has_problems: boolean;
+  problems: PermissionProblem[];
+  allowed_tools: string[];
+  denied_tools: string[];
+  path_rules: PermissionPathRule[];
+  allowed_commands: string[];
+  denied_commands: string[];
+  sensitive_paths: string[];
+  risk_areas: string[];
+  forbidden_patterns: string[];
+  tools: PermissionToolRow[];
+}
+
+export type PermissionVerdict = "allowed" | "confirm" | "denied";
+
+export interface PermissionCheckView {
+  tool_name: string;
+  project_root: string;
+  generated_at: string;
+  read_only: boolean;
+  read_only_source: string;
+  file_path: string;
+  command: string;
+  command_paths: string[];
+  content_checked: boolean;
+  mode: string;
+  mode_label: string;
+  simulated_mode: string;
+  verdict: PermissionVerdict;
+  allowed: boolean;
+  requires_confirmation: boolean;
+  reason: string;
+}
+
+export interface PermissionCheckInput {
+  tool: string;
+  projectRoot?: string;
+  path?: string;
+  command?: string;
+  content?: string;
+  readOnly?: boolean;
+  mode?: string;
+}

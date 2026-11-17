@@ -33,8 +33,8 @@ def test_report_shape_and_ordering(tmp_path: Path) -> None:
     """Failures and warnings sort before oks; every check is well-formed."""
     report = run_doctor(tmp_path)
     ids = _check_ids(report)
-    # 11 checks, no duplicates, ordered failures→warnings→ok.
-    assert len(ids) == len(set(ids)) == 11
+    # 12 checks, no duplicates, ordered failures→warnings→ok.
+    assert len(ids) == len(set(ids)) == 12
     statuses = [check.status for check in report.checks]
     first_warn = statuses.index(WARN) if WARN in statuses else len(statuses)
     first_ok = statuses.index(OK) if OK in statuses else len(statuses)
@@ -58,6 +58,7 @@ def test_report_shape_and_ordering(tmp_path: Path) -> None:
             "lease",
             "sandbox",
             "hook",
+            "permission_policy",
         }
 
 
@@ -69,7 +70,7 @@ def test_json_roundtrip(tmp_path: Path) -> None:
     decoded = json.loads(encoded)
     assert decoded["project_root"] == str(tmp_path.resolve())
     assert decoded["has_failures"] == report.has_failures
-    assert len(decoded["checks"]) == 11
+    assert len(decoded["checks"]) == 12
     assert decoded["summary"]["ok"] == sum(
         1 for c in report.checks if c.status == OK
     )
@@ -172,7 +173,7 @@ def test_route_returns_report(client: TestClient, tmp_path: Path) -> None:
     payload = response.json()
     assert payload["project_root"] == str(tmp_path.resolve())
     assert isinstance(payload["ok"], bool)
-    assert len(payload["checks"]) == 11
+    assert len(payload["checks"]) == 12
     for check in payload["checks"]:
         assert set(check) >= {"id", "title", "status", "detail", "remedy"}
 
@@ -220,7 +221,7 @@ def test_cli_doctor_json_roundtrip(tmp_path: Path) -> None:
         app, ["doctor", "--project-root", str(tmp_path), "--json"]
     )
     payload = json.loads(result.output)
-    assert len(payload["checks"]) == 11
+    assert len(payload["checks"]) == 12
     assert payload["project_root"] == str(tmp_path.resolve())
     expected_exit = 1 if payload["has_failures"] else 0
     assert result.exit_code == expected_exit, result.output
@@ -263,3 +264,36 @@ def test_cli_doctor_fail_exits_nonzero(tmp_path: Path) -> None:
     assert payload["has_failures"] is True
     storage = next(c for c in payload["checks"] if c["id"] == "storage")
     assert storage["status"] == "fail"
+
+
+def test_permission_policy_check_is_green_when_clean(tmp_path: Path) -> None:
+    from iterate_harness.doctor import run_doctor
+
+    report = run_doctor(tmp_path)
+    check = next(c for c in report.checks if c.id == "permission_policy")
+    assert check.status == OK
+    assert "模式" in check.detail
+
+
+def test_permission_policy_check_warns_on_a_dead_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from iterate_harness.config.paths import get_config_file_path
+    from iterate_harness.config.settings import PathRuleConfig, PermissionSettings, Settings
+    from iterate_harness.doctor import run_doctor
+
+    monkeypatch.setenv("ITERATE_CONFIG_DIR", str(tmp_path / "config"))
+    path = get_config_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        Settings(
+            permission=PermissionSettings(path_rules=[PathRuleConfig(pattern="", allow=False)])
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    report = run_doctor(tmp_path)
+    check = next(c for c in report.checks if c.id == "permission_policy")
+    assert check.status == WARN
+    assert "永远不会生效" in check.detail
+    assert check.remedy

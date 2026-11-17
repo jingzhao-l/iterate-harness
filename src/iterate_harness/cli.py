@@ -710,7 +710,11 @@ provider_app = typer.Typer(name="provider", help="Manage provider profiles")
 iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/diff/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
 web_app = typer.Typer(name="web", help="WebUI management console")
 memory_app = typer.Typer(name="memory", help="Read and write the project memory bank (list/search/show/preview/add/remove)")
-hooks_app = typer.Typer(name="hooks", help="Inspect lifecycle hooks (list/log)")
+hooks_app = typer.Typer(name="hooks", help="Inspect lifecycle hooks (list/log/test)")
+permissions_app = typer.Typer(
+    name="permissions",
+    help="Inspect the effective permission policy and simulate a tool decision (show/check)",
+)
 
 app.add_typer(auth_app)
 app.add_typer(provider_app)
@@ -718,6 +722,7 @@ app.add_typer(iterate_app)
 app.add_typer(web_app)
 app.add_typer(memory_app)
 app.add_typer(hooks_app)
+app.add_typer(permissions_app)
 
 
 # ---- iterate subcommands ----
@@ -2094,7 +2099,8 @@ def web_serve(
     Serves the dashboard, runs timeline, trend, run comparison, the recipe gate,
     scheduled reviews, the capability inventory, the environment self-check,
     the audit trail, the project memory bank, the lifecycle-hook inventory and
-    hook-execution trail, checkpoints, budget, config, and reports on a local
+    hook-execution trail, the permission policy and decision simulator,
+    checkpoints, budget, config, and reports on a local
     loopback address and opens the browser. The backend
     binds to 127.0.0.1 by default and never exposes itself externally.
     """
@@ -3626,6 +3632,169 @@ def hooks_test_cmd(
     if not dry_run and bool(summary.get("has_failures")):
         raise typer.Exit(1)
     raise typer.Exit(0)
+
+
+# ---------------------------------------------------------------------------
+# Permission policy subcommands
+# ---------------------------------------------------------------------------
+
+def _permissions_project_root(project_root: str | None) -> str:
+    return str(Path(project_root).expanduser()) if project_root else str(Path.cwd())
+
+
+def _print_permission_policy(project_root: str | None, *, as_json: bool, strict: bool) -> None:
+    from iterate_harness.permissions.inventory import (
+        build_permission_policy,
+        render_permission_policy,
+    )
+
+    root = _permissions_project_root(project_root)
+    policy = build_permission_policy(root)
+    if as_json:
+        print(json.dumps(policy, ensure_ascii=False, indent=2))
+    else:
+        print(render_permission_policy(policy))
+    if strict and policy.get("has_problems"):
+        raise typer.Exit(1)
+    raise typer.Exit(0)
+
+
+@permissions_app.command("show")
+def permissions_show_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose iterate.config.yaml boundaries to include (default: current directory)",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the policy as JSON (same shape as GET /api/v1/permissions)",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit 1 when the configuration contains a rule that can never take effect",
+    ),
+) -> None:
+    """Show the effective permission policy (mode, rules and hard boundaries).
+
+    The output is the *merged* policy the engine actually enforces: settings
+    allow/deny lists, path and command rules, the built-in sensitive-path
+    boundary, iterate ``protected_paths`` / ``risk_areas`` and
+    ``forbidden_fix_patterns``. A rule that is silently skipped at run time
+    (empty pattern, invalid regex, allow/deny collision) is reported as a
+    problem with a copyable remedy. Exit code: 0 normally, 1 with ``--strict``
+    when any problem was found.
+
+    Examples:
+        ih permissions
+        ih permissions show --project-root /path/to/repo
+        ih permissions show --json --strict
+    """
+    _print_permission_policy(project_root, as_json=as_json, strict=strict)
+
+
+@permissions_app.command("check")
+def permissions_check_cmd(
+    tool_name: str = typer.Argument(
+        ...,
+        help="Tool name to test (e.g. bash, write_file, file_read)",
+    ),
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose boundaries to evaluate (default: current directory)",
+    ),
+    path: str = typer.Option(
+        "",
+        "--path",
+        help="File path the call would touch (relative paths resolve against the project root)",
+    ),
+    command: str = typer.Option(
+        "",
+        "--command",
+        help="Shell command the call would run (for bash-like tools)",
+    ),
+    content: str = typer.Option(
+        "",
+        "--content",
+        help="Write payload to test against iterate.forbidden_fix_patterns",
+    ),
+    read_only: bool = typer.Option(
+        False,
+        "--read-only",
+        help="Force the call to be classified as read-only",
+    ),
+    mutating: bool = typer.Option(
+        False,
+        "--mutating",
+        help="Force the call to be classified as mutating",
+    ),
+    mode: str = typer.Option(
+        "",
+        "--mode",
+        help="Simulate a different configured mode: plan | default | full_auto (default: current)",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the decision as JSON (same shape as GET /api/v1/permissions/check)",
+    ),
+) -> None:
+    """Simulate one tool call against the real permission checker.
+
+    Answers "would this run, ask me first, or be refused — and why?" without
+    starting a model or touching a file. Path/command/content normalization is
+    the engine's own, so the verdict matches a live call. An unknown tool or an
+    uninferable schema is treated as mutating (fail-closed); override with
+    ``--read-only`` / ``--mutating``.
+
+    Exit codes (script/CI friendly): 0 allowed, 2 requires confirmation,
+    1 denied or invalid input.
+
+    Examples:
+        ih permissions check read_file --path .env
+        ih permissions check bash --command 'rm -rf build' --mode full_auto
+        ih permissions check write_file --path db/migrations/001.sql --content 'DROP TABLE x'
+        ih permissions check bash --command 'pytest -q' --json
+    """
+    from iterate_harness.permissions.inventory import (
+        render_permission_decision,
+        simulate_permission_decision,
+    )
+
+    if read_only and mutating:
+        print("Error: --read-only and --mutating are mutually exclusive", file=sys.stderr)
+        raise typer.Exit(1)
+    forced_read_only: bool | None = True if read_only else (False if mutating else None)
+
+    root = _permissions_project_root(project_root)
+    try:
+        decision = simulate_permission_decision(
+            tool_name,
+            project_root=root,
+            file_path=path,
+            command=command,
+            content=content,
+            read_only=forced_read_only,
+            mode=mode.strip().lower(),
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise typer.Exit(1)
+
+    if as_json:
+        print(json.dumps(decision, ensure_ascii=False, indent=2))
+    else:
+        print(render_permission_decision(decision))
+
+    verdict = decision.get("verdict")
+    if verdict == "allowed":
+        raise typer.Exit(0)
+    if verdict == "confirm":
+        raise typer.Exit(2)
+    raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

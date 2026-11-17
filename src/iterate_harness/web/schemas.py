@@ -208,6 +208,87 @@ class CapabilitiesView(BaseModel):
     hooks: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class PermissionProblem(BaseModel):
+    """A permission rule that cannot take effect as written (design §17.3 P16)."""
+
+    kind: str
+    name: str
+    detail: str
+    remedy: str = ""
+
+
+class PermissionPathRule(BaseModel):
+    """One effective path rule, in evaluation order."""
+
+    pattern: str
+    allow: bool
+
+
+class PermissionToolRow(BaseModel):
+    """One registered tool and its inferred read-only classification.
+
+    ``read_only`` is ``None`` when the schema cannot be classified without a
+    real call; the simulator then treats the call as mutating (fail-closed).
+    """
+
+    name: str
+    description: str = ""
+    read_only: bool | None = None
+
+
+class PermissionsView(BaseModel):
+    """The effective permission policy (design §17.3 P16).
+
+    This is the merged policy the engine enforces — settings lists plus the
+    iterate protected-path / risk-area / forbidden-pattern boundaries — so the
+    console cannot show a policy that differs from a live decision.
+    """
+
+    project_root: str
+    generated_at: str
+    mode: str
+    mode_label: str = ""
+    mode_detail: str = ""
+    iterate_enabled: bool = True
+    summary: dict[str, int] = Field(default_factory=dict)
+    has_problems: bool = False
+    problems: list[PermissionProblem] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=list)
+    denied_tools: list[str] = Field(default_factory=list)
+    path_rules: list[PermissionPathRule] = Field(default_factory=list)
+    allowed_commands: list[str] = Field(default_factory=list)
+    denied_commands: list[str] = Field(default_factory=list)
+    sensitive_paths: list[str] = Field(default_factory=list)
+    risk_areas: list[str] = Field(default_factory=list)
+    forbidden_patterns: list[str] = Field(default_factory=list)
+    tools: list[PermissionToolRow] = Field(default_factory=list)
+
+
+class PermissionCheckView(BaseModel):
+    """One simulated tool-call decision (design §17.3 P16).
+
+    ``verdict`` is one of ``allowed`` / ``confirm`` / ``denied``; the CLI maps
+    it to exit codes 0 / 2 / 1 and the page renders it as a badge.
+    """
+
+    tool_name: str
+    project_root: str
+    generated_at: str
+    read_only: bool
+    read_only_source: str = "assumed"
+    file_path: str = ""
+    command: str = ""
+    command_paths: list[str] = Field(default_factory=list)
+    content_checked: bool = False
+    mode: str
+    mode_label: str = ""
+    simulated_mode: str = ""
+    verdict: str
+    allowed: bool
+    requires_confirmation: bool = False
+    reason: str = ""
+
+
 class RunSummary(BaseModel):
     """One decision-log entry in the runs overview (design §17.3 P2)."""
 
