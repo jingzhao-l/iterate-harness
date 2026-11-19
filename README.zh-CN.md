@@ -244,6 +244,9 @@ ih iterate trend --json   # 机器可读趋势报告（供看板/CI 使用）
 ih iterate trend --fail-on-regression        # CI 门禁：已修复问题回归即失败
 ih iterate trend --fail-on-new high          # CI 门禁：出现新高/严重问题即失败
 ih iterate diff           # 对比两次运行：新增 / 修复 / 回归 / 未变 的 finding
+ih iterate triage list    # 当前 findings + 分诊状态（open/approved/rejected/ignored），带稳定编号
+ih iterate triage ignore 1,4-6 --reason "generated code"   # 永久有意：引擎下一轮起不再报告
+ih iterate triage restore 1         # 撤销永久忽略（只移除机器写入的条目）
 ih iterate diff --json    # 机器可读对比（供脚本/CI 使用）
 ih iterate diff --from 2 --to 5   # 任选两次已完成运行
 ih iterate log --replay   # 按时间序回放整次运行（相对时间戳）
@@ -318,7 +321,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 - **确定性评审引擎** — `iterate_review` plan / aggregate / meta-review：跨轮去重、`known_intentional` 过滤、severity 排序、收敛统计、6 项报告一致性审计——全部纯计算，零 LLM 判断。
 - **两种模式** — `dry-run`（纯评审，绝不改文件）与 `normal`（评审 → 原子修复 → 验证 → 循环，验证失败经 git 隔离自动回滚）。
 - **引擎级收敛强制** — `IterateLoopPolicy` 位于内核查询循环：轮次上限、收敛自停、下一轮引导不受 prompt 注入影响。
-- **findings 分诊** — `iterate_triage`：逐条 `y` 修复 / `n` 跳过 / `a` 永久忽略；`a` 持久化到 `known_intentional`，后续轮次自动过滤。
+- **findings 分诊** — `iterate_triage`：逐条 `y` 修复 / `n` 跳过 / `a` 永久忽略；`a` 持久化到 `known_intentional`，后续轮次自动过滤。同一个决定不必开模型会话：`ih iterate triage list|ignore|restore`（编号/区间/`all` 选择器，severity/维度/文件过滤，`--dry-run`，`--json`）直接写引擎真正读取的存储；Runs 页的**永久忽略**按钮做同一件事。journal 写失败时会回滚已写的过滤条目并退出 1——绝不会出现「finding 被隐藏却没有记录」。
 - **逐修复 diff 审批** — `require_fix_approval` 让 normal 模式闭环中的每次文件写入都走带 diff 预览的交互确认——即便处于全自动模式；硬拒绝（保护路径/禁止模式）绝不降级为可确认。
 - **Esc 中途干预** — 闭环运行中按 Esc：在下一轮边界暂停并弹出方向键菜单（跳过当前 finding / 收窄维度 / 直接停 / 继续）；再按一次 Esc 强制打断当前 turn。
 - **断点续跑** — TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding。

@@ -627,7 +627,7 @@ export const api = {
     file: string,
     line: number | null,
     dimension: string,
-    decision: "approve" | "reject",
+    decision: "approve" | "reject" | "ignore",
     note?: string,
     projectRoot?: string,
   ): Promise<OperationResult> =>

@@ -1454,12 +1454,20 @@ tr.triage-reject td {
   background: rgba(148, 163, 184, 0.08);
 }
 
+tr.triage-ignore td {
+  background: rgba(217, 119, 6, 0.07);
+}
+
 :root[data-theme="dark"] tr.triage-approve td {
   background: rgba(22, 163, 74, 0.12);
 }
 
 :root[data-theme="dark"] tr.triage-reject td {
   background: rgba(148, 163, 184, 0.12);
+}
+
+:root[data-theme="dark"] tr.triage-ignore td {
+  background: rgba(217, 119, 6, 0.14);
 }
 
 /* ---- tool call cards (chat panel, design §18) ---- */

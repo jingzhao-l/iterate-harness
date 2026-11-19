@@ -273,6 +273,9 @@ ih iterate trend --fail-on-new high          # CI gate: fail on new high/critica
 ih iterate diff           # compare two runs: new / fixed / regressed / unchanged findings
 ih iterate diff --json    # machine-readable comparison (for scripts/CI)
 ih iterate diff --from 2 --to 5   # pick any pair of finished runs
+ih iterate triage list    # current findings + triage state (open/approved/rejected/ignored), numbered
+ih iterate triage ignore 1,4-6 --reason "generated code"   # permanently intentional: engine filters it next round
+ih iterate triage restore 1         # undo a permanent ignore (machine-added entries only)
 ih iterate log --replay   # replay the whole run chronologically (relative timestamps)
 ih iterate report         # render the final report (CI mode, see below)
 ih iterate report --pr    # post/update the report as a PR comment (gh CLI, idempotent)
@@ -346,7 +349,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Deterministic review engine** — `iterate_review` plan / aggregate / meta-review: cross-round dedupe, `known_intentional` filtering, severity sort, convergence math, 6-check report audit — all pure computation, zero LLM judgment.
 - **Two modes** — `dry-run` (read-only review, never touches files) and `normal` (review → atomic fix → validate → loop, validation failure rolls the round back via git isolation).
 - **Engine-enforced convergence** — `IterateLoopPolicy` lives in the kernel query loop: round caps, convergence auto-stop and next-round steering cannot be prompt-injected away.
-- **Findings triage** — `iterate_triage`: walk findings with `y` fix / `n` skip / `a` always-ignore; `a` persists to `known_intentional` so future rounds filter it automatically.
+- **Findings triage** — `iterate_triage`: walk findings with `y` fix / `n` skip / `a` always-ignore; `a` persists to `known_intentional` so future rounds filter it automatically. The same decision is reachable without a model session: `ih iterate triage list|ignore|restore` (numbered selectors, severity/dimension/file filters, `--dry-run`, `--json`) writes the stores the engine actually reads, and the Runs page's **永久忽略 / permanently ignore** button performs the same write. A rollback keeps the two halves consistent: if the journal record cannot be written, the filter entries are removed again, so a finding is never hidden without a record.
 - **Per-fix diff approval** — `require_fix_approval` routes every file write during a normal-mode loop through an interactive prompt with an inline diff preview — even in full-auto mode; hard denials are never downgraded.
 - **Esc intervention** — press Esc mid-loop: the loop pauses at the next round boundary and opens a directional-key menu (skip top finding / narrow dimensions / stop / resume); a second Esc force-interrupts the turn.
 - **Breakpoint resume** — the TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings.

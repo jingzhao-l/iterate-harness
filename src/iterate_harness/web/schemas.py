@@ -386,15 +386,17 @@ class WorkspaceRemoveRequest(BaseModel):
 class FindingsTriageRequest(BaseModel):
     """Request body for triaging one finding (design §17.3 P2).
 
-    ``decision`` is ``approve`` (accept the finding / its suggested fix) or
-    ``reject`` (false positive — skip). The (file, line, dimension) triple
-    is the dedup key mirroring ``runs.get_findings``.
+    ``decision`` is ``approve`` (accept the finding / its suggested fix),
+    ``reject`` (false positive — skip) or ``ignore`` (permanently intentional:
+    persist a ``known_intentional`` entry so the engine filters it from the
+    next round). The (file, line, dimension) triple is the dedup key mirroring
+    ``runs.get_findings``.
     """
 
     file: str = Field(..., min_length=1)
     line: int | None = None
     dimension: str = ""
-    decision: Literal["approve", "reject"]
+    decision: Literal["approve", "reject", "ignore"]
     note: str | None = Field(default=None, max_length=1000)
 
 

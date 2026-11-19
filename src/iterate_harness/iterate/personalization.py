@@ -331,3 +331,82 @@ def sync_known_intentional_to_config(
     report["already"] = len(existing) - len(added)
     report["config"] = str(config_path)
     return report
+
+
+def remove_known_intentional_from_config(
+    project_root: str | Path,
+    entries: list[KnownIntentional],
+    *,
+    reason_prefix: str | None = None,
+) -> dict[str, object]:
+    """Remove matching ``known_intentional`` entries from ``iterate.config.yaml``.
+
+    This is the undo half of :func:`sync_known_intentional_to_config`: a
+    permanent triage ignore that was bridged into the checked-in config must
+    be removed there too, or the engine keeps filtering the finding after the
+    operator restored it.
+
+    ``reason_prefix`` narrows removal to machine-added entries (the triage
+    marker), so a hand-written entry with the same key is never deleted.
+    Never raises: a missing/unreadable config leaves it untouched and returns
+    a report explaining why.
+
+    Returns ``{"removed": [...], "config": path-or-None, "reason": str?}``.
+    """
+    report: dict[str, object] = {"removed": [], "config": None}
+    config_path = Path(project_root) / CONFIG_FILENAME
+    keys = {_known_key(entry) for entry in entries}
+    if not keys:
+        return report
+
+    try:
+        raw = config_path.read_text(encoding="utf-8")
+        data = yaml.safe_load(raw)
+    except OSError:
+        report["reason"] = "no iterate.config.yaml (create one to persist)"
+        return report
+    except Exception as exc:  # yaml.YAMLError and friends
+        report["reason"] = f"config not readable: {exc}"
+        return report
+    if not isinstance(data, dict):
+        report["reason"] = "config root is not a mapping"
+        return report
+
+    section = data.get("personalization")
+    if not isinstance(section, dict):
+        report["reason"] = "config personalization is not a mapping"
+        return report
+
+    existing = _parse_config_known(section.get("known_intentional"))
+    kept: list[KnownIntentional] = []
+    removed: list[KnownIntentional] = []
+    for entry in existing:
+        if _known_key(entry) in keys and (
+            reason_prefix is None or entry.reason.startswith(reason_prefix)
+        ):
+            removed.append(entry)
+            continue
+        kept.append(entry)
+
+    if not removed:
+        return report
+
+    if kept:
+        section["known_intentional"] = [_known_to_dict(k) for k in kept]
+        data["personalization"] = section
+    else:
+        section.pop("known_intentional", None)
+        if section:
+            data["personalization"] = section
+        else:
+            data.pop("personalization", None)
+    try:
+        content = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        atomic_write_text(config_path, content, encoding="utf-8")
+    except Exception as exc:
+        report["reason"] = f"failed to write config: {exc}"
+        return report
+
+    report["removed"] = [_known_to_dict(k) for k in removed]
+    report["config"] = str(config_path)
+    return report

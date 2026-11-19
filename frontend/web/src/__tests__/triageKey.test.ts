@@ -2,7 +2,7 @@
 // file:::line:::dimension composition exactly (design §17.3 P2 / §17.9 gates).
 
 import { describe, expect, it, vi } from "vitest";
-import { triageKey } from "../pages/Runs";
+import { triageDecisionLabel, triageKey } from "../pages/Runs";
 
 // Runs.tsx imports ./api, whose module scope touches window/sessionStorage —
 // unavailable in the node test environment, so stub it before the import.
@@ -46,5 +46,13 @@ describe("triageKey", () => {
     const a = triageKey({ file: "x.ts", line: 1, dimension: "d" });
     const b = triageKey({ file: "x.ts", line: 2, dimension: "d" });
     expect(a).not.toBe(b);
+  });
+});
+
+describe("triageDecisionLabel", () => {
+  it("uses a distinct label for the permanent ignore decision", () => {
+    expect(triageDecisionLabel("approve")).toBe("已批准");
+    expect(triageDecisionLabel("reject")).toBe("已拒绝");
+    expect(triageDecisionLabel("ignore")).toBe("已永久忽略");
   });
 });

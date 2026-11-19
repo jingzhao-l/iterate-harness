@@ -2,6 +2,24 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.24.0] - 2026-11-19
+
+**版本判断：minor。** 新增一个 CLI 子命令组（`ih iterate triage list|ignore|restore`）与 WebUI 的 `ignore` 分诊决定；既有命令、参数与退出码集合不动（triage 是新增入口），既有 API 形状与 `.iterate` 数据格式不动（`FindingsTriageRequest.decision` 的 `Literal` 增加一个取值，纯加法），分诊日志继续是 append-only。按加法语义判为 minor。
+
+- **findings 分诊第一次在终端可达，而且真的生效（`ih iterate triage list|ignore|restore`）。** 此前「这条 finding 是有意为之」只有两条路：在模型会话里让它调用 `iterate_triage`，或在 WebUI 点「拒绝」——后者只是人类记录，下一轮引擎仍会重新报告、重新修复，因为引擎过滤器读取的是 `known_intentional`（personalization JSON + `iterate.config.yaml`），不是分诊日志。新增 `iterate/triage.py`：`list` 从 decision log 的 `review_result` / `report` 条目重建去重 findings（同键后出现取最新 severity/summary），与分诊日志、引擎过滤器合并出 `open / approved / rejected / ignored` 状态并给出稳定编号；`ignore` 写入引擎真正读取的两处存储（personalization + config 桥，带 `triaged-intentional:` 机器标记）、分诊日志与 decision log 审计；`restore` 只移除机器标记的条目（手写 `known_intentional` 永不误删），同时清 config 桥与日志。支持编号/区间/`all` 选择器、severity/维度/文件过滤、`--dry-run`、`--json` 与面向脚本的退出码（无选择/越界/未知状态 → 1）；无选择器时拒绝执行，「忽略全部」必须显式写 `all`。
+- **一致性保障：过滤与记录不会只成功一半。** personalization 的读-改-写由 `personalization.json.lock` 串行化（console 两个进程、或 console 与 WebUI 同时操作不丢条目）；若分诊日志写入失败，`ignore` 会回滚本次刚写入的过滤条目并以非零退出，绝不出现「finding 被静默隐藏却没有记录」。`restore` 即便 personalization 已被清空，也会按机器前缀清理 `iterate.config.yaml` 里的残留桥条目。
+- **WebUI：新增「永久忽略」，并让撤销/清空真正解除过滤。** Runs 页每行在「批准 / 拒绝」之外新增「永久忽略」：`POST /runs/findings/triage` 的 `ignore` 走同一条 `iterate/triage.py` 写入路径（审计、二次确认不变），行状态徽章为「已永久忽略」；「✕」单条撤销与「清除全部审批记录」会同时解除该 key 的机器写入过滤条目（手写条目保留），并在文案中说明。approve/reject 的语义保持为人工记录，不改变引擎行为。
+- **修复：provider SDK 在导入期拖慢整条 CLI/守护进程链路。** `api/__init__.py` 与 `services/__init__.py` 在包导入时急切拉入 `anthropic` / `openai` 与 `compact → hooks.executor → api.client`，`import iterate_harness.services.cron_scheduler` 冷启动实测约 **37s**；cron 守护进程的启动轮询上限只有 20s，于是 `ih cron start` 会在守护进程健康时误报启动失败（对应测试 `test_the_daemon_that_wrote_the_claim_is_stopped_and_reported_as_stopped` 稳定变红）。两个包的公开名字改为 PEP 562 惰性导出（`UsageSnapshot`、错误类型与 token 估算等轻量叶子保持即时），同一导入降到约 **2s**，cron 守护进程在窗口内正常认领 pid。
+- **文档同步。** 中英 README 增加 triage 命令块与能力说明；`DESIGN-iterate-harness.md` §17.3 P2 与 §19.2 补控制台/CI 入口、`ignore` 语义与并发/回滚契约；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.24.0。
+
+**核验（本机，2026-11-19）：**
+
+- 端到端（真实 CLI、临时目录）：`triage list` 显示去重后的 2 条 finding（同键后出现取最新 `critical`）；`ignore 1 --dry-run` 不落盘（无 `.iterate/findings-triage.jsonl`）；`ignore 1 --reason generated` 同时写 personalization、`iterate.config.yaml`（`triaged-intentional: generated`）与分诊日志，`list` 状态变为 `ignored`；`ignore 9` → 退出 1（out of range）、无选择 → 退出 1（Nothing selected）；`restore 1` 后 config 的 `personalization` 段被清空，`list --json` 回到 `open`（open=2、ignored=0）。
+- `pytest tests/ -q` → **3421 passed, 6 skipped**（新增 42 条 triage 单元/CLI/路由用例；cron 守护进程用例在导入耗时 37s→2s 后恢复通过）。
+- `ruff check src tests` → All checks passed；`mypy src` → Success: no issues found in 287 source files；`npm test`（bootstrap + postinstall + ui）→ **89 passed**。
+- 前端 `tsc --noEmit` 通过；`vitest run` → 16 files / 161 tests passed（新增 `triageDecisionLabel` 用例）；`vite build` 成功（85 modules）。
+- 冷启动对比：`python -X importtime -c "from iterate_harness.services import cron_scheduler"` 由约 37s 降至约 2s（`anthropic` / `openai` 不再在包导入期被急切加载）。
+
 ## [2.23.0] - 2026-11-17
 
 **版本判断：minor。** 新增一个 CLI 子命令组、两条只读 API 与一个控制台页面；既有命令、参数与退出码集合不动（`ih permissions` 是新增入口），响应形状与 `.iterate` 数据格式不动（`build_permission_checker` 增可选 `cwd` 参数，纯加法）。附带一个正确性修复：权限检查器现在能针对任意项目根构建，策略投影不再依赖进程 cwd。按加法语义判为 minor，不是 major（无破坏）也不是 patch（新增用户可达能力）。

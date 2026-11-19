@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ...iterate import triage
 from ...iterate.ci_report import ReportSummary, latest_report_entry
 from ...iterate.decision_log import DecisionLogEntry, read_entries
 from ...iterate.html_report import REPLAY_ENTRY_TYPES
@@ -259,9 +260,10 @@ def list_findings_triage(
 ) -> list[dict[str, Any]]:
     """All persisted findings-triage decisions, most recent first (design §17.3 P2).
 
-    These are the human "approve / reject" records written from the Runs page
-    findings table. The latest decision for a ``(file, line, dimension)`` key
-    wins; re-triaging appends a new line instead of rewriting history.
+    These are the human "approve / reject / ignore" records written from the
+    Runs page findings table. The latest decision for a
+    ``(file, line, dimension)`` key wins; re-triaging appends a new line
+    instead of rewriting history.
     """
     return findings_triage.list_decisions(_resolve_project(project_root))
 
@@ -272,10 +274,13 @@ def record_findings_triage(
     project_root: str = "",
     confirm: bool = False,
 ) -> OperationResult:
-    """Record one findings-triage decision (approve / reject), audited.
+    """Record one findings-triage decision (approve / reject / ignore), audited.
 
-    Requires ``confirm=true`` (the frontend always sends it). Appends to the
-    append-only journal; returns the stored record in ``detail``.
+    Requires ``confirm=true`` (the frontend always sends it). ``ignore`` is
+    permanent: besides the journal record it persists a ``known_intentional``
+    entry (personalization + ``iterate.config.yaml``) so the engine's review
+    filter drops the finding from the next round. Returns the stored record
+    and, for ignore, what the filter write changed.
     """
     root = _resolve_project(project_root)
     if not confirm:
@@ -283,22 +288,47 @@ def record_findings_triage(
             status_code=422,
             detail="triage requires confirm=true (secondary confirmation)",
         )
-    try:
-        record = findings_triage.record_decision(
+    detail: dict[str, Any] = {}
+    if body.decision == "ignore":
+        result = triage.ignore_one(
             root,
             file=body.file,
             line=body.line,
             dimension=body.dimension,
-            decision=body.decision,
-            note=body.note,
+            reason=body.note or "",
         )
-    except OSError as exc:
-        # A failed journal write must surface as a real error, never a
-        # phantom success (the caller sees a 500 instead of a false "ok").
-        raise HTTPException(
-            status_code=500,
-            detail=f"triage journal write failed: {exc}",
-        ) from exc
+        record = findings_triage.triage_state_for(
+            findings_triage.load_decisions(root),
+            file=body.file,
+            line=body.line,
+            dimension=body.dimension,
+        )
+        if record is None:
+            # ignore_one records the journal itself; a missing record means
+            # the journal write failed while the engine filter landed. Surface
+            # it instead of returning a phantom success.
+            raise HTTPException(
+                status_code=500,
+                detail=f"triage journal write failed: {result.journal_error or 'record missing'}",
+            )
+        detail["filter"] = result.to_dict()
+    else:
+        try:
+            record = findings_triage.record_decision(
+                root,
+                file=body.file,
+                line=body.line,
+                dimension=body.dimension,
+                decision=body.decision,
+                note=body.note,
+            )
+        except OSError as exc:
+            # A failed journal write must surface as a real error, never a
+            # phantom success (the caller sees a 500 instead of a false "ok").
+            raise HTTPException(
+                status_code=500,
+                detail=f"triage journal write failed: {exc}",
+            ) from exc
     AuditLog(root).record(
         "findings.triage",
         body.decision,
@@ -308,11 +338,16 @@ def record_findings_triage(
             "dimension": body.dimension,
         },
     )
+    message = (
+        "已永久忽略，下一轮不再报告"
+        if body.decision == "ignore"
+        else f"已记录审批：{body.decision}"
+    )
     return OperationResult(
         status="ok",
-        message=f"已记录审批：{body.decision}",
+        message=message,
         target=body.file,
-        detail={"record": record},
+        detail={"record": record, **detail},
     )
 
 
@@ -326,9 +361,11 @@ def dismiss_findings_triage(
 
     Requires ``confirm=true`` (the frontend always sends it). Unlike the
     ``DELETE /runs/findings/triage`` full clear, this targets a single
-    (file, line, dimension) key via :func:`findings_triage.clear_decision`.
-    Returns how many decisions were removed (``1`` on success, ``0`` when
-    the finding had no persisted decision).
+    (file, line, dimension) key. A permanent ``ignore`` also removes the
+    machine-added ``known_intentional`` entry (personalization + config) so
+    the finding can be reported again; hand-written filter entries survive.
+    Returns how many journal decisions were removed and how many filter
+    entries were lifted.
     """
     root = _resolve_project(project_root)
     if not confirm:
@@ -343,6 +380,12 @@ def dismiss_findings_triage(
             line=body.line,
             dimension=body.dimension,
         )
+        lifted = triage.restore_one(
+            root,
+            file=body.file,
+            line=body.line,
+            dimension=body.dimension,
+        ).removed
     except OSError as exc:
         raise HTTPException(
             status_code=500,
@@ -356,17 +399,23 @@ def dismiss_findings_triage(
             "line": body.line,
             "dimension": body.dimension,
             "removed": removed,
+            "liftedIgnores": lifted,
         },
     )
     return OperationResult(
         status="ok",
-        message="已撤销审批记录" if removed else "未找到对应的审批记录",
+        message=(
+            "已撤销审批记录，并解除永久忽略"
+            if lifted
+            else ("已撤销审批记录" if removed else "未找到对应的审批记录")
+        ),
         target=body.file,
         detail={
             "file": body.file,
             "line": body.line,
             "dimension": body.dimension,
             "removed": removed,
+            "liftedIgnores": lifted,
         },
     )
 
@@ -376,9 +425,11 @@ def clear_findings_triage(
     project_root: str = "",
     confirm: bool = False,
 ) -> OperationResult:
-    """Clear every persisted triage decision (compaction), audited.
+    """Clear every persisted triage decision and lift auto-ignores, audited.
 
-    Requires ``confirm=true``. Returns how many decisions were removed.
+    Requires ``confirm=true``. Returns how many decisions were removed and
+    how many machine-added ``known_intentional`` filter entries were lifted;
+    hand-written entries are preserved.
     """
     root = _resolve_project(project_root)
     if not confirm:
@@ -387,15 +438,20 @@ def clear_findings_triage(
             detail="clear triage requires confirm=true (secondary confirmation)",
         )
     try:
+        lifted = triage.clear_auto_ignores(root)
         removed = findings_triage.clear_all(root)
     except OSError as exc:
         raise HTTPException(
             status_code=500,
             detail=f"triage journal write failed: {exc}",
         ) from exc
-    AuditLog(root).record("findings.triage.clear", "all", summary={"removed": removed})
+    AuditLog(root).record(
+        "findings.triage.clear",
+        "all",
+        summary={"removed": removed, "liftedIgnores": lifted},
+    )
     return OperationResult(
         status="ok",
-        message=f"已清除 {removed} 条审批记录",
-        detail={"removed": removed},
+        message=f"已清除 {removed} 条审批记录，解除 {lifted} 条永久忽略",
+        detail={"removed": removed, "liftedIgnores": lifted},
     )

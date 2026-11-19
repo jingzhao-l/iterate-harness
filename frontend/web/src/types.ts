@@ -237,7 +237,7 @@ export interface TriageDecision {
   file: string;
   line: number | null;
   dimension: string;
-  decision: "approve" | "reject";
+  decision: "approve" | "reject" | "ignore";
   note: string | null;
   timestamp: string;
 }

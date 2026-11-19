@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
 from types import ModuleType
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import typer
 
@@ -707,7 +707,7 @@ app = typer.Typer(
 
 auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
-iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/diff/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
+iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/diff/triage/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
 web_app = typer.Typer(name="web", help="WebUI management console")
 memory_app = typer.Typer(name="memory", help="Read and write the project memory bank (list/search/show/preview/add/remove)")
 hooks_app = typer.Typer(name="hooks", help="Inspect lifecycle hooks (list/log/test)")
@@ -715,10 +715,15 @@ permissions_app = typer.Typer(
     name="permissions",
     help="Inspect the effective permission policy and simulate a tool decision (show/check)",
 )
+triage_app = typer.Typer(
+    name="triage",
+    help="List findings and mark intentional ones so the engine stops reporting them (list/ignore/restore)",
+)
 
 app.add_typer(auth_app)
 app.add_typer(provider_app)
 app.add_typer(iterate_app)
+iterate_app.add_typer(triage_app)
 app.add_typer(web_app)
 app.add_typer(memory_app)
 app.add_typer(hooks_app)
@@ -1412,6 +1417,360 @@ def iterate_log(
         data = json.dumps(entry.data, ensure_ascii=False) if entry.data else ""
         print(f"[{entry.timestamp}] r{entry.round} {entry.type} {data}".rstrip())
     print(f"({len(entries)} entries total)")
+
+
+_TRIAGE_STATUS_LABELS = {
+    "open": "open",
+    "approve": "approved",
+    "reject": "rejected",
+    "ignore": "ignored",
+}
+
+
+def _normalize_triage_status(raw: str) -> str | None:
+    """Map a CLI status word to the journal value (``""`` means no filter)."""
+    token = (raw or "").strip().lower()
+    if not token:
+        return ""
+    aliases = {
+        "open": "open",
+        "approve": "approve",
+        "approved": "approve",
+        "reject": "reject",
+        "rejected": "reject",
+        "ignore": "ignore",
+        "ignored": "ignore",
+    }
+    return aliases.get(token)
+
+
+def _triage_select(
+    rows: Sequence[Any],
+    selectors: Sequence[str],
+    severity: str,
+    dimension: str,
+    file_pattern: str,
+) -> list[Any] | None:
+    """Resolve selectors/filters for a mutation; print a remedy and return None."""
+    from iterate_harness.iterate import triage
+
+    if not selectors and not (severity or dimension or file_pattern):
+        print(
+            "Nothing selected. Pass finding numbers (`ih iterate triage ignore 1,3`), "
+            "`all`, or a filter (`--severity high`, `--dimension security`, `--file 'src/*.py'`).",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        chosen = triage.select_findings(
+            rows,
+            selectors=selectors,
+            severity=severity,
+            dimension=dimension,
+            file_pattern=file_pattern,
+        )
+    except ValueError as exc:
+        print(f"Invalid selection: {exc}", file=sys.stderr)
+        return None
+    if not chosen:
+        print(
+            "No findings matched the selectors/filters. "
+            "Run `ih iterate triage list` to see the current numbers.",
+            file=sys.stderr,
+        )
+        return None
+    return chosen
+
+
+def _render_triage_rows(rows: Sequence[Any]) -> str:
+    """Render the triage table (one line per finding, stable numbers)."""
+    if not rows:
+        return "No findings recorded in .iterate/decision-log.jsonl."
+    lines = [
+        f"Findings ({len(rows)}):",
+        "",
+        f"{'#':>3}  {'SEVERITY':<8}  {'STATUS':<9}  {'DIMENSION':<18}  FINDING",
+    ]
+    missing_filter = False
+    for row in rows:
+        status = _TRIAGE_STATUS_LABELS.get(row.status, row.status)
+        if row.status == "ignore" and not row.effective:
+            status += "?"
+            missing_filter = True
+        location = f"{row.file}:{row.line}" if row.line else row.file
+        summary = " ".join(str(row.summary or "").split())
+        if len(summary) > 90:
+            summary = summary[:87] + "..."
+        lines.append(
+            f"{row.index:>3}  {row.severity[:8]:<8}  {status:<9}  "
+            f"{row.dimension[:18]:<18}  {location} — {summary}"
+        )
+    lines.append("")
+    lines.append("Ignore: ih iterate triage ignore <numbers|all> [--reason TEXT]")
+    lines.append("Undo:   ih iterate triage restore <numbers|all>")
+    if missing_filter:
+        lines.append(
+            "Note: `ignored?` means a journal decision exists but the engine filter entry "
+            "is missing — re-run `ignore` to make it effective."
+        )
+    return "\n".join(lines)
+
+
+def _render_ignore_result(result: Any, *, dry_run: bool) -> str:
+    if not dry_run and not result.applied:
+        lines = [
+            "Triage ignore failed — nothing was changed.",
+            "The filter entries this call wrote were rolled back, so no finding is "
+            "hidden without a record.",
+        ]
+        if result.journal_error:
+            lines.append(f"Error: journal record failed ({result.journal_error})")
+        return "\n".join(lines)
+    lines = [
+        ("Dry run — nothing written." if dry_run else "Triage ignore applied."),
+        f"Requested {result.requested} finding(s): added {len(result.added)}, "
+        f"already filtered {result.already}.",
+    ]
+    for finding in result.added:
+        location = (
+            f"{finding['file']}:{finding['line']}" if finding.get("line") else finding["file"]
+        )
+        lines.append(f"  + {location} [{finding['dimension']}]")
+    if result.config:
+        lines.append(f"Config bridge: updated {result.config}")
+    elif result.config_reason:
+        lines.append(f"Config bridge: {result.config_reason}")
+    if result.journaled:
+        lines.append(f"Journal: recorded {result.journaled} decision(s)")
+    if result.journal_error:
+        lines.append(f"Warning: journal record failed ({result.journal_error})")
+    if result.decision_log_error:
+        lines.append(f"Warning: audit entry not written ({result.decision_log_error})")
+    if not dry_run:
+        lines.append("")
+        lines.append(
+            "Next round: these findings are filtered. "
+            "Undo with `ih iterate triage restore <numbers>`."
+        )
+    return "\n".join(lines)
+
+
+def _render_restore_result(result: Any, rows: Sequence[Any], *, dry_run: bool) -> str:
+    lines = [
+        ("Dry run — nothing written." if dry_run else "Triage restore applied."),
+        f"Requested {result.requested} finding(s); "
+        f"{'would remove' if dry_run else 'removed'} {result.removed} personalization "
+        f"entr(ies) and {result.config_removed} config bridge entr(ies).",
+    ]
+    for row in rows:
+        location = f"{row.file}:{row.line}" if row.line else row.file
+        lines.append(f"  - {location} [{row.dimension}]")
+    if result.config:
+        lines.append(f"Config bridge: updated {result.config}")
+    if result.journal_error:
+        lines.append(f"Warning: journal clear failed ({result.journal_error})")
+    if result.decision_log_error:
+        lines.append(f"Warning: audit entry not written ({result.decision_log_error})")
+    if not result.removed and not result.config_removed:
+        lines.append(
+            "No machine-added filter entries matched (a hand-written known_intentional "
+            "entry is left untouched on purpose)."
+        )
+    return "\n".join(lines)
+
+
+@triage_app.command("list")
+def iterate_triage_list(
+    severity: str = typer.Option("", "--severity", help="Only findings at this severity (critical|high|medium|low)"),
+    dimension: str = typer.Option("", "--dimension", help="Only findings in this dimension"),
+    file_pattern: str = typer.Option(
+        "", "--file", help="Only findings in this file (exact path, or a glob such as src/*.py)"
+    ),
+    status: str = typer.Option(
+        "",
+        "--status",
+        help="Only findings in this triage state (open|approved|rejected|ignored)",
+    ),
+    limit: int = typer.Option(0, "--limit", min=0, help="Show at most N findings (0 = all)"),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON for scripts and CI"),
+) -> None:
+    """List the latest run's findings with their triage state.
+
+    The table is the console equivalent of the WebUI Runs page: each row has a
+    stable number you can pass to ``ignore`` / ``restore``. ``ignored`` means
+    the engine filter will drop that finding from the next round; ``ignore?``
+    means a decision was recorded but its filter entry is missing (re-run
+    ``ignore`` to make it effective).
+
+    Examples:
+        ih iterate triage list
+        ih iterate triage list --severity high --status open
+        ih iterate triage list --json
+    """
+    from iterate_harness.iterate import triage
+
+    severity = _typer_str(severity)
+    dimension = _typer_str(dimension)
+    file_pattern = _typer_str(file_pattern)
+    status = _typer_str(status)
+    limit = _typer_int(limit)
+    as_json = _typer_flag(as_json)
+
+    normalized = _normalize_triage_status(status)
+    if status and normalized is None:
+        raise typer.BadParameter(
+            f"unknown status {status!r}; expected open, approved, rejected, or ignored"
+        )
+    rows = triage.triage_report(
+        Path.cwd(),
+        severity=severity,
+        dimension=dimension,
+        file_pattern=file_pattern,
+        status=normalized or "",
+        limit=limit,
+    )
+    if as_json:
+        payload = {
+            "findings": [row.to_dict() for row in rows],
+            "total": len(rows),
+            "open": sum(1 for row in rows if row.status == triage.STATUS_OPEN),
+            "ignored": sum(1 for row in rows if row.status == triage.STATUS_IGNORED),
+            "approved": sum(1 for row in rows if row.status == triage.STATUS_APPROVED),
+            "rejected": sum(1 for row in rows if row.status == triage.STATUS_REJECTED),
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    print(_render_triage_rows(rows))
+    if not rows:
+        print(
+            "No findings match. Run `ih iterate review` first, or drop the filters.",
+            file=sys.stderr,
+        )
+
+
+@triage_app.command("ignore")
+def iterate_triage_ignore(
+    selectors: Optional[list[str]] = typer.Argument(
+        None, help="Finding numbers from `triage list` (1, 3-5) or 'all'"
+    ),
+    reason: str = typer.Option("", "--reason", help="Why these findings are intentional (recorded)"),
+    severity: str = typer.Option("", "--severity", help="Select every finding at this severity"),
+    dimension: str = typer.Option("", "--dimension", help="Select every finding in this dimension"),
+    file_pattern: str = typer.Option("", "--file", help="Select findings in this file (path or glob)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would change without writing"),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON for scripts and CI"),
+) -> None:
+    """Mark findings as intentional so the engine stops reporting them.
+
+    Writes the same stores the review filter reads (personalization +
+    ``iterate.config.yaml``), records a WebUI-journal decision, and appends an
+    audit entry to the decision log. The finding disappears from the next
+    round; ``ih iterate triage restore`` reverses it. With no selector and no
+    filter this refuses to act — "ignore everything" must be the explicit
+    word ``all``.
+
+    Examples:
+        ih iterate triage ignore 1,4-6 --reason "generated code"
+        ih iterate triage ignore all --severity low
+        ih iterate triage ignore --dimension maintainability --dry-run
+    """
+    from iterate_harness.iterate import triage
+
+    raw_selectors = _typer_default(selectors)
+    selector_list: list[str] = (
+        [str(item) for item in raw_selectors] if isinstance(raw_selectors, list) else []
+    )
+    reason = _typer_str(reason)
+    severity = _typer_str(severity)
+    dimension = _typer_str(dimension)
+    file_pattern = _typer_str(file_pattern)
+    dry_run = _typer_flag(dry_run)
+    as_json = _typer_flag(as_json)
+
+    rows = triage.triage_report(Path.cwd())
+    chosen = _triage_select(rows, selector_list, severity, dimension, file_pattern)
+    if as_json:
+        if chosen is None:
+            print(json.dumps({"error": "no findings matched the selectors/filters"}, ensure_ascii=False))
+            raise typer.Exit(1)
+        result = triage.ignore_findings(Path.cwd(), chosen, reason=reason, dry_run=dry_run)
+        print(
+            json.dumps(
+                {
+                    "findings": [row.to_dict() for row in chosen],
+                    "result": result.to_dict(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        if not dry_run and not result.applied:
+            raise typer.Exit(1)
+        return
+    if chosen is None:
+        raise typer.Exit(1)
+    result = triage.ignore_findings(Path.cwd(), chosen, reason=reason, dry_run=dry_run)
+    print(_render_ignore_result(result, dry_run=dry_run))
+    if not dry_run and not result.applied:
+        raise typer.Exit(1)
+
+
+@triage_app.command("restore")
+def iterate_triage_restore(
+    selectors: Optional[list[str]] = typer.Argument(
+        None, help="Finding numbers from `triage list` (1, 3-5) or 'all'"
+    ),
+    severity: str = typer.Option("", "--severity", help="Select every finding at this severity"),
+    dimension: str = typer.Option("", "--dimension", help="Select every finding in this dimension"),
+    file_pattern: str = typer.Option("", "--file", help="Select findings in this file (path or glob)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would change without writing"),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON for scripts and CI"),
+) -> None:
+    """Undo a permanent ignore (and clear its recorded decision).
+
+    Removes only entries triage itself added (the machine marker), so a
+    hand-written ``known_intentional`` entry with the same key survives and
+    the finding stays filtered. Also lifts the bridge entry in
+    ``iterate.config.yaml`` and clears the WebUI journal record.
+
+    Examples:
+        ih iterate triage restore 2
+        ih iterate triage restore all --severity low
+    """
+    from iterate_harness.iterate import triage
+
+    raw_selectors = _typer_default(selectors)
+    selector_list: list[str] = (
+        [str(item) for item in raw_selectors] if isinstance(raw_selectors, list) else []
+    )
+    severity = _typer_str(severity)
+    dimension = _typer_str(dimension)
+    file_pattern = _typer_str(file_pattern)
+    dry_run = _typer_flag(dry_run)
+    as_json = _typer_flag(as_json)
+
+    rows = triage.triage_report(Path.cwd())
+    chosen = _triage_select(rows, selector_list, severity, dimension, file_pattern)
+    if as_json:
+        if chosen is None:
+            print(json.dumps({"error": "no findings matched the selectors/filters"}, ensure_ascii=False))
+            raise typer.Exit(1)
+        result = triage.restore_findings(Path.cwd(), chosen, dry_run=dry_run)
+        print(
+            json.dumps(
+                {
+                    "findings": [row.to_dict() for row in chosen],
+                    "result": result.to_dict(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    if chosen is None:
+        raise typer.Exit(1)
+    result = triage.restore_findings(Path.cwd(), chosen, dry_run=dry_run)
+    print(_render_restore_result(result, chosen, dry_run=dry_run))
 
 
 @iterate_app.command("trend")

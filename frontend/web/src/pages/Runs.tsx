@@ -14,6 +14,22 @@ export function triageKey(finding: Finding): string {
   return `${finding.file ?? ""}:::${finding.line ?? ""}:::${finding.dimension ?? ""}`;
 }
 
+// Human label for a persisted triage decision (exported for unit tests).
+// `ignore` is permanent: the backend also writes a known_intentional filter
+// entry, so the finding stops appearing after the next review round.
+export function triageDecisionLabel(decision: TriageDecision["decision"]): string {
+  if (decision === "approve") return "已批准";
+  if (decision === "reject") return "已拒绝";
+  if (decision === "ignore") return "已永久忽略";
+  return decision;
+}
+
+function triageDecisionBadgeClass(decision: TriageDecision["decision"]): string {
+  if (decision === "approve") return "green";
+  if (decision === "ignore") return "amber";
+  return "neutral";
+}
+
 const ENTRY_TYPE_LABELS: Record<string, string> = {
   round_start: "轮次开始",
   review_result: "评审结果",
@@ -234,7 +250,7 @@ export default function Runs(): React.JSX.Element {
   }, [projectRoot]);
 
   const triageFinding = useCallback(
-    (finding: Finding, decision: "approve" | "reject"): void => {
+    (finding: Finding, decision: TriageDecision["decision"]): void => {
       const key = triageKey(finding);
       setTriageBusyKey(key);
       setTriageError(null);
@@ -537,6 +553,10 @@ export default function Runs(): React.JSX.Element {
           共 {findingsTotal} 个（去重） · 已审批 {triagedCount} 个
         </span>
       </div>
+      <p className="muted">
+        「批准 / 拒绝」只记录人工判断；「永久忽略」会写入 known_intentional（personalization +
+        iterate.config.yaml），引擎从下一轮评审起不再报告该 finding，可用 ✕ 撤销。
+      </p>
 
       {findingsTruncated && (
         <p className="muted">
@@ -601,17 +621,17 @@ export default function Runs(): React.JSX.Element {
                           {decision ? (
                             <span className="triage-actions">
                               <span
-                                className={`badge ${decision.decision === "approve" ? "green" : "neutral"}`}
-                                title={`${decision.decision === "approve" ? "已批准" : "已拒绝"} · ${decision.timestamp}`}
+                                className={`badge ${triageDecisionBadgeClass(decision.decision)}`}
+                                title={`${triageDecisionLabel(decision.decision)} · ${decision.timestamp}`}
                               >
-                                {decision.decision === "approve" ? "已批准" : "已拒绝"}
+                                {triageDecisionLabel(decision.decision)}
                               </span>
                               <button
                                 className="btn"
                                 style={{ padding: "1px 7px", fontSize: 11 }}
                                 disabled={busy}
                                 onClick={() => dismissTriage(finding)}
-                                title="撤销该审批决定"
+                                title="撤销该决定（永久忽略会同时解除过滤）"
                               >
                                 ✕
                               </button>
@@ -632,9 +652,18 @@ export default function Runs(): React.JSX.Element {
                                 style={{ padding: "3px 10px", fontSize: 12 }}
                                 disabled={busy}
                                 onClick={() => triageFinding(finding, "reject")}
-                                title="标记为误报 / 跳过其修复"
+                                title="标记为误报 / 跳过其修复（仅记录，下一轮仍可能报告）"
                               >
                                 拒绝
+                              </button>
+                              <button
+                                className="btn"
+                                style={{ padding: "3px 10px", fontSize: 12 }}
+                                disabled={busy}
+                                onClick={() => triageFinding(finding, "ignore")}
+                                title="永久忽略：写入 known_intentional，下一轮起不再报告（可点 ✕ 撤销）"
+                              >
+                                永久忽略
                               </button>
                             </>
                           )}
@@ -690,7 +719,8 @@ export default function Runs(): React.JSX.Element {
           onCancel={() => setConfirmClear(false)}
           onConfirm={clearTriage}
         >
-          将删除全部 {triagedCount} 条 findings 审批记录，此操作不可撤销。
+          将删除全部 {triagedCount} 条 findings 审批记录，并解除其中由「永久忽略」写入的
+          known_intentional 过滤（手写的过滤条目不受影响）。此操作不可撤销。
         </ConfirmDialog>
       )}
     </>

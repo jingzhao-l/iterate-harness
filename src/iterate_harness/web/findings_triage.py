@@ -1,8 +1,10 @@
 """Persistent findings-triage journal for the WebUI (design §17.3 P2).
 
 The Runs page lets the user triage a finding from a past run — ``approve``
-(agree with the finding / accept its suggested fix) or ``reject`` (the
-finding is a false positive, its fix should be skipped). Decisions persist
+(agree with the finding / accept its suggested fix), ``reject`` (the
+finding is a false positive, its fix should be skipped) or ``ignore``
+(permanently intentional: the engine filters it from the next round).
+Decisions persist
 in ``.iterate/findings-triage.jsonl`` so they survive restarts and stay
 visible across pages; they are a *human* record that complements the
 engine's pause-menu approvals (design §18).
@@ -37,8 +39,10 @@ TRIAGE_FILE = "findings-triage.jsonl"
 #: practice but ``:::`` with newline-free keys is unambiguous).
 KEY_SEPARATOR = ":::"
 
-#: Allowed decision values.
-VALID_DECISIONS = frozenset({"approve", "reject"})
+#: Allowed decision values. ``ignore`` is a *permanent* decision: the route
+#: also persists a ``known_intentional`` entry so the engine filters the
+#: finding from the next round (see ``iterate.triage``).
+VALID_DECISIONS = frozenset({"approve", "reject", "ignore"})
 
 
 def _key(*, file: Any, line: Any, dimension: Any) -> str:
@@ -107,9 +111,12 @@ def record_decision(
 ) -> dict[str, Any]:
     """Append one triage decision; returns the stored record.
 
-    ``decision`` must be ``approve`` or ``reject`` (validated by the route's
-    request model; this function is defensive about it). Best-effort write:
-    a failing journal append never raises.
+    ``decision`` must be ``approve``, ``reject`` or ``ignore`` (validated by
+    the route's request model; this function is defensive about it). The
+    permanent ``ignore`` side effect (``known_intentional`` persistence) is
+    applied by the route through ``iterate.triage``, not here — this journal
+    is the human record. A failing journal append is surfaced to the caller
+    (``OSError``) instead of returning a phantom "ok" record.
     """
     if decision not in VALID_DECISIONS:
         raise ValueError(f"invalid decision: {decision!r} (allowed: {', '.join(sorted(VALID_DECISIONS))})")
