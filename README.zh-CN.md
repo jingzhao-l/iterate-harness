@@ -232,6 +232,12 @@ ih iterate run --template quick      # 以不同评审模板跑修复闭环
 ih iterate validate "pytest -x"      # 运行预配置校验命令；输出 allowed / reject_reason / exit_code
 ih iterate resume                    # 恢复上次会话
 ih iterate sessions                  # 列出已存会话（--limit N / --json），再 `ih iterate resume --session <id>` 续接
+# 无头运行进行中，在另一个终端：
+ih iterate control status            # 谁在跑、跑到哪、排队了什么
+ih iterate control nudge "下一轮重点看鉴权"   # 在下一个轮次边界注入一条指令
+ih iterate control pause --reason "先看下计划"  # 优雅停止，checkpoint 保留
+ih iterate control stop              # 不再需要这次运行：优雅停止
+ih iterate control clear             # 在生效前撤掉排队命令
 ```
 
 ### 报告、日志与审计
@@ -321,6 +327,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 - **确定性评审引擎** — `iterate_review` plan / aggregate / meta-review：跨轮去重、`known_intentional` 过滤、severity 排序、收敛统计、6 项报告一致性审计——全部纯计算，零 LLM 判断。
 - **两种模式** — `dry-run`（纯评审，绝不改文件）与 `normal`（评审 → 原子修复 → 验证 → 循环，验证失败经 git 隔离自动回滚）。
 - **引擎级收敛强制** — `IterateLoopPolicy` 位于内核查询循环：轮次上限、收敛自停、下一轮引导不受 prompt 注入影响。
+- **跨终端干预通道** — 无头 `ih iterate run` / `review` 过去是个黑盒：一旦开跑，唯一能影响它的手段是 `Ctrl-C`，而那是把进程连同当前轮次一起砍掉。现在运行会发布 `.iterate/run-control.json`，在另一个终端执行 `ih iterate control status|nudge|pause|stop|clear` 即可在下一个轮次边界生效：`nudge` 把一条指令插到下一轮指令之前（与 WebUI 的督促注入同一条路径）；`pause`/`stop` 优雅收尾，保留可续跑的 checkpoint，并把这次干预写进决策日志；`status` 只读，且能区分「可控的无头运行」与「TUI/WebUI 持有运行租约、有自己的控制入口」两种情况。没有活跃运行时发送命令会被拒绝并给出补救方法，而不是写进一个没人读的日志。
 - **findings 分诊** — `iterate_triage`：逐条 `y` 修复 / `n` 跳过 / `a` 永久忽略；`a` 持久化到 `known_intentional`，后续轮次自动过滤。同一个决定不必开模型会话：`ih iterate triage list|ignore|restore`（编号/区间/`all` 选择器，severity/维度/文件过滤，`--dry-run`，`--json`）直接写引擎真正读取的存储；Runs 页的**永久忽略**按钮做同一件事。journal 写失败时会回滚已写的过滤条目并退出 1——绝不会出现「finding 被隐藏却没有记录」。
 - **逐修复 diff 审批** — `require_fix_approval` 让 normal 模式闭环中的每次文件写入都走带 diff 预览的交互确认——即便处于全自动模式；硬拒绝（保护路径/禁止模式）绝不降级为可确认。
 - **Esc 中途干预** — 闭环运行中按 Esc：在下一轮边界暂停并弹出方向键菜单（跳过当前 finding / 收窄维度 / 直接停 / 继续）；再按一次 Esc 强制打断当前 turn。

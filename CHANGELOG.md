@@ -2,6 +2,23 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.25.0] - 2026-11-22
+
+**版本判断：minor。** 新增一个 CLI 子命令组（`ih iterate control status|nudge|pause|stop|clear`）与 `.iterate/` 下三个新文件；既有命令、参数与退出码集合不动（control 是新增入口），既有 API 形状与数据格式不动（`IterateLoopPolicy` 新增可选 `control_channel` 字段，默认 `None` 时行为与之前完全一致）。按加法语义判为 minor。
+
+- **无头运行第一次可以从另一个终端干预（`ih iterate control`）。** 此前 `ih iterate run` / `ih iterate review` 一旦开跑就是黑盒：唯一的干预手段是 `Ctrl-C`，它会连同当前轮次一起砍掉进程，且不留下任何审计。WebUI 的 pause / stop / nudge 只活在服务器进程内存里，够不到另一个终端里的运行。新增 `iterate/control.py`：运行进程发布 `.iterate/run-control.json`（`run_id` / `pid` / `role` / 状态 / 起止时间），任意终端向 append-only 的 `.iterate/run-control.jsonl` 追加 `{id, kind, content, created_at}`，运行进程用 `.iterate/run-control.cursor` 单调消费。`nudge` 进入与 WebUI 督促框相同的 `_pending_nudges` 注入路径；`pause` / `stop` 在下一个轮次边界优雅收尾并保留可续跑 checkpoint；每条被应用的命令都写一条 `decision` 审计（`control-nudge` / `control-pause` / `control-stop`）。
+- **`status` 只读，且区分「可控」与「只是有人在跑」。** `ih iterate control status [--json] [--require-run]` 显示运行方、pid、起始时间、排队命令、最近 checkpoint 与最近决策；`active`（本通道可控的无头运行）与 `leaseActive`（TUI/WebUI 持有运行租约）分开表达——后者明确写「not controllable」并指向它自己的 UI，避免操作者对着一个收不到命令的运行反复发 stop。`--require-run` 让监控脚本在空闲时以 1 退出。
+- **失败开放，且不会写进没人读的日志。** 控制文件缺失/畸形/游标写失败都只记 warning，下一轮重读，绝不阻断收敛闭环；没有活跃运行时 `nudge|pause|stop` 直接拒绝并给出可执行 remedy。游标带 `lastId`，日志被同长度替换时从头重读，不会静默跳过新命令；进程内 id 集合兜底一次失败的游标写入，保证同一条 nudge 不会注入两次。
+- **TUI/WebUI 行为不变。** 只有自己发布了运行状态的进程才会拿到 `ControlChannel`（`local_run_channel` 同时校验 pid 归属）；其余会话的 policy 保持 `control_channel=None`，零轮询、零行为变化。
+- **文档同步。** 中英 README 增加 control 命令块与能力条目；`DESIGN-iterate-harness.md` 新增 §11.4.3（文件协议、轮次边界、pause 语义、审计、只读状态与失败开放）、§17.4 模块表补 `iterate/control.py`，§11.2.1 补「跨终端干预」体验；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.25.0。另随本版同步 iterate-kernel fixture pin 至 0.1.16（独立提交 `8b9f1868`）。
+
+**核验（本机，2026-11-22）：**
+
+- 端到端（两个真实进程、临时项目）：后台 runner 发布运行状态后，另一终端 `ih iterate control status` 显示 `running (controllable) — console pid=…`；`nudge "focus on auth"` 在下一轮边界注入（runner 输出 `{"stage":"nudge","injected":"[用户督促]"}` 且指令含 `focus on auth`）；`stop --reason "e2e done"` 产出 `operator stop requested via ih iterate control: e2e done`；决策日志记录 `control-nudge focus on auth` 与 `control-stop e2e done`；运行结束后 `status --json` 显示 `active=false`、`status=finished`、`pending=[]`。
+- `pytest tests/ -q` → **3450 passed, 6 skipped**（基线 3421 + 6；新增 29 条：21 条文件协议/策略接线 + 8 条 CLI 退出码、JSON、只读与租约语义）。
+- `ruff check src tests` → All checks passed；`mypy src` → Success: no issues found in 288 source files；`npm test`（bootstrap + postinstall + ui）→ **89 passed**（其中 `node --test test/bootstrap.test.js` 68 passed）。
+- 前端 `tsc --noEmit` 通过；`vitest run` → 16 files / 161 tests passed；`vite build` 成功（85 modules）。
+
 ## [2.24.0] - 2026-11-19
 
 **版本判断：minor。** 新增一个 CLI 子命令组（`ih iterate triage list|ignore|restore`）与 WebUI 的 `ignore` 分诊决定；既有命令、参数与退出码集合不动（triage 是新增入口），既有 API 形状与 `.iterate` 数据格式不动（`FindingsTriageRequest.decision` 的 `Literal` 增加一个取值，纯加法），分诊日志继续是 append-only。按加法语义判为 minor。

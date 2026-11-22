@@ -28,12 +28,14 @@ All logic is pure and unit-testable; the engine only wires it in.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import cast
 
 from ..api.usage import UsageSnapshot
 from . import prompts
+from .control import ControlChannel, ControlCommand
 from .convergence_policy import (
     BREAKER_TRIPPED_LEVEL,
     ConvergenceDecision,
@@ -44,6 +46,8 @@ from .convergence_policy import (
     convergence_decision,
 )
 from .cost import CostMeter
+
+log = logging.getLogger(__name__)
 
 ITERATE_STATE_KEY = "iterate_state"
 
@@ -263,6 +267,17 @@ class IterateLoopPolicy:
     # backend interrupt path while an iterate loop is running; consumed at
     # the next round boundary.
     pause_requested: bool = False
+    # Cross-process intervention channel (``ih iterate control``): a journal
+    # polled at each request/round boundary. ``None`` means this run did not
+    # publish a control state (TUI/WebUI sessions), so polling costs nothing.
+    control_channel: ControlChannel | None = None
+    # Set by a ``pause``/``stop`` control command; consumed at the next round
+    # boundary as a graceful stop (the checkpoint stays resumable).
+    _control_stop_reason: str | None = None
+    # Commands already applied in this process. The on-disk cursor is the
+    # primary dedupe; this covers a failed cursor write without double-applying
+    # a nudge.
+    _control_seen_ids: set[str] = field(default_factory=set)
     # Stall-awareness (design §18.5): pause after this many consecutive rounds
     # with zero new findings (and no explicit converged flag) and ask the user
     # how to continue — resume / skip / narrow / stop. ``0`` disables the
@@ -338,6 +353,79 @@ class IterateLoopPolicy:
             return
         self._pending_nudges.append(stripped)
 
+    # -- cross-process control channel -------------------------------------
+
+    def _poll_control(self) -> None:
+        """Apply commands from ``ih iterate control`` (best effort).
+
+        A broken/missing journal must never break the review loop: the channel
+        is an operator convenience, not part of the convergence contract.
+        """
+        channel = self.control_channel
+        if channel is None:
+            return
+        try:
+            commands = channel.poll()
+        except Exception:  # noqa: BLE001 - control must not break the loop
+            log.warning("iterate control poll failed", exc_info=True)
+            return
+        applied: list[ControlCommand] = []
+        for command in commands:
+            applied.append(command)
+            if command.id in self._control_seen_ids:
+                continue
+            self._control_seen_ids.add(command.id)
+            if command.kind == "nudge":
+                self.inject_nudge(command.content)
+                self._audit_control(command)
+            elif command.kind in ("pause", "stop"):
+                # Headless runs have no pause menu; both are a graceful stop at
+                # the next round boundary. ``pause`` differs only in the reason
+                # the operator (and the report) sees: it says the checkpoint is
+                # resumable.
+                self._control_stop_reason = self._control_reason(command)
+                self._audit_control(command)
+        try:
+            channel.consume(applied)
+        except Exception:  # noqa: BLE001 - a failed cursor write is retried next poll
+            log.warning("iterate control consume failed", exc_info=True)
+
+    @staticmethod
+    def _control_reason(command: ControlCommand) -> str:
+        detail = (command.content or "").strip()
+        if command.kind == "pause":
+            reason = (
+                "operator pause requested via ih iterate control "
+                "(checkpoint kept; resume with `ih iterate resume`)"
+            )
+        else:
+            reason = "operator stop requested via ih iterate control"
+        return f"{reason}: {detail}" if detail else reason
+
+    def _audit_control(self, command: ControlCommand) -> None:
+        """Record the applied intervention in the run's decision log."""
+        project_root = getattr(self.control_channel, "project_root", None)
+        if project_root is None:
+            return
+        try:
+            from .decision_log import append_entry, make_entry
+
+            append_entry(
+                project_root,
+                make_entry(
+                    entry_type="decision",
+                    round_number=self._rounds_seen,
+                    data={
+                        "kind": f"control-{command.kind}",
+                        "detail": command.content,
+                        "source": "ih iterate control",
+                        "commandId": command.id,
+                    },
+                ),
+            )
+        except Exception:  # noqa: BLE001 - audit must not break the loop
+            log.warning("iterate control audit failed", exc_info=True)
+
     def on_turn_end(
         self,
         tool_metadata: dict[str, object] | None,
@@ -345,6 +433,10 @@ class IterateLoopPolicy:
         model: str,
     ) -> LoopDecision:
         """Evaluate one completed turn; return the engine decision."""
+        # Operator commands sent from another terminal (``ih iterate control``)
+        # are applied before this turn is judged, so a stop lands on the round
+        # boundary it was requested for instead of one round later.
+        self._poll_control()
         tokens_before = self.cost_meter.total_tokens
         usd_before = self.cost_meter.total_cost_usd
         self.cost_meter.accumulate(usage, model)
@@ -414,6 +506,10 @@ class IterateLoopPolicy:
         honored, then records the (deferred) request timestamp. Returns ``0.0``
         when no cap is configured or the loop is within the limit.
         """
+        # Poll here as well as at turn end: a command that arrives while the
+        # model is composing a long turn is picked up before the next request,
+        # so the following round boundary can act on it.
+        self._poll_control()
         timestamp = time.monotonic() if now is None else now
         delay = self._throttle_delay(timestamp)
         if self.max_turns_per_minute is not None and self.max_turns_per_minute > 0:
@@ -561,6 +657,20 @@ class IterateLoopPolicy:
     def _decide(
         self, snapshot: AggregateSnapshot, progress: object, kernel: ConvergenceDecision | None
     ) -> LoopDecision:
+        # An explicit operator stop/pause outranks every automatic policy: the
+        # person at the console asked for this boundary. Unlike the automatic
+        # stops it must halt even when ``stop_on_convergence`` is disabled —
+        # otherwise the command would be silently ignored.
+        if self._control_stop_reason is not None:
+            reason = self._control_stop_reason
+            self._control_stop_reason = None
+            return LoopDecision(
+                stop_reason=reason,
+                inject_message=prompts.convergence_stop_notice(
+                    reason, snapshot.total_findings
+                ),
+                progress=progress,
+            )
         last_new = snapshot.findings_by_round[-1] if snapshot.findings_by_round else 0
         # The breaker is the loop's own limit, so it holds whether or not the kernel could be
         # consulted — the spinning, gateless run is exactly the one that cannot feed the contract.

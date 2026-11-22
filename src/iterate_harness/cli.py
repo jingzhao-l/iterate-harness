@@ -707,7 +707,7 @@ app = typer.Typer(
 
 auth_app = typer.Typer(name="auth", help="Manage authentication")
 provider_app = typer.Typer(name="provider", help="Manage provider profiles")
-iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/log/trend/diff/triage/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
+iterate_app = typer.Typer(name="iterate", help="Iterate review/fix loop (init/review/run/resume/control/log/trend/diff/triage/agents/report/batch/schedule/hook/onboard/personalize/doctor/status/validate/sessions/cron/refresh/reonboard)")
 web_app = typer.Typer(name="web", help="WebUI management console")
 memory_app = typer.Typer(name="memory", help="Read and write the project memory bank (list/search/show/preview/add/remove)")
 hooks_app = typer.Typer(name="hooks", help="Inspect lifecycle hooks (list/log/test)")
@@ -719,11 +719,16 @@ triage_app = typer.Typer(
     name="triage",
     help="List findings and mark intentional ones so the engine stops reporting them (list/ignore/restore)",
 )
+control_app = typer.Typer(
+    name="control",
+    help="Send pause/stop/nudge to a running headless loop (status/nudge/pause/stop/clear)",
+)
 
 app.add_typer(auth_app)
 app.add_typer(provider_app)
 app.add_typer(iterate_app)
 iterate_app.add_typer(triage_app)
+iterate_app.add_typer(control_app)
 app.add_typer(web_app)
 app.add_typer(memory_app)
 app.add_typer(hooks_app)
@@ -907,7 +912,25 @@ def _run_headless(kickoff: str, branch: str | None = None) -> None:
     # (or a cron job) — two writers on ``.iterate/`` and on the same git tree.
     try:
         with claim_run_lease(Path.cwd(), role=ROLE_CONSOLE):
-            asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
+            # Publish the control state before the engine is constructed, so
+            # the loop policy can pick up ``ih iterate control`` commands from
+            # another terminal. A failure here must not stop the run.
+            from iterate_harness.iterate.control import begin_run, end_run
+
+            run_id: str | None = None
+            try:
+                run_id = begin_run(Path.cwd())
+            except Exception as exc:  # noqa: BLE001 - control is additive
+                print(
+                    f"Warning: could not publish the control channel ({exc}); "
+                    "`ih iterate control` will not reach this run.",
+                    file=sys.stderr,
+                )
+            try:
+                asyncio.run(run_print_mode(prompt=kickoff, permission_mode="full_auto"))
+            finally:
+                if run_id is not None:
+                    end_run(Path.cwd(), run_id)
     except RunLeaseConflictError as exc:
         print(str(exc), file=sys.stderr)
         raise typer.Exit(1) from exc
@@ -1299,6 +1322,243 @@ def iterate_resume(
             restore_session_id=resumed_id,
         )
     )
+
+
+def _control_fail(exc: Exception) -> None:
+    """Print a control-channel refusal with its executable remedy."""
+    print(f"control: {exc}", file=sys.stderr)
+    remedy = getattr(exc, "remedy", "")
+    if remedy:
+        print(f"Hint: {remedy}", file=sys.stderr)
+    raise typer.Exit(1)
+
+
+def _format_control_time(epoch: object) -> str:
+    from datetime import datetime, timezone
+
+    if isinstance(epoch, str):
+        text = epoch.strip()
+        if not text:
+            return "unknown"
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return text
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    try:
+        value = float(epoch)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "unknown"
+    return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def _render_control_status(view: dict[str, object]) -> str:
+    lines: list[str] = []
+    run = view.get("run")
+    run = run if isinstance(run, dict) else None
+    active = bool(view.get("active"))
+    if active and run is not None:
+        lines.append(
+            "Iterate run: running (controllable) — "
+            f"{run.get('role', 'console')} pid={run.get('pid')} "
+            f"since {_format_control_time(run.get('started_at'))}"
+        )
+        lines.append(f"  run id: {run.get('run_id', '?')}")
+    elif view.get("leaseActive"):
+        lines.append(
+            "Iterate run: active (not controllable) — another front end holds "
+            "the run lease"
+        )
+        lines.append(
+            "  note: only headless `ih iterate run` / `ih iterate review` publish "
+            "a control channel; control a TUI/WebUI run from its own UI"
+        )
+    else:
+        lines.append("Iterate run: idle (no active run)")
+        if view.get("stale"):
+            lines.append(
+                "  note: a previous run left a 'running' control state but its "
+                "process is gone (stale, not active)"
+            )
+        lines.append("  hint: start one with `ih iterate run`, then send commands from another terminal")
+    lease = view.get("lease")
+    if isinstance(lease, dict):
+        lines.append(
+            f"  lease: {lease.get('role', '?')} pid={lease.get('pid')}@{lease.get('host', '?')}"
+        )
+    pending = view.get("pending")
+    pending = pending if isinstance(pending, list) else []
+    lines.append(f"  pending commands: {len(pending)}")
+    for command in pending:
+        if not isinstance(command, dict):
+            continue
+        content = str(command.get("content") or "").strip()
+        suffix = f" — {content[:80]}" if content else ""
+        lines.append(f"    - {command.get('kind', '?')}{suffix}")
+    checkpoint = view.get("checkpoint")
+    if isinstance(checkpoint, dict):
+        tokens = int(checkpoint.get("input_tokens") or 0) + int(
+            checkpoint.get("output_tokens") or 0
+        )
+        try:
+            cost = float(checkpoint.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            cost = 0.0
+        lines.append(
+            "  last checkpoint: "
+            f"round {checkpoint.get('round', '?')}, "
+            f"{checkpoint.get('total_findings', '?')} finding(s), "
+            f"{tokens:,} tokens, ${cost:.4f}"
+        )
+    else:
+        lines.append("  last checkpoint: none")
+    last = view.get("lastEntry")
+    if isinstance(last, dict):
+        lines.append(
+            f"  last decision: {last.get('type', '?')} round {last.get('round', '?')} "
+            f"at {_format_control_time(last.get('timestamp'))}"
+        )
+    else:
+        lines.append("  last decision: none")
+    return "\n".join(lines)
+
+
+@control_app.command("status")
+def control_status(
+    as_json: bool = typer.Option(False, "--json", help="Emit the structured status as JSON"),
+    require_run: bool = typer.Option(
+        False,
+        "--require-run",
+        help="Exit 1 when no iterate run is active (for scripts / monitoring)",
+    ),
+) -> None:
+    """Show the live headless run and any queued control commands.
+
+    Read-only: it never mutates the run, the lease or the checkpoint. Works
+    from any terminal pointed at the project root.
+
+    Examples:
+        ih iterate control status
+        ih iterate control status --json
+        ih iterate control status --require-run
+    """
+    from iterate_harness.iterate.control import run_status
+
+    as_json = _typer_flag(as_json)
+    require_run = _typer_flag(require_run)
+    view = run_status(Path.cwd())
+    if as_json:
+        print(json.dumps(view, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(_render_control_status(view))
+    if require_run and not view.get("active"):
+        raise typer.Exit(1)
+
+
+@control_app.command("nudge")
+def control_nudge(
+    text: list[str] = typer.Argument(..., help="Instruction to inject before the next round"),
+    as_json: bool = typer.Option(False, "--json", help="Emit the queued command as JSON"),
+) -> None:
+    """Queue an instruction for the next round of the live run.
+
+    The text is prepended to the canonical next-round instruction, so the
+    model acts on it before continuing. This is the headless equivalent of the
+    WebUI's nudge box.
+
+    Examples:
+        ih iterate control nudge "focus the next round on auth"
+        ih iterate control nudge --json "skip the style dimension"
+    """
+    from iterate_harness.iterate.control import ControlChannelError, append_command
+
+    as_json = _typer_flag(as_json)
+    content = " ".join(part for part in text if part).strip()
+    try:
+        command = append_command(Path.cwd(), "nudge", content)
+    except ControlChannelError as exc:
+        _control_fail(exc)
+        return
+    if as_json:
+        print(json.dumps(command.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    print(
+        f"Queued nudge {command.id[:8]} — it will be injected before the next round."
+    )
+
+
+def _request_stop(kind: str, reason: str, as_json: bool) -> None:
+    from iterate_harness.iterate.control import ControlChannelError, append_command
+
+    try:
+        command = append_command(Path.cwd(), kind, reason)
+    except ControlChannelError as exc:
+        _control_fail(exc)
+        return
+    if as_json:
+        print(json.dumps(command.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    if kind == "pause":
+        print(
+            "Pause requested. Headless runs have no interactive pause menu: the "
+            "loop stops gracefully at the next round boundary and keeps the "
+            "checkpoint. Continue with `ih iterate resume`."
+        )
+    else:
+        print(
+            "Stop requested. The loop stops gracefully at the next round "
+            "boundary; the checkpoint is kept, so `ih iterate resume` can "
+            "continue later."
+        )
+
+
+@control_app.command("pause")
+def control_pause(
+    reason: str = typer.Option("", "--reason", help="Why you are pausing (shown in the run report)"),
+    as_json: bool = typer.Option(False, "--json", help="Emit the queued command as JSON"),
+) -> None:
+    """Ask the live run to stop gracefully at the next round boundary.
+
+    Headless runs have no pause menu, so "pause" means a clean stop with the
+    checkpoint intact — resume later with ``ih iterate resume``. Use
+    ``nudge`` if you want the loop to keep running with new instructions.
+    """
+    reason = _typer_str(reason)
+    _request_stop("pause", reason, _typer_flag(as_json))
+
+
+@control_app.command("stop")
+def control_stop(
+    reason: str = typer.Option("", "--reason", help="Why you are stopping (shown in the run report)"),
+    as_json: bool = typer.Option(False, "--json", help="Emit the queued command as JSON"),
+) -> None:
+    """Stop the live run gracefully at the next round boundary.
+
+    Unlike Ctrl-C, this lets the current round finish, keeps the checkpoint and
+    records the intervention in the decision log.
+    """
+    reason = _typer_str(reason)
+    _request_stop("stop", reason, _typer_flag(as_json))
+
+
+@control_app.command("clear")
+def control_clear(
+    as_json: bool = typer.Option(False, "--json", help="Emit the result as JSON"),
+) -> None:
+    """Discard queued control commands that the run has not consumed yet."""
+    from iterate_harness.iterate.control import clear_pending
+
+    as_json = _typer_flag(as_json)
+    dropped = clear_pending(Path.cwd())
+    if as_json:
+        print(json.dumps({"cleared": dropped}, ensure_ascii=False, indent=2))
+        return
+    if dropped:
+        print(f"Cleared {dropped} pending control command(s).")
+    else:
+        print("No pending control commands.")
 
 
 @iterate_app.command("validate")

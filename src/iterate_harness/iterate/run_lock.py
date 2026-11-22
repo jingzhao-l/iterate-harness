@@ -127,6 +127,11 @@ def _pid_is_live(pid: int) -> bool:
     return True
 
 
+def pid_is_live(pid: int) -> bool:
+    """Public alias for the lease liveness check (control-channel status)."""
+    return _pid_is_live(pid)
+
+
 def read_lease(project_root: str | Path) -> RunLease | None:
     """Read the current lease, or ``None`` when absent/unreadable."""
     path = lease_path(project_root)

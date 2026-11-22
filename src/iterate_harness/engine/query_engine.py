@@ -83,7 +83,7 @@ def _default_iterate_policy(cwd: Path) -> IterateLoopPolicy | None:
             return None
         project = project_config(cwd)
         rounds = effective_review_rounds(kernel, project)
-        return IterateLoopPolicy(
+        policy = IterateLoopPolicy(
             max_review_rounds=rounds,
             require_fix_approval=kernel.require_fix_approval,
             total_token_budget=project.config.token_budget,
@@ -99,6 +99,16 @@ def _default_iterate_policy(cwd: Path) -> IterateLoopPolicy | None:
                 for model, price in (kernel.price_overrides or {}).items()
             },
         )
+        # Attach the cross-process control channel only when *this* process
+        # published a run state (headless ``ih iterate run/review``). TUI and
+        # WebUI sessions do not, so their behaviour is unchanged.
+        try:
+            from iterate_harness.iterate.control import local_run_channel
+
+            policy.control_channel = local_run_channel(cwd)
+        except Exception:  # noqa: BLE001 - control is additive, never required
+            log.warning("iterate control channel wiring failed", exc_info=True)
+        return policy
     except Exception:  # noqa: BLE001 - policy wiring must never break the engine
         # The fail-open stance is deliberate, but the silence is not: if the
         # iterate loop silently turns off (malformed project config,

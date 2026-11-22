@@ -259,6 +259,12 @@ ih iterate run --template quick      # fix loop with a different review template
 ih iterate validate "pytest -x"      # run a preconfigured validation command; prints allowed / reject_reason / exit_code
 ih iterate resume                    # resume the last session
 ih iterate sessions                  # list saved sessions (--limit N, --json), then `ih iterate resume --session <id>`
+# from a second terminal, while a headless run is going:
+ih iterate control status            # who is running, where it is, what is queued
+ih iterate control nudge "focus the next round on auth"   # inject an instruction at the next boundary
+ih iterate control pause --reason "reviewing the plan"    # graceful stop, checkpoint kept
+ih iterate control stop              # graceful stop for a run you no longer need
+ih iterate control clear             # drop queued commands before they are applied
 ```
 
 ### Reports, logs & audit
@@ -349,6 +355,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Deterministic review engine** — `iterate_review` plan / aggregate / meta-review: cross-round dedupe, `known_intentional` filtering, severity sort, convergence math, 6-check report audit — all pure computation, zero LLM judgment.
 - **Two modes** — `dry-run` (read-only review, never touches files) and `normal` (review → atomic fix → validate → loop, validation failure rolls the round back via git isolation).
 - **Engine-enforced convergence** — `IterateLoopPolicy` lives in the kernel query loop: round caps, convergence auto-stop and next-round steering cannot be prompt-injected away.
+- **Cross-terminal intervention channel** — a headless `ih iterate run` / `review` used to be a black box: once started, the only way to influence it was `Ctrl-C`, which killed the process mid-round. The run now publishes `.iterate/run-control.json`, and `ih iterate control status|nudge|pause|stop|clear` from a second terminal acts on it at the next round boundary. `nudge` prepends an instruction to the next-round message (the same path as the WebUI nudge box); `pause`/`stop` end the loop gracefully, keep the checkpoint resumable and record the intervention in the decision log; `status` is read-only and distinguishes a controllable headless run from a TUI/WebUI run that holds the lease but has its own controls. Sending a command with no live run is refused with a remedy instead of writing into a journal nobody reads.
 - **Findings triage** — `iterate_triage`: walk findings with `y` fix / `n` skip / `a` always-ignore; `a` persists to `known_intentional` so future rounds filter it automatically. The same decision is reachable without a model session: `ih iterate triage list|ignore|restore` (numbered selectors, severity/dimension/file filters, `--dry-run`, `--json`) writes the stores the engine actually reads, and the Runs page's **永久忽略 / permanently ignore** button performs the same write. A rollback keeps the two halves consistent: if the journal record cannot be written, the filter entries are removed again, so a finding is never hidden without a record.
 - **Per-fix diff approval** — `require_fix_approval` routes every file write during a normal-mode loop through an interactive prompt with an inline diff preview — even in full-auto mode; hard denials are never downgraded.
 - **Esc intervention** — press Esc mid-loop: the loop pauses at the next round boundary and opens a directional-key menu (skip top finding / narrow dimensions / stop / resume); a second Esc force-interrupts the turn.
