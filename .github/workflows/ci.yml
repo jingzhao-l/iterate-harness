@@ -75,7 +75,7 @@ jobs:
           tar -czf web-dist.tar.gz -C frontend/web dist
 
       - name: Publish the frontend build
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: web-dist-tarball
           path: web-dist.tar.gz
@@ -449,7 +449,7 @@ jobs:
         # the bucket job itself wedges, this step never runs and the artifact count stays 0; it ships
         # the log for every case where pytest stopped but the runner did not.
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: pytest-ci-log-${{ matrix.python-version }}-${{ matrix.bucket.id }}
           # Both logs, because the watchdog writes to a descriptor it owns rather than to the stream
