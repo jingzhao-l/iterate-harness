@@ -29,6 +29,7 @@ import Trend from "./pages/Trend";
 import Workspaces from "./pages/Workspaces";
 import Memory from "./pages/Memory";
 import Hooks from "./pages/Hooks";
+import Defense from "./pages/Defense";
 import Permissions from "./pages/Permissions";
 
 const NAV_ITEMS = [
@@ -50,6 +51,7 @@ const NAV_ITEMS = [
   { to: "/memory", label: "记忆", end: false },
   { to: "/hooks", label: "生命周期钩子", end: false },
   { to: "/permissions", label: "权限", end: false },
+  { to: "/defense", label: "防御守卫", end: false },
 ];
 
 // Single-key → route map for the "g <key>" jump shortcuts.
@@ -72,6 +74,7 @@ const G_BUFFER_ROUTES: Record<string, string> = {
   m: "/memory",
   h: "/hooks",
   x: "/permissions",
+  f: "/defense",
 };
 
 const CONN_LABELS: Record<string, string> = {
@@ -259,6 +262,7 @@ export default function App(): React.JSX.Element {
             <Route path="/memory" element={<Memory />} />
             <Route path="/hooks" element={<Hooks />} />
             <Route path="/permissions" element={<Permissions />} />
+            <Route path="/defense" element={<Defense />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </ErrorBoundary>

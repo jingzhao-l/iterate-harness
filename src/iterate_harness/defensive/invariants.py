@@ -22,10 +22,29 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from iterate_harness.defensive.journal import (
+    OUTCOME_ERROR,
+    OUTCOME_FAIL,
+    OUTCOME_PASS,
+    OUTCOME_UNMEASURED,
+)
 from iterate_harness.iterate.validate import DEFAULT_TIMEOUT_MS, run_command
 
+if TYPE_CHECKING:
+    from iterate_harness.iterate.config_loader import EffectiveConfig
+
 log = logging.getLogger(__name__)
+
+#: Where the effective guard came from. These values are part of the public
+#: contract: the console renders ``disabled`` as "explicitly disabled" and
+#: ``validation-fallback`` as a pre-v3.0 compatibility path, and
+#: ``ih defense show`` prints the same labels.
+SOURCE_INVARIANTS = "invariants"
+SOURCE_VALIDATION_FALLBACK = "validation-fallback"
+SOURCE_DISABLED = "disabled"
+SOURCE_NONE = "none"
 
 #: Shell-chaining metacharacters that must never appear in an executable
 #: command string (same canonical set as ``iterate_cli/personalize.py``'s
@@ -53,6 +72,109 @@ class InvariantReport:
     passed: bool = True
     checks_run: int = 0
     violations: list[InvariantViolation] = field(default_factory=list)
+
+
+@dataclass
+class ResolvedInvariants:
+    """The effective invariant guard a project would run, before any execution.
+
+    This is the *resolution* half of the guard, shared by the kernel, the
+    inventory (``ih defense show`` / ``GET /api/v1/defense``) and the manual
+    gate so all three can never disagree about which checks are active.
+    ``configured`` means the project declared a guard (even an intentionally
+    empty one); ``checks`` is the number of runnable checks.
+    """
+
+    source: str = SOURCE_NONE
+    configured: bool = False
+    ensure: list[str] = field(default_factory=list)
+    commands: dict[str, list[str]] = field(default_factory=dict)
+    dropped_empty_modules: list[str] = field(default_factory=list)
+
+    @property
+    def checks(self) -> int:
+        """Number of runnable checks (file assertions + command entries)."""
+        return len(self.ensure) + sum(len(items) for items in self.commands.values())
+
+
+def resolve_invariants(effective: EffectiveConfig) -> ResolvedInvariants:
+    """Resolve the effective invariant command set from project config.
+
+    Follows the skill's degradation rule: when the raw project config has no
+    ``invariants`` section, invariant checking falls back to the configured
+    ``validation.commands`` so pre-v3.0 projects still get post-edit validation
+    for free. An explicit ``invariants: {}`` (or only empty command lists)
+    disables the guard on purpose instead of falling back.
+
+    Empty module command lists are dropped before the configured/disabled
+    decision: ``{"core": []}`` is not a check, and treating it as "configured"
+    made every edit pass a guard that measured nothing.
+    """
+    raw_override = effective.override
+    has_invariants = isinstance(raw_override, dict) and isinstance(
+        raw_override.get("invariants"), dict
+    )
+    invariants = effective.config.invariants
+    resolved_commands: dict[str, list[str]] = {}
+    dropped_empty_modules: list[str] = []
+    if invariants is not None:
+        resolved_commands = {
+            module: list(commands)
+            for module, commands in invariants.commands.items()
+            if commands
+        }
+        dropped_empty_modules = sorted(
+            module for module, commands in invariants.commands.items() if not commands
+        )
+    if invariants is not None and (resolved_commands or invariants.ensure):
+        return ResolvedInvariants(
+            source=SOURCE_INVARIANTS,
+            configured=True,
+            ensure=list(invariants.ensure),
+            commands=resolved_commands,
+            dropped_empty_modules=dropped_empty_modules,
+        )
+    if has_invariants:
+        # An explicit ``invariants: {}`` (or only empty module lists) disables
+        # the guard on purpose instead of silently falling back. The config
+        # loader normalizes an empty section to ``None``, so the raw override
+        # -- not the typed config -- is what distinguishes this from "absent".
+        return ResolvedInvariants(
+            source=SOURCE_DISABLED,
+            configured=True,
+            dropped_empty_modules=dropped_empty_modules,
+        )
+    raw_fallback = effective.config.validation.commands
+    fallback = {
+        module: list(commands) for module, commands in raw_fallback.items() if commands
+    }
+    dropped_empty_modules = sorted(
+        {
+            *dropped_empty_modules,
+            *(module for module, commands in raw_fallback.items() if not commands),
+        }
+    )
+    return ResolvedInvariants(
+        source=SOURCE_VALIDATION_FALLBACK if fallback else SOURCE_NONE,
+        configured=bool(fallback),
+        commands=fallback,
+        dropped_empty_modules=dropped_empty_modules,
+    )
+
+
+def report_outcome(report: InvariantReport) -> str:
+    """Map a report onto the journal's outcome vocabulary.
+
+    ``unmeasured`` is not a pass: a guard that ran zero checks cannot certify
+    an edit. A refused command (shell metacharacters in the config) is an
+    ``error`` -- the check could not be evaluated -- while a command that ran
+    and exited non-zero is a ``fail``.
+    """
+    if report.passed:
+        return OUTCOME_PASS if report.checks_run > 0 else OUTCOME_UNMEASURED
+    if any(violation.kind == "refused" for violation in report.violations):
+        return OUTCOME_ERROR
+    return OUTCOME_FAIL
 
 
 def command_is_safe(command: str) -> bool:

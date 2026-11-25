@@ -316,6 +316,13 @@ ih permissions                     # the merged policy the engine enforces
 ih permissions show --json --strict  # CI gate: exit 1 on a rule that can never win
 ih permissions check read_file --path .env  # would this call run / ask / be refused?
 ih permissions check bash --command 'rm -rf build' --mode full_auto
+ih defense show                    # the guard code mode will actually run (source, checks, problems)
+ih defense show --json --strict    # CI gate: exit 1 on a check that can never run
+ih defense journal                 # what the guard checked / rolled back, newest first
+ih defense journal --kind rollback --limit 20
+ih defense journal --format csv --out defense.csv  # export the trail
+ih defense check                   # run the invariants now (records a manual-check verdict)
+ih defense check --dry-run --json  # resolve + count without executing or recording
 ```
 
 ### Team & live workers
@@ -381,13 +388,14 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Project memory bank** — the engine injects persistent project memory (a `MEMORY.md` index plus topic files, under the harness data dir) into every runtime prompt, but until now the operator could only see it from the REPL's `/memory` command. `ih memory list|search|show|preview|add|remove` and the WebUI **记忆** page (`g m`) expose the same bank read-only, run the engine's own relevance search, and preview — through the *same code path as the prompt* — exactly what the model would be told for a task, including which memories were clipped by the per-file budget. `ih memory add`/the console's create form refuse to overwrite an existing file unless asked, so a stray save never silently replaces remembered context.
 - **Lifecycle-hook observability & test** — the engine loads lifecycle hooks from `settings.hooks` and enabled plugins and runs them inline in front of tool calls and turn boundaries, but until now the result of every execution was discarded: a hook that rejected a tool call surfaced only as a mystery refusal inside a run, and a hook registered under a misspelled event name was silently dropped. `ih hooks list|log|test` and the WebUI **生命周期钩子** page (`g h`) close that gap: the inventory lists every registered hook (event, type, source, matcher, command/prompt/url, timeout, block-on-failure) and statically flags the ones that can never run (missing executable, malformed URL, empty prompt) with copyable remedies; the log pages `.iterate/hook-journal.jsonl` — the exact trail the engine writes — filtered by event/type/outcome and exported as Markdown / CSV / JSON; and `ih hooks test <event>` runs that event's hooks **now** through the engine's own executor with a synthetic payload (`--tool-name` / `--prompt` / `--notification-type` / `--payload`), so a broken `block_on_failure` gate is caught before a run instead of during one. Prompt/agent hooks are reported as skipped unless `--with-model` is passed, `--dry-run` only reports what would run, and `--require-match` turns "nothing is registered for this event" into a CI failure. The same section feeds `ih capabilities`, so a broken hook config fails CI (`--strict`) before a run does.
 - **Permission policy & decision simulator** — the layered policy (mode, explicit tool allow/deny lists, path and command rules, the built-in sensitive-path boundary, iterate `protected_paths` / `risk_areas` and `forbidden_fix_patterns`) was previously observable only as the *outcome* of a live tool call: "would this be allowed?" meant running the agent and watching a call stop. `ih permissions show` and the WebUI **权限** page (`g x`) project the **merged** policy the engine actually enforces (boundaries included), and `ih permissions check` / the page's 预演 form run the engine's **own** checker over a hypothetical call — same path/command/content normalization, so the verdict matches a live one. `--json` is stable for scripts; exit codes are CI-friendly (0 allowed / 2 needs confirmation / 1 denied or invalid input); `--strict`/`--mode` let a CI job assert "this command is blocked in this mode" before a run. A rule that can never take effect (empty pattern, allow/deny collision, invalid regex, iterate boundaries disabled) is reported with a copyable remedy instead of a silent log line — the same check now also runs inside `ih doctor` (`permission_policy`). The page is read-only: it never writes settings, executes a tool or contacts a provider.
+- **Defensive-kernel observability & manual gate** — code mode snapshots every mutating edit, re-runs the project invariants and silently rolls the edit back on a violation, but until now the verdict existed only as a tool error inside a run that had already scrolled away. `ih defense show|journal|check` and the WebUI **防御守卫** page (`g f`) close that gap. `show` resolves the guard with the kernel's **own** rules — `invariants`, the pre-v3.0 `validation.commands` fallback, an explicit `invariants: {}` disable, empty module lists dropped — reports entries that can never execute (shell metacharacters in a configured command, empty `ensure`) with copyable remedies, and reconstructs declared/held/falsified assumptions from the decision log; `--json` is the same payload as `GET /api/v1/defense`, and `--strict` fails CI on a guard that cannot protect anything. `journal` reads `.iterate/defense-journal.jsonl` — the exact trail the kernel writes on every invariant run, rollback (including a tool's own failure) and zero-check `unmeasured` verdict — filtered by kind/outcome/tool, paged newest-first and exported as table / Markdown / CSV / JSON. `check` runs the same checks without an agent run, records a `manual-check` verdict (including `unmeasured`, because a guard that measured nothing is the problem), and returns 0 passed / 1 failed or refused / 2 nothing runnable; `--dry-run` never executes and never records. The page mirrors all of it read-only: it never runs an invariant command, calls a model or writes config. The same inventory feeds a new `defense_guard` check in `ih doctor`.
 
 ### WebUI management console
 
 `ih web serve` starts a loopback-only console (`--project <root>` to pin a
 project, `--no-browser` for servers). Pages: Dashboard, Runs timeline, Trend,
 **Run diff**, **Gate**, **Schedules**, **Capabilities**, **自检 (doctor)**,
-**审计 (audit)**, **记忆 (memory)**, **生命周期钩子 (hooks)**, **权限 (permissions)**, Workspaces, **Team**, Checkpoints,
+**审计 (audit)**, **记忆 (memory)**, **生命周期钩子 (hooks)**, **权限 (permissions)**, **防御守卫 (defense)**, Workspaces, **Team**, Checkpoints,
 Budget & Rate, Config, Reports. The **Trend**
 page (`g t` shortcut) renders the same per-run new/fixed/regressed history and
 stubborn/open findings as `ih iterate trend`, live-updating as new decision-log
@@ -498,6 +506,18 @@ can never take effect is listed with a copyable remedy instead of a silent log
 line. The page is read-only: it never writes settings, executes a tool or
 contacts a provider, and it shows 项目/读取时间 so the operator knows which
 config the policy came from.
+
+The **防御守卫** page (`g f`) is the console's half of `ih defense`: the guard
+code mode will actually enforce — resolved source (`invariants` /
+`validation.commands` fallback / explicitly disabled / not configured), check
+count, `ensure` entries and per-module command lists — the configuration
+problems that would make every edit roll back (a refused command, an empty
+guard) with copyable remedies, the assumptions the agent declared/held/falsified,
+and the append-only rollback trail from `.iterate/defense-journal.jsonl`
+filtered by kind/outcome/tool, paged newest-first and exported as Markdown /
+CSV / JSON. It also gives you the exact `ih defense check` command to run the
+same gate from a terminal. The page is read-only: it never executes an
+invariant command, invokes a model or writes config.
 
 ### Cost, resources & gates
 

@@ -711,6 +711,102 @@ export interface HookLogView {
   entries: HookLogEntry[];
 }
 
+// ---- Defensive kernel (design §17.3 P17) ----
+
+export interface DefenseViolation {
+  kind: string;
+  label: string;
+  detail: string;
+}
+
+export interface DefenseEvent {
+  id: string;
+  timestamp: string;
+  kind: string;
+  outcome: string;
+  tool: string;
+  path: string;
+  trigger: string;
+  reason: string;
+  checks_run: number;
+  duration_ms: number;
+  rolled_back: boolean;
+  violations: DefenseViolation[];
+}
+
+export interface DefenseAssumption {
+  statement: string;
+  status: string;
+  detail: string;
+  timestamp: string;
+  round: string;
+}
+
+export interface DefensePolicy {
+  source: string;
+  source_label: string;
+  configured: boolean;
+  enabled: boolean;
+  ensure: string[];
+  commands: Record<string, string[]>;
+  modules: number;
+  checks: number;
+  dropped_empty_modules: string[];
+  notes: string[];
+}
+
+export interface DefenseJournalSummary {
+  total: number;
+  rollbacks: number;
+  invariant_runs: number;
+  manual_checks: number;
+  last_verdict: string;
+  last_event_at: string;
+  by_kind: Record<string, number>;
+  by_outcome: Record<string, number>;
+}
+
+export interface DefenseSummary {
+  checks: number;
+  modules: number;
+  rollbacks: number;
+  invariant_runs: number;
+  last_verdict: string;
+  last_event_at: string;
+  assumptions: number;
+  falsified_assumptions: number;
+}
+
+export interface DefenseView {
+  project_root: string;
+  generated_at: string;
+  has_problems: boolean;
+  problems: CapabilityProblem[];
+  policy: DefensePolicy;
+  assumptions: DefenseAssumption[];
+  assumption_summary: Record<string, number>;
+  journal: DefenseJournalSummary;
+  recent_events: DefenseEvent[];
+  summary: DefenseSummary;
+  journal_kinds: string[];
+  journal_outcomes: string[];
+  journal_tools: string[];
+}
+
+export interface DefenseJournalView {
+  project_root: string;
+  generated_at: string;
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  kinds: string[];
+  outcomes: string[];
+  tools: string[];
+  entries: DefenseEvent[];
+}
+
 export interface MemoryEntry {
   name: string;
   title: string;

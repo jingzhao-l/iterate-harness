@@ -814,6 +814,107 @@ class HookLogView(BaseModel):
     entries: list[HookLogEntry] = Field(default_factory=list)
 
 
+class DefenseViolation(BaseModel):
+    """One invariant violation that caused (or would cause) a rollback."""
+
+    kind: str
+    label: str
+    detail: str
+
+
+class DefenseEvent(BaseModel):
+    """One defensive-kernel verdict from ``.iterate/defense-journal.jsonl``.
+
+    ``rollback`` covers an edit that was reverted, ``invariant`` a guard
+    verdict that allowed the edit to commit, and ``manual-check`` an operator
+    trigger from ``ih defense check``. ``unmeasured`` is a first-class outcome:
+    a guard that ran zero checks did not pass.
+    """
+
+    id: str = ""
+    timestamp: str = ""
+    kind: str = ""
+    outcome: str = ""
+    tool: str = ""
+    path: str = ""
+    trigger: str = ""
+    reason: str = ""
+    checks_run: int = 0
+    duration_ms: int = 0
+    rolled_back: bool = False
+    violations: list[DefenseViolation] = Field(default_factory=list)
+
+
+class DefenseAssumption(BaseModel):
+    """The latest state of one statement declared by the agent."""
+
+    statement: str
+    status: str = "declared"
+    detail: str = ""
+    timestamp: str = ""
+    round: str = ""
+
+
+class DefensePolicy(BaseModel):
+    """The effective invariant guard, resolved with the kernel's own rules.
+
+    ``source`` is ``invariants`` / ``validation-fallback`` / ``disabled`` /
+    ``none``; ``configured`` distinguishes an intentional empty section from a
+    project that never configured a guard, and ``checks`` counts runnable
+    checks after empty module lists are dropped.
+    """
+
+    source: str = "none"
+    source_label: str = ""
+    configured: bool = False
+    enabled: bool = False
+    ensure: list[str] = Field(default_factory=list)
+    commands: dict[str, list[str]] = Field(default_factory=dict)
+    modules: int = 0
+    checks: int = 0
+    dropped_empty_modules: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class DefenseView(BaseModel):
+    """Read-only defensive-kernel inventory (design §17.3 P17).
+
+    Shared by ``ih defense show`` and ``GET /api/v1/defense``. ``problems``
+    holds entries that can never execute (and therefore roll every edit back),
+    while ``recent_events``/``journal`` show what the guard actually did.
+    """
+
+    project_root: str
+    generated_at: str
+    has_problems: bool = False
+    problems: list[CapabilityProblem] = Field(default_factory=list)
+    policy: DefensePolicy = Field(default_factory=DefensePolicy)
+    assumptions: list[DefenseAssumption] = Field(default_factory=list)
+    assumption_summary: dict[str, int] = Field(default_factory=dict)
+    journal: dict[str, Any] = Field(default_factory=dict)
+    recent_events: list[DefenseEvent] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    journal_kinds: list[str] = Field(default_factory=list)
+    journal_outcomes: list[str] = Field(default_factory=list)
+    journal_tools: list[str] = Field(default_factory=list)
+
+
+class DefenseJournalView(BaseModel):
+    """Paged, filterable defensive-kernel trail, newest first."""
+
+    project_root: str
+    generated_at: str
+    total: int = 0
+    returned: int = 0
+    offset: int = 0
+    limit: int = 50
+    truncated: bool = False
+    kinds: list[str] = Field(default_factory=list)
+    outcomes: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    entries: list[DefenseEvent] = Field(default_factory=list)
+
+
 __all__ = [
     "AgentRow",
     "AgentsView",
@@ -826,6 +927,12 @@ __all__ = [
     "CheckpointView",
     "ConfigView",
     "ControlRequest",
+    "DefenseAssumption",
+    "DefenseEvent",
+    "DefenseJournalView",
+    "DefensePolicy",
+    "DefenseView",
+    "DefenseViolation",
     "DoctorView",
     "FindingsTriageDismissRequest",
     "FindingsTriageRequest",

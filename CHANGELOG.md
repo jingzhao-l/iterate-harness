@@ -2,6 +2,25 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.26.0] - 2026-11-25
+
+**版本判断：minor。** 新增一个 CLI 子命令组（`ih defense show|journal|check`）、一个 WebUI 页面（防御守卫）与 `.iterate/defense-journal.jsonl` 台账；既有命令、参数与退出码集合不动（defense 是新增入口），既有 API 形状与数据格式不动（新增 `/api/v1/defense*` 路由），`ih doctor` 只是多一项检查。按加法语义判为 minor。
+
+- **防御守卫第一次可被观察与手动验证（`ih defense`）。** 此前 code 模式的防御内核只在运行中起作用：每次改动前快照、改动后重跑项目不变式、不通过就回滚——但判定结果只存在于模型看到的工具错误与一行日志里，运行滚过去就消失，操作者无法回答「守卫到底会不会检查、检查什么、为什么刚才那次编辑被回滚」。新增 `defensive/journal.py`：内核把每一次判定追加到 `.iterate/defense-journal.jsonl`（kind = `invariant` / `rollback` / `manual-check`，outcome = `pass` / `fail` / `error` / `unmeasured` / `failed_tool`，含工具、路径、触发原因、检查数、耗时、是否回滚与违约明细），写入失败只记 warning、绝不阻断收敛闭环；读取端逐行容错（坏行跳过），最新在前分页，按 kind / outcome / tool 精确筛选，支持 table / Markdown / CSV / JSON 与 `--out` 导出，超过 5MB 惰性轮转。
+- **`ih defense show` 回答「实际生效的守卫是什么」，与内核同一套解析。** 新增 `defensive/inventory.py` + `invariants.resolve_invariants()`：区分 `invariants`、`validation.commands` 回退、显式 `invariants: {}` 停用与未配置四种来源，剔除空模块命令列表，静态标出永远跑不起来的条目（配置命令含 shell 元字符、空 ensure），从 decision log 重建 `record_assumption` 的声明/成立/证伪结果；只读、不执行命令、不调用模型、不联网。`--json` 与 `GET /api/v1/defense` 同形；`--strict` 在存在配置问题时退出 1，可直接作 CI 门禁。
+- **`ih defense check` 不用开一轮 agent 就能验证守卫。** 它按内核同一套解析运行 `invariants.ensure` 断言与精确匹配的命令列表（或 `validation.commands` 回退），真实运行会追加一条 `manual-check` 台账（包括「一个检查都没跑」的 `unmeasured`——这恰是需要被看见的配置问题），`--dry-run` 只解析与计数、绝不执行也绝不记录。退出码 0 全通过 / 1 有失败、被拒绝项或配置读不了 / 2 没有可运行的检查。
+- **起因是修复而非只加面板：内核不再把「零检查」当通过。** `report_outcome()` 把「配置了守卫但没有任何可运行检查」映射为 `unmeasured` 而非 `pass`，`invariants: {core: []}` 这类空模块不再让每次编辑都通过一个什么都没测的守卫；内核事件同时记录 `invariant_source`，回滚原因区分工具自身失败与不变量违约。
+- **WebUI 新增「防御守卫」页（`g f`）。** 两个标签：**守卫**显示实际生效来源、检查数、ensure 与逐模块命令、配置问题（带可复制 remedy）、假设成立/证伪汇总与最近回滚；**回滚台账**按 kind / outcome / tool 筛选、最新在前分页、一键导出 Markdown / CSV / JSON，并给出与 `ih defense journal` 逐字一致的复制命令与 `ih defense check` 的复制命令。页面只读：永不执行检查命令、不启动模型、不写配置。
+- **`ih doctor` 增第 13 项 `defense_guard`。** 守卫加载失败、存在会持续回滚的配置问题、守卫未运行（未配置或显式停用）都给出可执行 remedy 并指向 `ih defense show --strict`；守卫正常时显示检查数、来源与累计回滚数。
+- **文档同步。** 中英 README 增加 defense 命令块、能力条目、WebUI 页面与 `g f` 快捷键；`DESIGN-iterate-harness.md` §17.3 增 P17、§17.4 增 `web/routes/defense.py` / `defensive/journal.py` / `defensive/inventory.py` 模块行与 `/api/v1/defense*` 路由契约；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.26.0。
+
+**核验（本机，2026-11-25）：**
+
+- 端到端（临时项目、真实 CLI）：`invariants.ensure` 配置下 `ih defense check` 退出 0 并追加 `manual-check` 事件；`--dry-run` 退出 0 且台账条数不变；`ih defense journal --json` 显示 `total=1`、`kind=manual-check`、`outcome=pass`；`ih defense show --strict` 退出 0；空配置项目 `ih defense check` 退出 2。
+- `pytest tests/ -q` → **3507 passed, 6 skipped**（基线 3450 + 6；新增 57 条：journal 读写/轮转/筛选、inventory 解析与假设重建、CLI 退出码与导出、内核接线、Web 路由与 doctor 检查）。
+- `ruff check src tests` → All checks passed；`mypy src` → Success: no issues found。
+- 前端 `vitest run` → 173 passed；`tsc --noEmit` 通过；`vite build` 成功；npm 包装器 `node --test test/bootstrap.test.js` → 68 passed。
+
 ## [2.25.0] - 2026-11-22
 
 **版本判断：minor。** 新增一个 CLI 子命令组（`ih iterate control status|nudge|pause|stop|clear`）与 `.iterate/` 下三个新文件；既有命令、参数与退出码集合不动（control 是新增入口），既有 API 形状与数据格式不动（`IterateLoopPolicy` 新增可选 `control_channel` 字段，默认 `None` 时行为与之前完全一致）。按加法语义判为 minor。

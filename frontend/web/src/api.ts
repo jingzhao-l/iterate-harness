@@ -10,6 +10,8 @@ import type {
   ChatRunStatus,
   CheckpointView,
   ConfigView,
+  DefenseJournalView,
+  DefenseView,
   DoctorView,
   FindingsResponse,
   GateView,
@@ -229,6 +231,49 @@ export async function downloadHookLogExport(
   };
 }
 
+export type DefenseExportFormat = "md" | "csv" | "json";
+
+export interface DefenseExportDownload {
+  filename: string;
+  text: string;
+  contentType: string;
+}
+
+export interface DefenseJournalQuery {
+  kind?: string;
+  outcome?: string;
+  tool?: string;
+}
+
+/**
+ * Download the filtered defensive-kernel trail as Markdown / CSV / JSON.
+ * Not paginated: a diagnostic export carries the whole filtered window, with
+ * the same filters as the page. The server owns the filename.
+ */
+export async function downloadDefenseJournalExport(
+  projectRoot: string | undefined,
+  format: DefenseExportFormat,
+  query: DefenseJournalQuery = {},
+): Promise<DefenseExportDownload> {
+  const response = await fetch(
+    `${API_BASE}/defense/journal/export${buildQuery(projectRoot, {
+      format,
+      kind: query.kind,
+      outcome: query.outcome,
+      tool: query.tool,
+    })}`,
+    withAuth(),
+  );
+  if (!response.ok) await throwApiError(response);
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+  return {
+    filename: match?.[1] ?? `iterate-defense.${format}`,
+    text: await response.text(),
+    contentType: response.headers.get("Content-Type") ?? "",
+  };
+}
+
 export interface AuditQuery {
   action?: string;
   target?: string;
@@ -414,6 +459,32 @@ export const api = {
       `/permissions/check${buildQuery(input.projectRoot, extra)}`,
     );
   },
+
+  // Defensive kernel: the effective guard (resolved with the kernel's own
+  // fallback/disable rules), declared assumptions and the rollback journal.
+  // Read-only; no invariant command is executed and no model is invoked.
+  defense: (projectRoot?: string): Promise<DefenseView> =>
+    request<DefenseView>(`/defense${buildQuery(projectRoot)}`),
+
+  defenseJournal: (
+    projectRoot?: string,
+    opts: {
+      kind?: string;
+      outcome?: string;
+      tool?: string;
+      offset?: number;
+      limit?: number;
+    } = {},
+  ): Promise<DefenseJournalView> =>
+    request<DefenseJournalView>(
+      `/defense/journal${buildQuery(projectRoot, {
+        kind: opts.kind,
+        outcome: opts.outcome,
+        tool: opts.tool,
+        offset: opts.offset,
+        limit: opts.limit,
+      })}`,
+    ),
 
   // Lifecycle hooks: what the engine registers (settings + enabled plugins)
   // and the execution trail. Read-only; no hook command is spawned and no

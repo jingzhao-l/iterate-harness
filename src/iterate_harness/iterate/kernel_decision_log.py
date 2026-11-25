@@ -52,6 +52,16 @@ DECISION_LOG_CODES: Final[dict[str, str]] = {
 
 OUTCOMES: Final[frozenset[str]] = frozenset({"pass", "fail", "blocked", "inconclusive"})
 
+#: The integer range every runtime prints identically (mirrors the kernel's
+#: ``KERNEL_SAFE_INTEGER_MAX``/``KERNEL_SAFE_INTEGER_MIN``). Above it ECMAScript and
+#: Python emit two different byte sequences for the same value, so a payload integer
+#: outside this range would hash differently in each implementation and the stored
+#: digest could not be recomputed by every reader. ``sequence``/``round`` carry an
+#: explicit ``>= 0`` bound; a payload's numbers are free-form data, so this is the
+#: one place the safe-integer rule can still be violated.
+_SAFE_INTEGER_MAX: Final[int] = 2**53 - 1
+_SAFE_INTEGER_MIN: Final[int] = -(2**53 - 1)
+
 #: Draft keys the ledger will accept. ``sequence``/``prevEntryHash`` are absent on purpose: the
 #: ledger owns them, and accepting them here is how a caller forges continuity.
 _DRAFT_KEYS: Final[frozenset[str]] = frozenset(
@@ -162,6 +172,33 @@ def _fail(code: str, path: str, message: str, remedy: str, line: int | None = No
     raise KernelDecisionLogError(code, path, message, remedy, line)
 
 
+def _payload_integer_violations(value: object, path: str = "payload") -> list[str]:
+    """Paths of every integer in a raw payload value outside ±2^53−1 (mirrors the kernel).
+
+    ``sequence``/``round`` are bounded at their own field; a payload's numbers are
+    free-form, so this walks the value to refuse any integer the two runtimes would
+    serialise differently — the one way the canonical form's byte-identity guarantee
+    could still be silently broken.
+    """
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, int):
+        return [path] if value > _SAFE_INTEGER_MAX or value < _SAFE_INTEGER_MIN else []
+    if isinstance(value, float):
+        return []
+    if isinstance(value, Mapping):
+        out: list[str] = []
+        for key in value:
+            out.extend(_payload_integer_violations(value[key], f"{path}.{key}"))
+        return out
+    if isinstance(value, (list, tuple)):
+        out = []
+        for index, item in enumerate(value):
+            out.extend(_payload_integer_violations(item, f"{path}[{index}]"))
+        return out
+    return []
+
+
 def _validate_entry_fields(obj: Mapping[str, object]) -> DecisionLogEntry:
     """Strict: every key must be known, every field must hold, patterns must match.
 
@@ -215,6 +252,12 @@ def _validate_entry_fields(obj: Mapping[str, object]) -> DecisionLogEntry:
             raise ValueError("payload must be an object when present")
         if len(canonical_json(dict(payload))) > PAYLOAD_MAX_CANONICAL_LENGTH:
             raise ValueError(f"payload exceeds {PAYLOAD_MAX_CANONICAL_LENGTH} chars of canonical JSON")
+        violations = _payload_integer_violations(payload)
+        if violations:
+            raise ValueError(
+                f"{violations[0]} carries an integer outside ±2^53−1, which ECMAScript and Python print as "
+                "two different byte sequences — a digest over it could not be recomputed by every reader"
+            )
 
     return DecisionLogEntry(
         entry_id=entry_id,
@@ -343,6 +386,30 @@ def append_decision_log_entry(log_path: str, draft: Mapping[str, object]) -> Dec
 
     line = serialize_decision_log_entry(entry)
     payload = (line + "\n").encode("utf-8")
+
+    # Append mode adds bytes at EOF, so it can only produce a well-formed line if the
+    # previous entry is newline-terminated. A file whose final entry lacks that terminator
+    # is still *verifiable* (verify_decision_log_text accepts it), so decision_log_head
+    # above approves the append — and then ``line + "\n"`` lands directly after the
+    # unterminated entry, fusing two JSON objects onto one physical line. The read-back
+    # below detects the mismatch and raises, but by then the file is already poisoned: a
+    # previously valid chain is now unparseable at that line, permanently. Refuse before
+    # any write, which is this module's "refuse rather than repair" discipline.
+    try:
+        size = os.stat(log_path).st_size
+    except FileNotFoundError:
+        size = 0
+    if size > 0:
+        with open(log_path, "rb") as probe:
+            probe.seek(size - 1)
+            last_byte = probe.read(1)
+        if last_byte != b"\n":
+            _fail(DECISION_LOG_CODES["corrupt"], log_path,
+                  "the ledger's final entry is not newline-terminated, so appending would fuse it with the new "
+                  "entry into one unparseable line",
+                  f"a foreign writer or a torn write dropped the terminator on {log_path}; preserve the file, "
+                  "re-verify the chain from its last line, and repair the terminator before producing more decisions")
+
     fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         os.fchmod(fd, 0o600)

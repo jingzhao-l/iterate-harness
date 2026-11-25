@@ -200,3 +200,54 @@ def test_entry_id_is_crockford_ulid_and_time_sortable() -> None:
     for ch in early[3:]:
         assert ch in "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
     assert early[3:13] < late[3:13], "the 10-char time prefix must sort by ms"
+
+
+def test_a_payload_integer_beyond_the_safe_range_is_refused(tmp_path: Path) -> None:
+    # 2^53+1 round-trips to 2^53 in ECMAScript but stays exact in Python, so a ledger line
+    # carrying it would hash differently in each implementation and the stored digest could
+    # never be recomputed by the verifier. The append must refuse before anything is written.
+    path = str(_ledger_dir(tmp_path) / "decisions.jsonl")
+    with pytest.raises(KernelDecisionLogError) as caught:
+        append_decision_log_entry(path, _draft(
+            new_decision_entry_id(), payload={"n": 2**53 + 1},
+        ))
+    assert caught.value.code == DECISION_LOG_CODES["draft"]
+    assert not Path(path).exists(), "refusing after writing is not refusing"
+
+
+def test_a_payload_integer_nested_in_an_array_is_refused_too(tmp_path: Path) -> None:
+    path = str(_ledger_dir(tmp_path) / "decisions.jsonl")
+    with pytest.raises(KernelDecisionLogError) as caught:
+        append_decision_log_entry(path, _draft(
+            new_decision_entry_id(), payload={"findings": [{"delta": -(2**53) - 1}]},
+        ))
+    assert caught.value.code == DECISION_LOG_CODES["draft"]
+    assert not Path(path).exists()
+
+
+def test_a_payload_integer_inside_the_safe_range_is_still_carried(tmp_path: Path) -> None:
+    # The bound exists for cross-language byte-identity, not to refuse big-but-exact counters.
+    path = str(_ledger_dir(tmp_path) / "decisions.jsonl")
+    entry = append_decision_log_entry(path, _draft(
+        new_decision_entry_id(), payload={"n": 2**53 - 1, "neg": -(2**53 - 1)},
+    ))
+    assert entry.payload is not None
+    assert entry.payload["n"] == 2**53 - 1 and entry.payload["neg"] == -(2**53 - 1)
+
+
+def test_append_onto_an_unterminated_ledger_refuses_and_leaves_the_bytes_as_found(tmp_path: Path) -> None:
+    # A ledger whose final entry lacks the trailing newline is still verifiable, so the head
+    # would approve the append — and then `line + "\n"` would land directly after it, fusing two
+    # JSON objects onto one physical line. The read-back catches it, but only after the file is
+    # poisoned. The guard must refuse before the fd is opened.
+    path = str(_ledger_dir(tmp_path) / "decisions.jsonl")
+    append_decision_log_entry(path, _draft(new_decision_entry_id()))
+    raw = Path(path).read_bytes()
+    Path(path).write_bytes(raw.rstrip(b"\n"))  # a foreign writer dropped the terminator
+    before = Path(path).read_bytes()
+    assert verify_decision_log_text(before.decode("utf-8")).ok, "the unterminated ledger is still a valid chain"
+
+    with pytest.raises(KernelDecisionLogError) as caught:
+        append_decision_log_entry(path, _draft(new_decision_entry_id()))
+    assert caught.value.code == DECISION_LOG_CODES["corrupt"]
+    assert Path(path).read_bytes() == before, "a refused append must not mutate the ledger"

@@ -33,8 +33,8 @@ def test_report_shape_and_ordering(tmp_path: Path) -> None:
     """Failures and warnings sort before oks; every check is well-formed."""
     report = run_doctor(tmp_path)
     ids = _check_ids(report)
-    # 12 checks, no duplicates, ordered failures→warnings→ok.
-    assert len(ids) == len(set(ids)) == 12
+    # 13 checks, no duplicates, ordered failures→warnings→ok.
+    assert len(ids) == len(set(ids)) == 13
     statuses = [check.status for check in report.checks]
     first_warn = statuses.index(WARN) if WARN in statuses else len(statuses)
     first_ok = statuses.index(OK) if OK in statuses else len(statuses)
@@ -59,6 +59,7 @@ def test_report_shape_and_ordering(tmp_path: Path) -> None:
             "sandbox",
             "hook",
             "permission_policy",
+            "defense_guard",
         }
 
 
@@ -70,7 +71,7 @@ def test_json_roundtrip(tmp_path: Path) -> None:
     decoded = json.loads(encoded)
     assert decoded["project_root"] == str(tmp_path.resolve())
     assert decoded["has_failures"] == report.has_failures
-    assert len(decoded["checks"]) == 12
+    assert len(decoded["checks"]) == 13
     assert decoded["summary"]["ok"] == sum(
         1 for c in report.checks if c.status == OK
     )
@@ -173,7 +174,7 @@ def test_route_returns_report(client: TestClient, tmp_path: Path) -> None:
     payload = response.json()
     assert payload["project_root"] == str(tmp_path.resolve())
     assert isinstance(payload["ok"], bool)
-    assert len(payload["checks"]) == 12
+    assert len(payload["checks"]) == 13
     for check in payload["checks"]:
         assert set(check) >= {"id", "title", "status", "detail", "remedy"}
 
@@ -221,7 +222,7 @@ def test_cli_doctor_json_roundtrip(tmp_path: Path) -> None:
         app, ["doctor", "--project-root", str(tmp_path), "--json"]
     )
     payload = json.loads(result.output)
-    assert len(payload["checks"]) == 12
+    assert len(payload["checks"]) == 13
     assert payload["project_root"] == str(tmp_path.resolve())
     expected_exit = 1 if payload["has_failures"] else 0
     assert result.exit_code == expected_exit, result.output
@@ -296,4 +297,37 @@ def test_permission_policy_check_warns_on_a_dead_rule(
     check = next(c for c in report.checks if c.id == "permission_policy")
     assert check.status == WARN
     assert "永远不会生效" in check.detail
+    assert check.remedy
+
+
+def test_defense_guard_check_is_green_when_a_guard_is_configured(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("ok", encoding="utf-8")
+    (tmp_path / "iterate.config.yaml").write_text(
+        "invariants:\n  ensure:\n    - README.md\n", encoding="utf-8"
+    )
+    report = run_doctor(tmp_path)
+    check = next(c for c in report.checks if c.id == "defense_guard")
+    assert check.status == OK
+    assert "1 个检查" in check.detail
+    assert "invariants" in check.detail
+
+
+def test_defense_guard_check_warns_on_a_dead_entry(tmp_path: Path) -> None:
+    (tmp_path / "iterate.config.yaml").write_text(
+        "invariants:\n  commands:\n    core:\n      - pytest -q && rm -rf build\n",
+        encoding="utf-8",
+    )
+    report = run_doctor(tmp_path)
+    check = next(c for c in report.checks if c.id == "defense_guard")
+    assert check.status == WARN
+    assert "会持续回滚编辑" in check.detail
+    assert check.remedy
+
+
+def test_defense_guard_check_warns_when_disabled(tmp_path: Path) -> None:
+    (tmp_path / "iterate.config.yaml").write_text("invariants: {}\n", encoding="utf-8")
+    report = run_doctor(tmp_path)
+    check = next(c for c in report.checks if c.id == "defense_guard")
+    assert check.status == WARN
+    assert "守卫未运行" in check.detail
     assert check.remedy

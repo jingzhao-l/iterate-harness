@@ -563,6 +563,66 @@ def _permission_check(project_root: Path) -> DoctorCheck:
     )
 
 
+def _defense_check(project_root: Path) -> DoctorCheck:
+    """Defensive-kernel guard integrity (design §17.3 P17).
+
+    The kernel rolls an edit back when an invariant fails, so a guard that is
+    disabled, points at validation commands that no longer exist, or contains
+    an entry that can never execute does not "warn later" -- it stops code-mode
+    edits. Doctor resolves the effective guard with the kernel's own rule set
+    and reports the same problems the console page shows.
+    """
+    try:
+        from iterate_harness.defensive.inventory import build_defense_inventory
+
+        inventory = build_defense_inventory(project_root)
+    except Exception as exc:  # noqa: BLE001 - doctor must never raise
+        return _check(
+            "defense_guard",
+            "防御守卫",
+            WARN,
+            detail=f"守卫清单加载失败：{type(exc).__name__}: {exc}",
+            remedy="运行 `ih defense show --strict` 查看具体问题；修复配置后重跑 `ih doctor`",
+        )
+    policy = inventory.get("policy") or {}
+    summary = inventory.get("summary") or {}
+    problems = inventory.get("problems") or []
+    if problems:
+        first = problems[0]
+        detail = (
+            f"{len(problems)} 项问题会持续回滚编辑 — "
+            f"{first.get('kind')}:{first.get('name')} {first.get('detail', '')}".strip()
+        )
+        return _check(
+            "defense_guard",
+            "防御守卫",
+            WARN,
+            detail=detail,
+            remedy=f"{first.get('remedy', '修复配置后重跑 `ih doctor`')} （完整列表：`ih defense show --strict`）",
+        )
+    if not policy.get("enabled"):
+        source = policy.get("source_label") or policy.get("source") or "unknown"
+        return _check(
+            "defense_guard",
+            "防御守卫",
+            WARN,
+            detail=f"守卫未运行（{source}）：code 模式编辑不会被事后校验或回滚",
+            remedy=(
+                "在 iterate.config.yaml 的 invariants.ensure / invariants.commands 中登记检查，"
+                "或用 `ih defense check` 验证当前配置"
+            ),
+        )
+    return _check(
+        "defense_guard",
+        "防御守卫",
+        OK,
+        detail=(
+            f"{policy.get('checks', 0)} 个检查 · 来源 {policy.get('source_label', 'unknown')} · "
+            f"{summary.get('rollbacks', 0)} 次回滚"
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -586,6 +646,7 @@ def run_doctor(
         _validation_check(root),
         _lease_check(root),
         _permission_check(root),
+        _defense_check(root),
         _sandbox_check(),
         _hook_check(root),
     ]

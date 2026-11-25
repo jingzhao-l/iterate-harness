@@ -370,3 +370,112 @@ async def test_invariants_run_off_the_event_loop(tmp_path: Path) -> None:
     assert tick == 42  # event loop stayed responsive while invariants ran
     report = await report_task
     assert report.passed
+
+
+# ---------------------------------------------------------------------------
+# Journal wiring — every verdict the kernel reaches is observable afterwards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_passing_guard_writes_invariant_event(tmp_path: Path) -> None:
+    from iterate_harness.defensive.journal import (
+        KIND_INVARIANT,
+        OUTCOME_PASS,
+        list_defense_events,
+    )
+
+    script = tmp_path / "ok.sh"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+    kernel = _kernel_with_commands(tmp_path, {"syntax": ["./ok.sh"]})
+
+    target = tmp_path / "a.py"
+    target.write_text("v1", encoding="utf-8")
+    kernel.snapshot(target)
+    target.write_text("v2", encoding="utf-8")
+    assert await kernel.after_mutation("write_file", target, success=True) is None
+
+    page, total = list_defense_events(tmp_path)
+    assert total == 1
+    assert page[0]["kind"] == KIND_INVARIANT
+    assert page[0]["outcome"] == OUTCOME_PASS
+    assert page[0]["tool"] == "write_file"
+    assert page[0]["checks_run"] == 1
+    assert page[0]["rolled_back"] is False
+
+
+@pytest.mark.asyncio
+async def test_violating_guard_writes_rollback_event(tmp_path: Path) -> None:
+    from iterate_harness.defensive.journal import (
+        KIND_ROLLBACK,
+        OUTCOME_FAIL,
+        list_defense_events,
+    )
+
+    script = tmp_path / "bad.sh"
+    script.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
+    script.chmod(0o755)
+    kernel = _kernel_with_commands(tmp_path, {"syntax": ["./bad.sh"]})
+
+    target = tmp_path / "a.py"
+    target.write_text("v1", encoding="utf-8")
+    kernel.snapshot(target)
+    target.write_text("v2", encoding="utf-8")
+    assert await kernel.after_mutation("write_file", target, success=True) is not None
+
+    page, total = list_defense_events(tmp_path)
+    assert total == 1
+    event = page[0]
+    assert event["kind"] == KIND_ROLLBACK
+    assert event["outcome"] == OUTCOME_FAIL
+    assert event["rolled_back"] is True
+    assert event["violations"][0]["kind"] == "command"
+    assert event["violations"][0]["label"].startswith("syntax:")
+    assert event["reason"]
+
+
+@pytest.mark.asyncio
+async def test_failed_tool_writes_failed_tool_event(tmp_path: Path) -> None:
+    from iterate_harness.defensive.journal import (
+        KIND_ROLLBACK,
+        OUTCOME_FAILED_TOOL,
+        list_defense_events,
+    )
+
+    kernel = _kernel_with_commands(tmp_path, {"syntax": ["./never.sh"]})
+    target = tmp_path / "a.py"
+    target.write_text("v1", encoding="utf-8")
+    kernel.snapshot(target)
+    target.write_text("v2", encoding="utf-8")
+
+    await kernel.after_mutation("write_file", target, success=False, error_hint="disk full")
+
+    page, total = list_defense_events(tmp_path)
+    assert total == 1
+    assert page[0]["kind"] == KIND_ROLLBACK
+    assert page[0]["outcome"] == OUTCOME_FAILED_TOOL
+    assert page[0]["rolled_back"] is True
+    assert "disk full" in page[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_disabled_guard_does_not_journal_noise(tmp_path: Path) -> None:
+    from iterate_harness.defensive.journal import list_defense_events
+
+    kernel = _kernel_with_commands(tmp_path, {})
+    target = tmp_path / "a.py"
+    target.write_text("v1", encoding="utf-8")
+    kernel.snapshot(target)
+    target.write_text("v2", encoding="utf-8")
+
+    assert await kernel.after_mutation("write_file", target, success=True) is None
+    assert list_defense_events(tmp_path) == ([], 0)
+
+
+def test_kernel_metadata_names_the_guard_source(tmp_path: Path) -> None:
+    from iterate_harness.defensive.invariants import SOURCE_DISABLED
+
+    kernel = _kernel_with_commands(tmp_path, {})
+    assert kernel.invariant_source == SOURCE_DISABLED
+    assert kernel.to_metadata()["invariant_source"] == SOURCE_DISABLED

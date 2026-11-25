@@ -715,6 +715,10 @@ permissions_app = typer.Typer(
     name="permissions",
     help="Inspect the effective permission policy and simulate a tool decision (show/check)",
 )
+defense_app = typer.Typer(
+    name="defense",
+    help="Inspect the code-mode defensive guard and its rollback journal (show/journal/check)",
+)
 triage_app = typer.Typer(
     name="triage",
     help="List findings and mark intentional ones so the engine stops reporting them (list/ignore/restore)",
@@ -733,6 +737,7 @@ app.add_typer(web_app)
 app.add_typer(memory_app)
 app.add_typer(hooks_app)
 app.add_typer(permissions_app)
+app.add_typer(defense_app)
 
 
 # ---- iterate subcommands ----
@@ -2718,8 +2723,9 @@ def web_serve(
     Serves the dashboard, runs timeline, trend, run comparison, the recipe gate,
     scheduled reviews, the capability inventory, the environment self-check,
     the audit trail, the project memory bank, the lifecycle-hook inventory and
-    hook-execution trail, the permission policy and decision simulator,
-    checkpoints, budget, config, and reports on a local
+    hook-execution trail, the permission policy and decision simulator, the
+    defensive-kernel guard and rollback journal, checkpoints, budget, config,
+    and reports on a local
     loopback address and opens the browser. The backend
     binds to 127.0.0.1 by default and never exposes itself externally.
     """
@@ -4413,6 +4419,452 @@ def permissions_check_cmd(
         raise typer.Exit(0)
     if verdict == "confirm":
         raise typer.Exit(2)
+    raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Defensive-kernel subcommands
+# ---------------------------------------------------------------------------
+
+def _defense_project_root(project_root: str | None) -> str:
+    return str(Path(project_root).expanduser()) if project_root else str(Path.cwd())
+
+
+def _render_defense_check_table(view: dict[str, Any]) -> str:
+    """Aligned terminal rendering of one ``ih defense check`` result."""
+    lines = [
+        f"iterate defensive check — {view.get('project_root', '')}",
+        f"guard: {view.get('source_label', 'unknown')} ({view.get('checks_configured', 0)} checks)",
+        "",
+    ]
+    violations: dict[str, str] = {}
+    for violation in view.get("violations") or []:
+        if isinstance(violation, dict):
+            violations[str(violation.get("label") or "")] = str(
+                violation.get("detail") or ""
+            )
+    for entry in view.get("ensure") or []:
+        detail = violations.get(f"ensure:{entry}")
+        status = "FAIL" if detail else "ok  "
+        lines.append(f"[{status}] ensure:{entry}" + (f" -> {detail}" if detail else ""))
+    for module, commands in (view.get("commands") or {}).items():
+        for command in commands:
+            label = f"{module}:{command}"
+            detail = violations.get(label)
+            status = "FAIL" if detail else "ok  "
+            lines.append(f"[{status}] {label}" + (f" -> {detail}" if detail else ""))
+    if not (view.get("ensure") or view.get("commands")):
+        lines.append("(no runnable checks configured)")
+    lines.append("")
+    lines.append(
+        f"outcome: {view.get('outcome', '?')} · "
+        f"{view.get('checks_run', 0)}/{view.get('checks_configured', 0)} checks run · "
+        f"{view.get('duration_ms', 0)}ms"
+        + (" · dry run (not recorded)" if view.get("dry_run") else " · recorded")
+    )
+    return "\n".join(lines)
+
+
+def _render_defense_check_markdown(view: dict[str, Any]) -> str:
+    """Markdown rendering of one ``ih defense check`` result."""
+    lines = [
+        "# iterate-harness defensive check",
+        "",
+        f"- project: `{view.get('project_root', '')}`",
+        f"- guard: {view.get('source_label', 'unknown')}",
+        f"- outcome: **{view.get('outcome', '?')}**",
+        f"- checks: {view.get('checks_run', 0)}/{view.get('checks_configured', 0)}",
+        f"- duration: {view.get('duration_ms', 0)}ms",
+        f"- dry run: {'yes' if view.get('dry_run') else 'no'}",
+        "",
+    ]
+    violations = view.get("violations") or []
+    if violations:
+        lines.append("| kind | check | detail |")
+        lines.append("|---|---|---|")
+        for violation in violations:
+            detail = str(violation.get("detail") or "").replace("|", "\\|")
+            lines.append(
+                f"| {violation.get('kind', '')} | `{violation.get('label', '')}` | {detail} |"
+            )
+    else:
+        lines.append("_Every configured check passed._")
+    return "\n".join(lines)
+
+
+@defense_app.command("show")
+def defense_show_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose guard to resolve (default: current directory)",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the inventory as JSON (same shape as GET /api/v1/defense)",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit 1 when a configured check can never run (or the config cannot be read)",
+    ),
+) -> None:
+    """Show what the code-mode defensive guard will actually check.
+
+    The engine snapshots every mutating edit, re-runs the project invariants
+    and rolls the edit back when a check fails; before this command the only
+    evidence was a tool error inside a live run. This read-only inventory
+    resolves the effective guard with the kernel's own rules
+    (``invariants`` / ``validation.commands`` fallback / explicit disable),
+    reports entries that can never execute, reconstructs declared assumptions
+    from the decision log and summarises the rollback journal.
+
+    Nothing is executed and no model is called. Exit code: 0 normally, 1 with
+    ``--strict`` when any problem was found.
+
+    Examples:
+        ih defense show
+        ih defense show --project-root /path/to/repo
+        ih defense show --json --strict
+    """
+    from iterate_harness.defensive.inventory import (
+        build_defense_inventory,
+        render_defense_inventory,
+    )
+
+    inventory = build_defense_inventory(_defense_project_root(project_root))
+    if as_json:
+        print(json.dumps(inventory, ensure_ascii=False, indent=2))
+    else:
+        print(render_defense_inventory(inventory))
+    if strict and inventory.get("has_problems"):
+        raise typer.Exit(1)
+    raise typer.Exit(0)
+
+
+@defense_app.command("journal")
+def defense_journal_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose defense journal to read (default: current directory)",
+    ),
+    kind: str = typer.Option(
+        "",
+        "--kind",
+        help="Filter by kind: rollback | invariant | manual-check",
+    ),
+    outcome: str = typer.Option(
+        "",
+        "--outcome",
+        help="Filter by outcome: pass | fail | error | unmeasured | failed_tool",
+    ),
+    tool: str = typer.Option(
+        "",
+        "--tool",
+        help="Filter by the tool that triggered the guard",
+    ),
+    offset: int = typer.Option(
+        0,
+        "--offset",
+        min=0,
+        help="Page offset from the newest event",
+    ),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        min=1,
+        max=500,
+        help="Max events to show",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the page as JSON (same shape as GET /api/v1/defense/journal)",
+    ),
+    fmt: str = typer.Option(
+        "table",
+        "--format",
+        help="Render format: table | json | markdown | csv",
+    ),
+    out: str | None = typer.Option(
+        None,
+        "--out",
+        help="Write the output to this path instead of stdout (for scripts)",
+    ),
+) -> None:
+    """Read the defensive-kernel trail: what was checked, and what was reverted.
+
+    The kernel writes one line per verdict to
+    ``.iterate/defense-journal.jsonl``: a passed invariant run that let an edit
+    commit, a rollback caused by a failed check (or by the tool itself), and an
+    ``unmeasured`` guard that ran zero checks. Entries are returned newest
+    first; ``--kind`` / ``--outcome`` / ``--tool`` are exact matches. Exit code
+    0 (the trail is evidence, not a gate); an unknown filter is exit 1.
+
+    Examples:
+        ih defense journal
+        ih defense journal --kind rollback --limit 20
+        ih defense journal --outcome unmeasured
+        ih defense journal --format csv --out defense.csv
+    """
+    from datetime import datetime, timezone
+
+    from iterate_harness.defensive.journal import (
+        KINDS,
+        OUTCOMES,
+        defense_log_csv,
+        distinct_kinds,
+        distinct_outcomes,
+        distinct_tools,
+        list_defense_events,
+        render_defense_log_markdown,
+        render_defense_log_table,
+    )
+
+    kind_filter = kind.strip()
+    outcome_filter = outcome.strip()
+    if kind_filter and kind_filter not in KINDS:
+        print(
+            f"Error: invalid --kind {kind!r} (allowed: {', '.join(sorted(KINDS))})",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+    if outcome_filter and outcome_filter not in OUTCOMES:
+        print(
+            f"Error: invalid --outcome {outcome!r} (allowed: {', '.join(sorted(OUTCOMES))})",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    root = _defense_project_root(project_root)
+    entries, total = list_defense_events(
+        root,
+        kind=kind_filter,
+        outcome=outcome_filter,
+        tool=tool.strip(),
+        limit=limit,
+        offset=offset,
+    )
+
+    requested_fmt = fmt.lower().strip()
+    if as_json:
+        requested_fmt = "json"
+    if requested_fmt not in {"table", "json", "markdown", "csv"}:
+        print(
+            f"Error: unknown --format {fmt!r} (allowed: table, json, markdown, csv)",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    if requested_fmt == "json":
+        view = {
+            "project_root": str(Path(root).resolve()),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "total": total,
+            "returned": len(entries),
+            "offset": offset,
+            "limit": limit,
+            "truncated": offset + len(entries) < total,
+            "kinds": distinct_kinds(root),
+            "outcomes": distinct_outcomes(root),
+            "tools": distinct_tools(root),
+            "entries": entries,
+        }
+        body = json.dumps(view, ensure_ascii=False, indent=2) + "\n"
+    elif requested_fmt == "markdown":
+        body = render_defense_log_markdown(entries, total, limit, offset)
+    elif requested_fmt == "csv":
+        body = defense_log_csv(entries, total, limit, offset)
+    else:
+        body = render_defense_log_table(entries, total, limit, offset) + "\n"
+
+    if out:
+        try:
+            Path(out).write_text(body, encoding="utf-8")
+        except OSError as exc:
+            print(f"Error: cannot write {out}: {exc}", file=sys.stderr)
+            raise typer.Exit(1)
+        print(f"Wrote {len(entries)} defense events to {out}", flush=True)
+    else:
+        print(body, end="" if body.endswith("\n") else "\n", flush=True)
+    raise typer.Exit(0)
+
+
+@defense_app.command("check")
+def defense_check_cmd(
+    project_root: str | None = typer.Option(
+        None,
+        "--project-root",
+        help="Project whose invariants to run (default: current directory)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Resolve the guard and count checks without executing commands or recording",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the result as JSON",
+    ),
+    fmt: str = typer.Option(
+        "table",
+        "--format",
+        help="Render format: table | markdown | json",
+    ),
+    out: str | None = typer.Option(
+        None,
+        "--out",
+        help="Write the output to this path instead of stdout (for scripts)",
+    ),
+) -> None:
+    """Run the configured invariant guard now, without starting an agent run.
+
+    This executes the same checks the kernel runs after every code-mode edit
+    (``invariants.ensure`` assertions plus exact-match command lists, or the
+    ``validation.commands`` fallback). A real run appends a ``manual-check``
+    event to ``.iterate/defense-journal.jsonl`` -- including the ``unmeasured``
+    case, because "the guard ran zero checks" is exactly the configuration
+    problem the operator needs to see. ``--dry-run`` never records and never
+    executes a command.
+
+    Exit code: 0 when every check passed, 1 when any check failed / was
+    refused / the config cannot be read, 2 when nothing is configured to run.
+
+    Examples:
+        ih defense check
+        ih defense check --dry-run --json
+        ih defense check --project-root /path/to/repo --format markdown
+    """
+    import time
+    from datetime import datetime, timezone
+
+    from iterate_harness.defensive.invariants import (
+        check_invariants,
+        report_outcome,
+        resolve_invariants,
+    )
+    from iterate_harness.defensive.journal import (
+        KIND_MANUAL_CHECK,
+        record_defense_event,
+    )
+    from iterate_harness.iterate.config_loader import load_effective_config
+
+    requested_fmt = fmt.lower().strip()
+    if as_json:
+        requested_fmt = "json"
+    if requested_fmt not in {"table", "markdown", "json"}:
+        print(
+            f"Error: unknown --format {fmt!r} (allowed: table, markdown, json)",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    root = _defense_project_root(project_root)
+    try:
+        effective = load_effective_config(root)
+    except Exception as exc:  # noqa: BLE001 - explain the config, do not traceback
+        print(
+            f"Error: cannot load the project config for {Path(root).resolve()}: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        print(
+            "Fix iterate.config.yaml (or run `ih iterate init`) and retry.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    resolved = resolve_invariants(effective)
+    started = time.monotonic()
+    report = check_invariants(
+        root,
+        ensure=resolved.ensure,
+        commands=resolved.commands,
+        dry_run=dry_run,
+    )
+    duration_ms = int((time.monotonic() - started) * 1000)
+    outcome = report_outcome(report)
+    source_labels = {
+        "invariants": "invariants",
+        "validation-fallback": "validation.commands (fallback)",
+        "disabled": "explicitly disabled",
+        "none": "not configured",
+    }
+    view = {
+        "project_root": str(Path(root).resolve()),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": resolved.source,
+        "source_label": source_labels.get(resolved.source, resolved.source),
+        "configured": resolved.configured,
+        "checks_configured": resolved.checks,
+        "checks_run": report.checks_run,
+        "passed": report.passed and resolved.checks > 0,
+        "outcome": outcome,
+        "duration_ms": duration_ms,
+        "dry_run": dry_run,
+        "ensure": list(resolved.ensure),
+        "commands": {
+            module: list(commands) for module, commands in resolved.commands.items()
+        },
+        "violations": [
+            {"kind": v.kind, "label": v.label, "detail": v.detail}
+            for v in report.violations
+        ],
+    }
+    if not dry_run:
+        if report.violations:
+            reason = "; ".join(
+                f"{v.kind}:{v.label} ({v.detail})" for v in report.violations[:4]
+            )
+        elif resolved.checks == 0:
+            reason = (
+                "manual check found no runnable checks: the configured guard measures "
+                "nothing"
+            )
+        else:
+            reason = f"manual check: all {report.checks_run} checks passed"
+        record_defense_event(
+            root,
+            kind=KIND_MANUAL_CHECK,
+            outcome=outcome,
+            tool="ih defense check",
+            path="",
+            trigger="manual-check",
+            reason=reason,
+            checks_run=report.checks_run,
+            duration_ms=duration_ms,
+            rolled_back=False,
+            violations=report.violations,
+        )
+
+    if requested_fmt == "json":
+        body = json.dumps(view, ensure_ascii=False, indent=2) + "\n"
+    elif requested_fmt == "markdown":
+        body = _render_defense_check_markdown(view) + "\n"
+    else:
+        body = _render_defense_check_table(view) + "\n"
+
+    if out:
+        try:
+            Path(out).write_text(body, encoding="utf-8")
+        except OSError as exc:
+            print(f"Error: cannot write {out}: {exc}", file=sys.stderr)
+            raise typer.Exit(1)
+        print(
+            f"Wrote defensive check result to {out}"
+            + (" (dry run, not recorded)" if dry_run else ""),
+            flush=True,
+        )
+    else:
+        print(body, end="" if body.endswith("\n") else "\n", flush=True)
+
+    if resolved.checks == 0:
+        raise typer.Exit(2)
+    if report.passed:
+        raise typer.Exit(0)
     raise typer.Exit(1)
 
 
