@@ -80,7 +80,7 @@ jobs:
       modules: ${{ steps.solo.outputs.modules }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -196,7 +196,7 @@ jobs:
           echo "leg=${MODULE_PATH//\//_}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7

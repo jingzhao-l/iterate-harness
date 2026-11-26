@@ -80,7 +80,7 @@ jobs:
           fi
 
       - name: Checkout tagged tree
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # On `release` events use the release tag; on manual dispatch use the
           # dispatched ref (github.ref_name), e.g. `--ref v1.12.11`.
