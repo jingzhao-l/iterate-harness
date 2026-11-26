@@ -14,7 +14,12 @@ from __future__ import annotations
 from typing import Any
 
 from .checkpoint import load_checkpoint
-from .decision_log import DecisionLogEntry, findings_from_report, read_entries
+from .decision_log import (
+    DecisionLogEntry,
+    _timestamp_ms,
+    findings_from_report,
+    read_entries,
+)
 
 #: How many finding summaries to preview in the resume panel.
 MAX_PREVIEW_FINDINGS = 3
@@ -25,10 +30,12 @@ _SEVERITY_KEYS = ("critical", "high", "medium", "low")
 def summarize_last_run(project_root: str) -> dict[str, Any] | None:
     """Summarize the last iterate run; ``None`` when no history.
 
-    Prefers a final ``report`` entry (finished run). When the run was
-    interrupted/failed before a report landed, falls back to the persisted
-    convergence checkpoint so ``/iterate resume`` can continue from the
-    last successful convergence point.
+    The newest evidence wins: a checkpoint written *after* the last report
+    belongs to a newer run that was interrupted/failed before writing its own
+    report, so it must not be reported as the older finished run. When the
+    checkpoint is older (or its timestamp is unreadable), the final ``report``
+    entry wins as before. With no report at all the checkpoint is the
+    interrupted-run fallback that ``/iterate resume`` continues from.
     """
     entries = read_entries(project_root)
     checkpoint = load_checkpoint(project_root)
@@ -36,13 +43,17 @@ def summarize_last_run(project_root: str) -> dict[str, Any] | None:
         return None
 
     report = _last_entry(entries, "report")
-    if report is not None:
+    checkpoint_summary = (
+        _summarize_checkpoint(entries, checkpoint) if checkpoint is not None else None
+    )
+    if checkpoint_summary is not None and _checkpoint_is_newer(checkpoint or {}, report):
+        summary = checkpoint_summary
+    elif report is not None:
         summary = _summarize_report(entries, report)
+    elif checkpoint_summary is not None:
+        summary = checkpoint_summary
     else:
-        if checkpoint is not None:
-            summary = _summarize_checkpoint(entries, checkpoint)
-        else:
-            return None
+        return None
 
     # Carry the persisted deferred-architectural list so a resume prompt can
     # re-surface what was deliberately left unfixed (design §11.2.2).
@@ -52,6 +63,30 @@ def summarize_last_run(project_root: str) -> dict[str, Any] | None:
         if cleaned:
             summary["deferred_architectural"] = cleaned
     return summary
+
+
+def _checkpoint_is_newer(
+    checkpoint: dict[str, Any], report: DecisionLogEntry | None
+) -> bool:
+    """Return True when the checkpoint was written after the last report.
+
+    Checkpoints store ``time.time()`` (epoch seconds); decision-log entries
+    store ISO-8601. A missing/unparseable timestamp on either side keeps the
+    historical behaviour (prefer the report) rather than guessing recency.
+    """
+    if report is None:
+        return True
+    report_ms = _timestamp_ms(report.timestamp)
+    if report_ms is None:
+        return False
+    raw = checkpoint.get("timestamp")
+    if isinstance(raw, bool) or raw is None:
+        return False
+    try:
+        checkpoint_ms = int(float(raw) * 1000)
+    except (TypeError, ValueError):
+        return False
+    return checkpoint_ms > report_ms
 
 
 def _summarize_report(entries: list[DecisionLogEntry], report: DecisionLogEntry) -> dict[str, Any]:

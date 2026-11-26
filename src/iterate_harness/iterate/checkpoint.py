@@ -14,8 +14,9 @@ Design rules:
 - Writes are atomic (temp file + ``os.replace``) so a crash mid-write can
   never corrupt the previous checkpoint.
 - Reads are defensive: a missing / malformed file yields ``None``.
-- ``last_state.summarize_last_run`` prefers a final ``report`` entry over
-  the checkpoint; the checkpoint is the fallback for interrupted runs.
+- ``last_state.summarize_last_run`` reports whichever is newer: a checkpoint
+  written after the last ``report`` entry is an interrupted run, while an
+  older checkpoint is the fallback only when no report exists.
 """
 
 from __future__ import annotations

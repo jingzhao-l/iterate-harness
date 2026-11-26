@@ -885,6 +885,51 @@ class TestSessionRestore:
         assert result.exit_code == 1
         assert "cannot resume" in result.output
 
+    def test_iterate_resume_run_without_history_errors(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["iterate", "resume", "--run"])
+        assert result.exit_code == 1
+        assert "No iterate run to resume" in result.output
+
+    def test_iterate_resume_run_starts_headless_from_checkpoint(self, tmp_path, monkeypatch):
+        from iterate_harness.iterate.checkpoint import save_checkpoint
+
+        monkeypatch.chdir(tmp_path)
+        save_checkpoint(
+            tmp_path,
+            round=3,
+            new_findings=1,
+            total_findings=4,
+            per_dimension={"security": 4},
+            converged=False,
+            input_tokens=100,
+            output_tokens=200,
+            cost_usd=0.01,
+            mode="normal",
+        )
+        captured = {}
+
+        def fake_run_headless(kickoff, branch=None):
+            captured["kickoff"] = kickoff
+            captured["branch"] = branch
+
+        monkeypatch.setattr(cli, "_run_headless", fake_run_headless)
+
+        result = CliRunner().invoke(app, ["iterate", "resume", "--run", "--rounds", "5"])
+
+        assert result.exit_code == 0, result.output
+        assert "Resume the interrupted iterate run" in captured["kickoff"]
+        assert "fresh cap of 5 rounds" in captured["kickoff"]
+        assert captured["branch"] is None
+
+    def test_iterate_resume_run_and_session_are_mutually_exclusive(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(
+            app, ["iterate", "resume", "--run", "--session", "abc123"]
+        )
+        assert result.exit_code == 2
+        assert "--run and --session are mutually exclusive" in result.output
+
     def test_iterate_resume_falls_back_to_full_session_payload(self, tmp_path, monkeypatch):
         """When latest.json is missing, the listing fallback must load the full
         session payload — not resume off the summary row (fake resume)."""

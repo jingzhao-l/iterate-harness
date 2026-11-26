@@ -1269,8 +1269,20 @@ def iterate_batch_review(
 @iterate_app.command("resume")
 def iterate_resume(
     session_id: str = typer.Option("", "--session", help="Session id (default: most recent)"),
+    run: bool = typer.Option(
+        False,
+        "--run",
+        help="Headless: continue the last iterate run from its checkpoint (no REPL)",
+    ),
+    rounds: int = typer.Option(3, "--rounds", min=1, max=20, help="Loop round cap for --run"),
 ) -> None:
-    """Resume a previous session and continue the iterate loop in the REPL."""
+    """Resume a previous session in the REPL, or the last run headlessly.
+
+    ``--run`` continues an interrupted/paused iterate run from the persisted
+    convergence checkpoint — the exact counterpart of the checkpoint kept by
+    ``ih iterate control pause|stop`` and by a crashed headless run. Without
+    it, ``--session``/no flag restores an interactive REPL session.
+    """
     import asyncio
 
     from iterate_harness.services.session_storage import (
@@ -1282,8 +1294,45 @@ def iterate_resume(
 
     # Normalize typer defaults so direct Python calls behave like the CLI.
     session_id = _typer_str(session_id)
+    run = _typer_flag(run)
+    rounds = _typer_int(rounds)
+
+    if run and session_id:
+        raise typer.BadParameter("--run and --session are mutually exclusive")
 
     cwd = str(Path.cwd())
+    if run:
+        from iterate_harness.iterate import prompts as iterate_prompts
+        from iterate_harness.iterate.config_loader import load_effective_config
+        from iterate_harness.iterate.last_state import summarize_last_run
+
+        summary = summarize_last_run(cwd)
+        if summary is None:
+            print(
+                "No iterate run to resume "
+                "(.iterate/decision-log.jsonl has no report entry and no checkpoint).",
+                file=sys.stderr,
+            )
+            raise typer.Exit(1)
+        effective_goal = load_effective_config(cwd).config.goal
+        kickoff = iterate_prompts.resume_kickoff(effective_goal, rounds, summary)
+        if summary.get("interrupted"):
+            print(
+                "Resuming interrupted iterate run "
+                f"({summary.get('mode', 'dry-run')}, last converged checkpoint at round "
+                f"{summary.get('rounds', 0)}, {summary.get('totalFindings', 0)} finding(s))…",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Resuming last iterate run "
+                f"({summary.get('mode', 'dry-run')}, stopped at round "
+                f"{summary.get('rounds', 0)}, {summary.get('totalFindings', 0)} finding(s))…",
+                file=sys.stderr,
+            )
+        _run_headless(kickoff)
+        return
+
     session_data = None
     if session_id:
         session_data = load_session_by_id(cwd, session_id)
@@ -1509,12 +1558,12 @@ def _request_stop(kind: str, reason: str, as_json: bool) -> None:
         print(
             "Pause requested. Headless runs have no interactive pause menu: the "
             "loop stops gracefully at the next round boundary and keeps the "
-            "checkpoint. Continue with `ih iterate resume`."
+            "checkpoint. Continue with `ih iterate resume --run`."
         )
     else:
         print(
             "Stop requested. The loop stops gracefully at the next round "
-            "boundary; the checkpoint is kept, so `ih iterate resume` can "
+            "boundary; the checkpoint is kept, so `ih iterate resume --run` can "
             "continue later."
         )
 
@@ -1527,7 +1576,7 @@ def control_pause(
     """Ask the live run to stop gracefully at the next round boundary.
 
     Headless runs have no pause menu, so "pause" means a clean stop with the
-    checkpoint intact — resume later with ``ih iterate resume``. Use
+    checkpoint intact — resume later with ``ih iterate resume --run``. Use
     ``nudge`` if you want the loop to keep running with new instructions.
     """
     reason = _typer_str(reason)
@@ -2309,6 +2358,14 @@ def iterate_report(
     pr: bool = typer.Option(
         False, "--pr", help="Post/update the report as a PR comment via the gh CLI (degrades gracefully)"
     ),
+    github_summary: bool | None = typer.Option(
+        None,
+        "--github-summary/--no-github-summary",
+        help=(
+            "Append the Markdown report to $GITHUB_STEP_SUMMARY "
+            "(default: auto when GitHub set it)"
+        ),
+    ),
     html_out: str = typer.Option(
         "",
         "--html",
@@ -2354,6 +2411,7 @@ def iterate_report(
     # would otherwise make every boolean flag evaluate True.
     github = _typer_flag(github)
     pr = _typer_flag(pr)
+    github_summary = _typer_optional_flag(github_summary)
     serve = _typer_flag(serve)
     persist = _typer_flag(persist)
     serve_port = _typer_int(serve_port)
@@ -2426,6 +2484,19 @@ def iterate_report(
         body = pr_comment.render_markdown(summary, gate, decision_log=entries)
         result = pr_comment.post_pr_comment(body, str(Path.cwd()))
         print(f"PR comment: {result}", file=sys.stderr)
+    if ci_report.step_summary_enabled(github_summary):
+        # GitHub's job summary is the PR-comment report without needing a PR:
+        # same renderer, same marker, same "unmeasured is not clean" refusal.
+        # The write is additive — the exit code below is unaffected.
+        step_body = pr_comment.render_markdown(summary, gate, decision_log=entries)
+        step_target = ci_report.append_step_summary(step_body)
+        if step_target is None:
+            print(
+                "GitHub step summary: skipped (GITHUB_STEP_SUMMARY is unset or unwritable).",
+                file=sys.stderr,
+            )
+        else:
+            print(f"GitHub step summary: {step_target}", file=sys.stderr)
     if not github and not pr:
         print(ci_report.render_text(summary, gate, language=language))
     if csv_out:
@@ -2640,6 +2711,12 @@ def _typer_default(value: object) -> object:
 def _typer_flag(value: object) -> bool:
     """Normalize a typer OptionInfo default to a plain bool."""
     return bool(_typer_default(value))
+
+
+def _typer_optional_flag(value: object) -> bool | None:
+    """Normalize a tri-state typer flag, preserving ``None`` (auto)."""
+    raw = _typer_default(value)
+    return None if raw is None else bool(raw)
 
 
 def _typer_int(value: object) -> int:

@@ -16,11 +16,18 @@ to "no findings recorded" instead of crashing the pipeline.
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .decision_log import DecisionLogEntry
+
+log = logging.getLogger(__name__)
+
+#: GitHub Actions sets this to a file path the job can append Markdown to.
+GITHUB_STEP_SUMMARY_ENV = "GITHUB_STEP_SUMMARY"
 
 #: Map finding severity → GitHub annotation level.
 GITHUB_ANNOTATION_LEVELS: dict[str, str] = {
@@ -310,18 +317,65 @@ def severity_gate(summary: ReportSummary, fail_on: str = DEFAULT_FAIL_ON) -> int
     return 0
 
 
+def step_summary_enabled(explicit: bool | None = None) -> bool:
+    """Resolve whether to write the GitHub Actions step summary.
+
+    ``True``/``False`` are an operator's explicit choice; ``None`` means auto —
+    enabled only when GitHub actually set ``GITHUB_STEP_SUMMARY``.
+    """
+    if explicit is not None:
+        return explicit
+    return bool(os.environ.get(GITHUB_STEP_SUMMARY_ENV, "").strip())
+
+
+def append_step_summary(markdown: str, path: str | None = None) -> str | None:
+    """Append Markdown to the step-summary file; return its path or ``None``.
+
+    GitHub renders this file under the workflow run's summary tab, so the same
+    report a PR comment shows also becomes visible without a PR. Writing is
+    best-effort by design: a missing env var or an unwritable path must never
+    change the report's exit code, so failures are logged and return ``None``.
+    """
+    target = path if path is not None else os.environ.get(GITHUB_STEP_SUMMARY_ENV, "")
+    target = (target or "").strip()
+    if not target:
+        return None
+    body = markdown.rstrip()
+    if not body:
+        return None
+    destination = Path(target)
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        needs_leading_newline = False
+        if destination.exists() and destination.stat().st_size > 0:
+            with destination.open("rb") as handle:
+                handle.seek(-1, os.SEEK_END)
+                needs_leading_newline = handle.read(1) != b"\n"
+        with destination.open("a", encoding="utf-8") as handle:
+            if needs_leading_newline:
+                handle.write("\n")
+            handle.write(body + "\n")
+        return str(destination)
+    except OSError as exc:
+        log.warning("GitHub step summary write failed for %s: %s", destination, exc)
+        return None
+
+
 __all__ = [
     "DEFAULT_FAIL_ON",
     "GITHUB_ANNOTATION_LEVELS",
+    "GITHUB_STEP_SUMMARY_ENV",
     "L10N_TEXTS",
     "SEVERITY_ORDER",
     "SUPPORTED_LANGUAGES",
     "ReportSummary",
+    "append_step_summary",
     "latest_report_entry",
     "render_csv",
     "render_github",
     "render_text",
     "severity_gate",
+    "step_summary_enabled",
     "threshold_exit_code",
     "threshold_gate",
 ]

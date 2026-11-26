@@ -230,7 +230,8 @@ ih iterate review --template strict  # 评审模板：standard（默认）/ stri
 ih iterate run                       # 无头自治修复闭环
 ih iterate run --template quick      # 以不同评审模板跑修复闭环
 ih iterate validate "pytest -x"      # 运行预配置校验命令；输出 allowed / reject_reason / exit_code
-ih iterate resume                    # 恢复上次会话
+ih iterate resume                    # 在 REPL 中恢复上次会话
+ih iterate resume --run              # 无头续跑：从上次 checkpoint 继续未完成的运行
 ih iterate sessions                  # 列出已存会话（--limit N / --json），再 `ih iterate resume --session <id>` 续接
 # 无头运行进行中，在另一个终端：
 ih iterate control status            # 谁在跑、跑到哪、排队了什么
@@ -258,6 +259,7 @@ ih iterate diff --from 2 --to 5   # 任选两次已完成运行
 ih iterate log --replay   # 按时间序回放整次运行（相对时间戳）
 ih iterate report         # 渲染最终报告（CI 模式，见下）
 ih iterate report --pr    # 把报告发布/更新为 PR 评论（gh CLI，幂等）
+ih iterate report --github-summary   # 把 Markdown 报告追加到 $GITHUB_STEP_SUMMARY
 ih iterate report --html  # 单文件 HTML 报告（收敛曲线、内嵌 diff、可直接分享）
 ih iterate doctor         # skill↔harness 维度体系一致性检查
 ```
@@ -338,7 +340,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 - **findings 分诊** — `iterate_triage`：逐条 `y` 修复 / `n` 跳过 / `a` 永久忽略；`a` 持久化到 `known_intentional`，后续轮次自动过滤。同一个决定不必开模型会话：`ih iterate triage list|ignore|restore`（编号/区间/`all` 选择器，severity/维度/文件过滤，`--dry-run`，`--json`）直接写引擎真正读取的存储；Runs 页的**永久忽略**按钮做同一件事。journal 写失败时会回滚已写的过滤条目并退出 1——绝不会出现「finding 被隐藏却没有记录」。
 - **逐修复 diff 审批** — `require_fix_approval` 让 normal 模式闭环中的每次文件写入都走带 diff 预览的交互确认——即便处于全自动模式；硬拒绝（保护路径/禁止模式）绝不降级为可确认。
 - **Esc 中途干预** — 闭环运行中按 Esc：在下一轮边界暂停并弹出方向键菜单（跳过当前 finding / 收窄维度 / 直接停 / 继续）；再按一次 Esc 强制打断当前 turn。
-- **断点续跑** — TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding。
+- **断点续跑** — TUI 启动画面汇总上一次收尾（结论、轮数、严重度分布、最后一次干预），`/iterate resume` 基于决策日志续跑并复核仍然复现的 finding。同一份 checkpoint 也能不开 REPL 直接续跑：`ih iterate resume --run` 从上次成功收敛点继续被中断/暂停的无头运行（与 `ih iterate control pause|stop` 对应）；当 checkpoint 比最后一份报告更新时，摘要会如实显示这次未完成的运行，而不是更早的已完成运行。
 - **finding 指纹趋势库** — 每次收尾用 `文件\|行号\|维度` 指纹把 finding 记入 `.iterate/trend-library.json`；`ih iterate log --trend` / `/iterate trend` 跨运行统计新增 / 已修复 / 回归 / 顽固（连续 3+ 轮）finding。
 - **逐次运行趋势历史** — `ih iterate trend` 从决策日志还原每一次已完成的运行，展示该轮**新增 / 修复 / 回归**以及未解决/顽固问题；`--fail-on-regression` / `--fail-on-new <severity>` 可直接作为 CI 门禁。同一视图也出现在 WebUI 的「趋势」页（见下），并可导出 Markdown / CSV / JSON。
 - **运行对比** — `ih iterate diff [--from N] [--to M] [--json]` 回答“这两次运行之间到底变了什么”：把每个 finding 按指纹对照较早一次运行，归为新增 / 已修复 / 回归 / 未变。它把决策日志接到引擎已有的指纹 diff 上；回归判定使用趋势库里已修复的记录，因此“以前修过、这次又出现”不会被算成普通新增。同一对比也是 WebUI 的一个页面（见下）。
@@ -347,7 +349,7 @@ ih iterate hook install   # 托管 pre-commit 钩子：1 轮 changed-only 提交
 ### 报告与集成
 
 - **收敛仪表盘** — React TUI 实时面板：逐轮 findings 趋势、带分维度 USD 估算的维度分布、主循环累计成本、收敛徽标。
-- **CI / PR 模式** — `ih iterate report --github --fail-on high` 将最终报告转为 GitHub Actions 批注，并按严重度门禁决定退出码；`--pr` 经 gh CLI 把报告以 Markdown 评论发布（marker 查找全量翻页，巨型 PR 同样幂等更新同一条评论），所有失败形态优雅降级、绝不破坏退出码策略。
+- **CI / PR 模式** — `ih iterate report --github --fail-on high` 将最终报告转为 GitHub Actions 批注，并按严重度门禁决定退出码；`--pr` 经 gh CLI 把报告以 Markdown 评论发布（marker 查找全量翻页，巨型 PR 同样幂等更新同一条评论）；`--github-summary` 把同一份 Markdown 报告追加到 `$GITHUB_STEP_SUMMARY`（GitHub 设置该变量时自动启用，`--no-github-summary` 可关闭），没有 PR 也能在运行摘要里看到结果；所有失败形态优雅降级、绝不破坏退出码策略。WebUI 的**报告**页可直接下载任意产物（包括大到无法内嵌预览的多 MB HTML 报告）。
 - **HTML 单文件报告** — `ih iterate report --html` 把整次运行渲染成一个可离线打开的 `.html`：SVG 收敛曲线、severity/维度分布条、含失败场景的 findings 表、按修复着色的 diff——可直接作为 CI 产物分享。
 - **评审回放** — `ih iterate log --replay` 按时间序回放整次运行（`[+90s] r1 review_result newFindings=3`），像看录像一样还原闭环展开过程。
 - **changed-only 快审** — `--changed [--ref <ref>]`（CLI 与 `/iterate review --changed`）把整个闭环钉在 git 增量上：kickoff、评审计划与每个维度 reviewer prompt 都携带明确的改动文件清单。

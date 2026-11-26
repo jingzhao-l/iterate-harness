@@ -29,10 +29,12 @@ back via Git isolation on validation failure):
 ih iterate run
 ```
 
-If an earlier run was interrupted, resume from the decision log:
+If an earlier run was interrupted, resume from the decision log — interactively
+in the REPL, or headlessly from the checkpoint:
 
 ```bash
 ih iterate resume
+ih iterate resume --run
 ```
 
 ## 3. Per-project knowledge and personalization
@@ -59,6 +61,9 @@ ih iterate report --github --fail-on high
 
 # Post (and later update) a Markdown report as the PR comment
 ih iterate report --pr
+
+# Append the same Markdown report to the GitHub Actions job summary
+ih iterate report --github-summary
 
 # Single-file HTML report (convergence curve, diffs) — great as a CI artifact
 ih iterate report --html

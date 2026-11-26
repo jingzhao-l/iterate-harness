@@ -12,7 +12,7 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from ..security import allowed_roots, root_is_allowed, default_root
 from ..schemas import ReportView
@@ -91,6 +91,33 @@ def list_reports(project_root: str = "") -> list[ReportView]:
     return out
 
 
+def _resolve_report_file(root: Path, name: str) -> Path:
+    """Resolve one whitelisted report artifact, or raise an HTTP error.
+
+    Path-whitelisting (``resolve_within``) prevents traversal, and the name
+    check keeps the endpoint from reading any other file under ``.iterate``
+    (e.g. the audit/triage journals).
+    """
+    from ..security import resolve_within
+
+    try:
+        resolved = resolve_within(root / ".iterate", name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if resolved.name not in REPORT_FILENAMES:
+        raise HTTPException(status_code=404, detail=f"Report file not found: {name}")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail=f"Report file not found: {name}")
+    return resolved
+
+
+def _report_media_type(name: str) -> str:
+    """Content type for a downloaded artifact (CSV stays plain text)."""
+    if name.lower().endswith(".csv"):
+        return "text/csv; charset=utf-8"
+    return "text/html; charset=utf-8"
+
+
 @router.get("/reports/preview", response_model=dict[str, object])
 def preview_report(
     project_root: str = "",
@@ -102,21 +129,7 @@ def preview_report(
     report file must sit under the project's ``.iterate`` directory.
     """
     root = _resolve_project(project_root)
-    from ..security import resolve_within
-
-    try:
-        resolved = resolve_within(root / ".iterate", name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    # The path is inside .iterate but must still be one of the known report
-    # artifacts; otherwise a caller could read any file in .iterate (e.g. the
-    # audit/triage journals) by passing its name here.
-    if resolved.name not in REPORT_FILENAMES:
-        raise HTTPException(status_code=404, detail=f"Report file not found: {name}")
-
-    if not resolved.is_file():
-        raise HTTPException(status_code=404, detail=f"Report file not found: {name}")
+    resolved = _resolve_report_file(root, name)
 
     # A long run's report.html is routinely tens of MB. Buffering the whole
     # file into one JSON string doubled memory and hung the tab on JSON.parse,
@@ -140,3 +153,32 @@ def preview_report(
         ) from exc
 
     return {"name": name, "content": content, "size": size}
+
+
+@router.get("/reports/download")
+def download_report(
+    project_root: str = "",
+    name: str = "report.html",
+) -> Response:
+    """Download a report artifact as an attachment.
+
+    Unlike the inline preview this has no size cap: a long run's report is
+    routinely tens of MB, and the operator still needs the file. The same
+    whitelist decides what may be read.
+    """
+    root = _resolve_project(project_root)
+    resolved = _resolve_report_file(root, name)
+    try:
+        content = resolved.read_bytes()
+    except OSError as exc:
+        log.warning("report download read failed for %s: %s", resolved, exc)
+        raise HTTPException(
+            status_code=500, detail="Read failed (see the server log)"
+        ) from exc
+    return Response(
+        content=content,
+        media_type=_report_media_type(resolved.name),
+        headers={
+            "Content-Disposition": f'attachment; filename="{resolved.name}"',
+        },
+    )

@@ -66,7 +66,7 @@ def test_pause_and_stop_carry_the_operator_reason(tmp_path: Path) -> None:
     begin_run(tmp_path)
     pause = invoke("pause", "--reason", "reviewing the plan")
     assert pause.exit_code == 0, pause.output
-    assert "ih iterate resume" in pause.output
+    assert "ih iterate resume --run" in pause.output
     stop = invoke("stop", "--reason", "done for today")
     assert stop.exit_code == 0, stop.output
     assert "checkpoint is kept" in stop.output

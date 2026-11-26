@@ -2,6 +2,25 @@
 
 All notable changes to iterate-harness should be recorded in this file.
 
+## [2.27.0] - 2026-11-26
+
+**版本判断：minor。** 新增两个 CLI 能力（`ih iterate resume --run`、`ih iterate report --github-summary`）与一个 WebUI 报告下载入口，并修复断点续跑摘要的时间新旧判定；既有命令、参数、API 形状与数据格式均不动（`--github-summary` 是新增三态开关，`/api/v1/reports/download` 是新增路由）。按加法语义判为 minor。
+
+- **无头断点续跑（`ih iterate resume --run`）。** 此前 checkpoint 明明被保留，却只有两条路：重开 REPL 会话，或重新跑一整轮。`ih iterate control pause|stop`、崩溃的运行以及达到轮次上限的运行都会留下 `.iterate/checkpoint.json`，但 CLI 没有对应的「从这里继续」入口，停止提示还指向只能恢复会话的 `ih iterate resume`。新增 `--run`：读取 `last_state.summarize_last_run`，用与 REPL 内 `/iterate resume` **同一份** `prompts.resume_kickoff`（同一套复核仍然复现 finding、重新读取决策日志、沿用 dry-run/normal 规则与 deferred architectural 列表的语义）走无头 `_run_headless`，因此控制通道、运行租约与决策日志审计全部照常；`--rounds` 控制新一轮上限，`--run` 与 `--session` 互斥并给出明确用法错误。`ih iterate control pause|stop` 的提示、`loop_policy` 的停止原因与帮助文本统一改为 `ih iterate resume --run`，不再把操作者引向错误的入口。
+- **GitHub Actions 运行摘要（`ih iterate report --github-summary`）。** CI 里没有 PR 时，`--github` 的批注与 `--pr` 的评论都无处落脚，报告只剩日志。新增 `ci_report.append_step_summary`：把与 PR 评论**同一个** `pr_comment.render_markdown` 渲染的 Markdown 追加到 `$GITHUB_STEP_SUMMARY`，GitHub 会把它显示在 workflow run 的 Summary 页。三态开关：未指定时只要 GitHub 设置了该环境变量就自动启用；`--no-github-summary` 显式关闭；显式开启但路径不可写时只打印一行提示并**绝不改变退出码**。追加写入会处理文件末尾缺少换行的情况，空内容不落盘；未测量（无 report 条目）时仍走 renderer 的拒绝路径，不会把「没跑」渲染成「没问题」。
+- **WebUI 报告页可下载产物。** 报告页此前只能内嵌预览，而预览对超过 8MB 的 HTML 直接 413——长跑生成的报告恰好经常超过这个体积，操作者看得到文件名却拿不到文件。新增只读路由 `GET /api/v1/reports/download`（与预览共用同一套 `resolve_within` + 报告文件名白名单，CSV 以 `text/csv`、HTML 以 `text/html` 作为附件返回，不设预览体积上限），报告列表每行与预览标题栏都有下载按钮，使用现有 `downloadTextFile` 保存；`downloadReport` 从 `Content-Disposition` 取服务端文件名，代理剥离响应头时回退到经过净化的文件名与 MIME 类型（纯函数 `report.ts`，含单测）。
+- **修复：更新的 checkpoint 不再被更旧的 report 盖住。** `last_state.summarize_last_run` 原先只要日志里存在 `report` 条目就优先返回它；于是一次已完成运行之后又启动、随后被中断（或暂停）的运行，会被摘要成「上一次已收敛」，Resume 面板与 `resume_kickoff` 因此从错误的轮次/结论出发。现在比较 checkpoint 的 epoch 时间戳与最后一条 report 的 ISO 时间戳：checkpoint 更新时返回 `interrupted` 摘要（并保留 deferred architectural 列表），更旧或任一侧时间戳不可解析时维持原有行为，历史日志形状不受影响。
+- **测试卫生：npm 包装器测试不再污染仓库。** 安装回退用例用相对路径 `home/npm` 写真实缓存文件，跑一次 `node --test` 就在仓库根留下未跟踪的 `home/`。测试改用操作系统临时目录，并在同一轮验证运行后仓库不再出现该目录。
+- **文档同步。** 中英 README 增加 `resume --run` / `report --github-summary` 命令与能力说明、报告页下载入口；`docs/SHOWCASE.md` 同步两个新入口；版本号在 `__init__.py`、`npm/package.json`、`frontend/web/package.json` 与 lock 中同步为 2.27.0。
+
+**核验（本机，2026-11-26）：**
+
+- 端到端（临时项目、真实 CLI）：`GITHUB_STEP_SUMMARY=… ih iterate report --fail-on none` 退出 0，摘要文件写入 `<!-- iterate-report -->` Markdown 表格与 `threshold gate: PASS ✅`；加 `--no-github-summary` 后同一命令不再写文件；`ih iterate resume --run` 在无历史项目退出 1 并给出可执行提示；`ih --version` 输出 `iterate_harness 2.27.0`。
+- `pytest tests/ -q` → **3527 passed, 6 skipped**（基线 3507 + 20：checkpoint/report 新旧判定 3、`resume --run` 3、step summary 与 CLI 10、下载路由 4）。
+- `ruff check src tests` → All checks passed；`mypy src` → Success: no issues found in 291 source files。
+- 前端 `vitest run` → **178 passed**（18 files，新增报告下载回退 6 条）；`tsc --noEmit` 通过；`vite build` 成功（88 modules）。
+- npm 包装器 `node --test test/bootstrap.test.js` → **68 passed**，且运行后仓库无 `home/` 残留。
+
 ## [2.26.0] - 2026-11-25
 
 **版本判断：minor。** 新增一个 CLI 子命令组（`ih defense show|journal|check`）、一个 WebUI 页面（防御守卫）与 `.iterate/defense-journal.jsonl` 台账；既有命令、参数与退出码集合不动（defense 是新增入口），既有 API 形状与数据格式不动（新增 `/api/v1/defense*` 路由），`ih doctor` 只是多一项检查。按加法语义判为 minor。

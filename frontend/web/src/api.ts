@@ -1,6 +1,7 @@
 // Thin fetch wrapper over the /api/v1 backend (design §17.5).
 // No UI framework, no axios — plain fetch with JSON handling + error decode.
 
+import { reportContentType, reportDownloadName } from "./report";
 import type {
   AgentsView,
   AuditExportFormat,
@@ -185,6 +186,36 @@ export async function downloadTrendExport(
     filename: match?.[1] ?? `iterate-trend.${format}`,
     text: await response.text(),
     contentType: response.headers.get("Content-Type") ?? "",
+  };
+}
+
+export interface ReportDownload {
+  filename: string;
+  text: string;
+  contentType: string;
+}
+
+/**
+ * Fetch a generated report artifact as an attachment. Unlike the preview this
+ * has no size cap, so a long run's multi-megabyte HTML report is still
+ * downloadable. The server owns the filename and content type.
+ */
+export async function downloadReport(
+  name: string,
+  projectRoot?: string,
+): Promise<ReportDownload> {
+  const response = await fetch(
+    `${API_BASE}/reports/download${buildQuery(projectRoot, { name })}`,
+    withAuth(),
+  );
+  if (!response.ok) await throwApiError(response);
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+  return {
+    filename: match?.[1] ?? reportDownloadName(name),
+    text: await response.text(),
+    contentType:
+      response.headers.get("Content-Type") ?? reportContentType(name),
   };
 }
 
@@ -404,6 +435,9 @@ export const api = {
 
   reports: (projectRoot?: string): Promise<ReportView[]> =>
     request<ReportView[]>(`/reports${buildQuery(projectRoot)}`),
+
+  // Download a report artifact (HTML/CSV) without the inline-preview size cap.
+  downloadReport,
 
   // Cross-run trend: per-run new/fixed/regressed history + stubborn/open
   // findings. Read-only; safe to refetch while a loop is running.

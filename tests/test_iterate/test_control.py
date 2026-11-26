@@ -290,7 +290,7 @@ def test_a_pause_explains_that_the_checkpoint_is_resumable(tmp_path: Path) -> No
     decision = policy.on_turn_end({ITERATE_STATE_KEY: state()}, UsageSnapshot(), "m")
     assert decision.stop_reason is not None
     assert "operator pause" in decision.stop_reason
-    assert "ih iterate resume" in decision.stop_reason
+    assert "ih iterate resume --run" in decision.stop_reason
 
 
 def test_a_stop_does_not_fire_before_a_round_boundary(tmp_path: Path) -> None:

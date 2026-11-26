@@ -257,7 +257,8 @@ ih iterate review --template strict  # review template: standard (default) / str
 ih iterate run                       # headless autonomous fix loop
 ih iterate run --template quick      # fix loop with a different review template
 ih iterate validate "pytest -x"      # run a preconfigured validation command; prints allowed / reject_reason / exit_code
-ih iterate resume                    # resume the last session
+ih iterate resume                    # resume the last session in the REPL
+ih iterate resume --run              # headless: continue the last run from its checkpoint
 ih iterate sessions                  # list saved sessions (--limit N, --json), then `ih iterate resume --session <id>`
 # from a second terminal, while a headless run is going:
 ih iterate control status            # who is running, where it is, what is queued
@@ -285,6 +286,7 @@ ih iterate triage restore 1         # undo a permanent ignore (machine-added ent
 ih iterate log --replay   # replay the whole run chronologically (relative timestamps)
 ih iterate report         # render the final report (CI mode, see below)
 ih iterate report --pr    # post/update the report as a PR comment (gh CLI, idempotent)
+ih iterate report --github-summary   # append the Markdown report to $GITHUB_STEP_SUMMARY
 ih iterate report --html  # single-file HTML report (convergence curve, diffs, shareable)
 ih iterate doctor         # skill↔harness dimension-system consistency check
 ```
@@ -366,7 +368,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 - **Findings triage** — `iterate_triage`: walk findings with `y` fix / `n` skip / `a` always-ignore; `a` persists to `known_intentional` so future rounds filter it automatically. The same decision is reachable without a model session: `ih iterate triage list|ignore|restore` (numbered selectors, severity/dimension/file filters, `--dry-run`, `--json`) writes the stores the engine actually reads, and the Runs page's **永久忽略 / permanently ignore** button performs the same write. A rollback keeps the two halves consistent: if the journal record cannot be written, the filter entries are removed again, so a finding is never hidden without a record.
 - **Per-fix diff approval** — `require_fix_approval` routes every file write during a normal-mode loop through an interactive prompt with an inline diff preview — even in full-auto mode; hard denials are never downgraded.
 - **Esc intervention** — press Esc mid-loop: the loop pauses at the next round boundary and opens a directional-key menu (skip top finding / narrow dimensions / stop / resume); a second Esc force-interrupts the turn.
-- **Breakpoint resume** — the TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings.
+- **Breakpoint resume** — the TUI startup panel summarizes the last finished run (verdict, rounds, severity buckets, last intervention) and `/iterate resume` continues from the decision log with re-verification of still-reproducing findings. The same checkpoint is resumable without a REPL: `ih iterate resume --run` continues an interrupted/paused headless run (the counterpart of `ih iterate control pause|stop`) and, when a newer checkpoint exists, reports that unfinished run instead of an older completed one.
 - **Finding trend library** — every finished run fingerprints findings (`file\|line\|dimension`) into `.iterate/trend-library.json`; `ih iterate log --trend` / `/iterate trend` report new / fixed / regressed / stubborn (3+ runs) findings across runs.
 - **Per-run trend history** — `ih iterate trend` reconstructs every finished run from the decision log and shows what that run **added, fixed, or regressed**, plus open/stubborn findings; `--fail-on-regression` / `--fail-on-new <severity>` turn it into a CI gate. The same view is a page in the WebUI (see below).
 - **Run comparison** — `ih iterate diff [--from N] [--to M] [--json]` answers "what changed between these two runs?" by classifying every finding against the earlier run: new / fixed / regressed / unchanged. It joins the decision log to the engine's fingerprint diff, and regressions are resolved against the trend library's fixed records, so a finding fixed earlier and present again is never reported as merely "new". The same comparison is a WebUI page (below).
@@ -375,7 +377,7 @@ ih iterate hook install   # managed pre-commit hook: 1-round changed-only gate
 ### Reports & integration
 
 - **Convergence dashboard** — live React TUI panel: per-round findings trend, per-dimension counts with per-dimension USD estimates, running metered cost, converged badge.
-- **CI / PR mode** — `ih iterate report --github --fail-on high` turns the final report into GitHub Actions annotations with a severity-based exit-code gate for PRs; `--pr` posts (and on later runs UPDATES) a Markdown report comment via the gh CLI (marker lookup paginates, so giant PRs stay idempotent) — every failure mode degrades gracefully, never breaking the exit-code policy.
+- **CI / PR mode** — `ih iterate report --github --fail-on high` turns the final report into GitHub Actions annotations with a severity-based exit-code gate for PRs; `--pr` posts (and on later runs UPDATES) a Markdown report comment via the gh CLI (marker lookup paginates, so giant PRs stay idempotent); `--github-summary` appends the same Markdown report to `$GITHUB_STEP_SUMMARY` (auto-enabled when GitHub sets it, `--no-github-summary` opts out) so the run summary is visible without a PR — every failure mode degrades gracefully, never breaking the exit-code policy. The WebUI **Reports** page can download any artifact (including multi-megabyte HTML reports that are too large for inline preview).
 - **HTML single-file report** — `ih iterate report --html` renders the run as ONE offline `.html` file: SVG convergence curve, severity/dimension bars, findings table with failure scenarios, and colorized per-fix diffs — share it as a CI artifact.
 - **Decision replay** — `ih iterate log --replay` re-plays the run chronologically with relative timestamps (`[+90s] r1 review_result newFindings=3`) — watch how the loop unfolded like a recording.
 - **Changed-only quick review** — `--changed [--ref <ref>]` (CLI + `/iterate review --changed`) pins the whole loop to the git delta: the kickoff, review plan and every reviewer prompt carry the explicit changed-file listing.

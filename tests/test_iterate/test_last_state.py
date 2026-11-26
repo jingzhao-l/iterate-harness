@@ -117,6 +117,112 @@ def test_summarize_interrupted_previews_review_result_findings(tmp_path: Path):
     assert summary["severity"]["critical"] == 1
 
 
+def test_newer_checkpoint_wins_over_older_report(tmp_path: Path):
+    """A run interrupted after an earlier finished run must not be reported as
+    that older run: the checkpoint is newer evidence of unfinished work."""
+    _write_entries(
+        tmp_path,
+        [
+            {
+                "timestamp": "2020-01-01T00:00:00+00:00",
+                "round": 2,
+                "type": "report",
+                "data": {
+                    "mode": "normal",
+                    "verdict": "converged",
+                    "findings": [],
+                },
+            },
+        ],
+    )
+    save_checkpoint(
+        tmp_path,
+        round=4,
+        new_findings=1,
+        total_findings=3,
+        per_dimension={"security": 3},
+        converged=False,
+        input_tokens=100,
+        output_tokens=200,
+        cost_usd=0.01,
+        mode="normal",
+    )
+
+    summary = summarize_last_run(str(tmp_path))
+    assert summary is not None
+    assert summary["interrupted"] is True
+    assert summary["verdict"] == "interrupted"
+    assert summary["rounds"] == 4
+    assert summary["totalFindings"] == 3
+
+
+def test_older_checkpoint_keeps_report_summary(tmp_path: Path):
+    """A checkpoint from a finished run stays a fallback, not the headline."""
+    _write_entries(
+        tmp_path,
+        [
+            {
+                "timestamp": "2999-01-01T00:00:00+00:00",
+                "round": 2,
+                "type": "report",
+                "data": {
+                    "mode": "normal",
+                    "verdict": "converged",
+                    "findings": [],
+                },
+            },
+        ],
+    )
+    save_checkpoint(
+        tmp_path,
+        round=2,
+        new_findings=0,
+        total_findings=0,
+        per_dimension={},
+        converged=True,
+        input_tokens=100,
+        output_tokens=200,
+        cost_usd=0.01,
+        mode="normal",
+    )
+
+    summary = summarize_last_run(str(tmp_path))
+    assert summary is not None
+    assert summary["verdict"] == "converged"
+    assert "interrupted" not in summary
+
+
+def test_unparseable_report_timestamp_keeps_report(tmp_path: Path):
+    """Legacy/odd report timestamps must not flip the summary to interrupted."""
+    _write_entries(
+        tmp_path,
+        [
+            {
+                "timestamp": "t1",
+                "round": 2,
+                "type": "report",
+                "data": {"mode": "normal", "verdict": "converged", "findings": []},
+            },
+        ],
+    )
+    save_checkpoint(
+        tmp_path,
+        round=3,
+        new_findings=1,
+        total_findings=1,
+        per_dimension={},
+        converged=False,
+        input_tokens=1,
+        output_tokens=1,
+        cost_usd=0.0,
+        mode="normal",
+    )
+
+    summary = summarize_last_run(str(tmp_path))
+    assert summary is not None
+    assert summary["verdict"] == "converged"
+
+
 def test_summarize_interrupted_without_review_result(tmp_path: Path):
     save_checkpoint(
         tmp_path,

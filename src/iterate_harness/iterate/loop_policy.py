@@ -396,7 +396,7 @@ class IterateLoopPolicy:
         if command.kind == "pause":
             reason = (
                 "operator pause requested via ih iterate control "
-                "(checkpoint kept; resume with `ih iterate resume`)"
+                "(checkpoint kept; resume with `ih iterate resume --run`)"
             )
         else:
             reason = "operator stop requested via ih iterate control"

@@ -3,7 +3,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api } from "../api";
+import { api, downloadReport } from "../api";
+import { downloadTextFile } from "../download";
 import { useWebUi } from "../store";
 import type { ReportPreview, ReportView } from "../types";
 
@@ -23,6 +24,9 @@ export default function Reports(): React.JSX.Element {
   // The report we last asked to preview, kept apart from `selected` so a
   // failed preview can offer a retry against the same target.
   const [previewTarget, setPreviewTarget] = useState<string | null>(null);
+  // Name of the artifact currently being downloaded (row buttons and the
+  // preview header share this so a double click cannot start two saves).
+  const [downloading, setDownloading] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const pushToast = useWebUi((state) => state.pushToast);
   const projectRoot = useWebUi((state) => state.projectRoot);
@@ -66,6 +70,23 @@ export default function Reports(): React.JSX.Element {
     [pushToast, setSearchParams, projectRoot],
   );
 
+  const download = useCallback(
+    async (name: string): Promise<void> => {
+      setDownloading(name);
+      try {
+        const result = await downloadReport(name, projectRoot);
+        downloadTextFile(result.filename, result.text, result.contentType);
+        pushToast("success", `已下载 ${result.filename}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        pushToast("error", message);
+      } finally {
+        setDownloading(null);
+      }
+    },
+    [projectRoot, pushToast],
+  );
+
   // Auto-open a report when arriving with ?name= (e.g. from the dashboard).
   useEffect(() => {
     const requested = searchParams.get("name");
@@ -106,6 +127,7 @@ export default function Reports(): React.JSX.Element {
                   <th>文件</th>
                   <th>大小</th>
                   <th>更新时间</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -122,6 +144,15 @@ export default function Reports(): React.JSX.Element {
                     <td className="mono">{formatSize(report.size)}</td>
                     <td className="mono muted">
                       {report.modified ? report.modified.slice(5, 19) : "—"}
+                    </td>
+                    <td>
+                      <button
+                        className="btn small"
+                        onClick={() => void download(report.name)}
+                        disabled={downloading !== null}
+                      >
+                        {downloading === report.name ? "下载中…" : "下载"}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -152,9 +183,26 @@ export default function Reports(): React.JSX.Element {
               </div>
             ) : selected ? (
               <>
-                <p className="muted mono" style={{ marginTop: 0 }}>
-                  {selected.name} · {formatSize(selected.size)}
-                </p>
+                <div
+                  className="muted mono"
+                  style={{
+                    marginTop: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                  <span>
+                    {selected.name} · {formatSize(selected.size)}
+                  </span>
+                  <button
+                    className="btn small"
+                    onClick={() => void download(selected.name)}
+                    disabled={downloading !== null}
+                  >
+                    {downloading === selected.name ? "下载中…" : "下载"}
+                  </button>
+                </div>
                 <iframe
                   className="report-frame"
                   title={selected.name}

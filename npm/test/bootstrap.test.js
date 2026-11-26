@@ -9,6 +9,10 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 
+// Install-path tests write real cache files. Keep them in the OS temp dir:
+// a relative "home/npm" used to litter the repository on every test run.
+const TEST_HOME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "iterate-harness-npm-test-"));
+
 const {
   DEFAULT_ARTIFACT_EXT,
   BootstrapError,
@@ -340,8 +344,8 @@ test("isRemoteHttpUrl matches only http(s) URLs", () => {
 
 test("downloadCachePath lands inside the runtime cache dir with the version pinned", () => {
   assert.equal(
-    downloadCachePath(path.join("home", "npm"), "1.9.1"),
-    path.join("home", "npm", "cache", "iterate-harness-1.9.1.tar.gz")
+    downloadCachePath(TEST_HOME_DIR, "1.9.1"),
+    path.join(TEST_HOME_DIR, "cache", "iterate-harness-1.9.1.tar.gz")
   );
 });
 
@@ -350,13 +354,13 @@ test("downloadCachePath keeps a valid PEP 427 filename for the wheel cache", () 
   // `{name}-{version}-{python}-{abi}-{platform}` tags — pip rejects a bare
   // `iterate-harness-1.9.1.whl` with "not a valid wheel filename".
   assert.equal(
-    downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl"),
-    path.join("home", "npm", "cache", wheelAssetName("1.9.1"))
+    downloadCachePath(TEST_HOME_DIR, "1.9.1", ".whl"),
+    path.join(TEST_HOME_DIR, "cache", wheelAssetName("1.9.1"))
   );
   // Round-trips through artifactExtensionFor(wheelAssetUrl) end-to-end.
   assert.equal(
-    downloadCachePath(path.join("home", "npm"), "1.9.1", artifactExtensionFor(wheelAssetUrl("1.9.1"))),
-    path.join("home", "npm", "cache", "iterate_harness-1.9.1-py3-none-any.whl")
+    downloadCachePath(TEST_HOME_DIR, "1.9.1", artifactExtensionFor(wheelAssetUrl("1.9.1"))),
+    path.join(TEST_HOME_DIR, "cache", "iterate_harness-1.9.1-py3-none-any.whl")
   );
 });
 
@@ -383,7 +387,7 @@ test("installHarness succeeds on the first pip attempt without downloading", asy
     candidates: [
       "https://github.com/jingzhao-l/iterate-harness/archive/refs/tags/v1.9.1.tar.gz",
     ],
-    homeDir: path.join("home", "npm"),
+    homeDir: TEST_HOME_DIR,
     version: "1.9.1",
     runStepFn: (command, args) => pipCalls.push([command, args]),
     downloader: async (downloadUrl, dest) => downloads.push([downloadUrl, dest]),
@@ -399,7 +403,7 @@ test("installHarness succeeds on the first pip attempt without downloading", asy
 
 test("installHarness falls back to a local pip install after a TLS failure", async () => {
   const url = "https://github.com/jingzhao-l/iterate-harness/archive/refs/tags/v1.9.1.tar.gz";
-  const cache = downloadCachePath(path.join("home", "npm"), "1.9.1");
+  const cache = downloadCachePath(TEST_HOME_DIR, "1.9.1");
   const pipCalls = [];
   const downloads = [];
   const { downloader, checksumFetcher } = digestRecordingDownloader(downloads);
@@ -412,7 +416,7 @@ test("installHarness falls back to a local pip install after a TLS failure", asy
   await installHarness({
     python: "/venv/bin/python",
     candidates: [url],
-    homeDir: path.join("home", "npm"),
+    homeDir: TEST_HOME_DIR,
     version: "1.9.1",
     runStepFn,
     downloader,
@@ -433,7 +437,7 @@ test("installHarness wraps both failures when the download fallback dies too", a
     installHarness({
       python: "/venv/bin/python",
       candidates: ["https://github.com/x/y.tar.gz"],
-      homeDir: path.join("home", "npm"),
+      homeDir: TEST_HOME_DIR,
       version: "1.9.1",
       runStepFn,
       downloader: async () => {
@@ -455,7 +459,7 @@ test("installHarness rethrows the primary error verbatim for a single non-http t
     installHarness({
       python: "/venv/bin/python",
       candidates: ["/tmp/iterate-harness-1.9.1.tar.gz"],
-      homeDir: path.join("home", "npm"),
+      homeDir: TEST_HOME_DIR,
       version: "1.9.1",
       runStepFn: () => {
         throw primary;
@@ -475,7 +479,7 @@ test("installHarness tries the next candidate when the previous one fails", asyn
   await installHarness({
     python: "/venv/bin/python",
     candidates,
-    homeDir: path.join("home", "npm"),
+    homeDir: TEST_HOME_DIR,
     version: "1.9.1",
     runStepFn: (command, args) => {
       pipCalls.push([command, args]);
@@ -503,7 +507,7 @@ test("installHarness propagates the local pip failure after verification", async
     installHarness({
       python: "/venv/bin/python",
       candidates: ["https://github.com/x/y.tar.gz"],
-      homeDir: path.join("home", "npm"),
+      homeDir: TEST_HOME_DIR,
       version: "1.9.1",
       runStepFn: () => {
         pipCalls += 1;
@@ -529,14 +533,14 @@ test("installHarness propagates the local pip failure after verification", async
 test("installHarness downloads a wheel to a .whl cache file on a TLS failure", async () => {
   const wheelUrl =
     "https://github.com/jingzhao-l/iterate-harness/releases/download/v1.9.1/iterate_harness-1.9.1-py3-none-any.whl";
-  const cache = downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl");
+  const cache = downloadCachePath(TEST_HOME_DIR, "1.9.1", ".whl");
   const pipCalls = [];
   const downloads = [];
   const { downloader, checksumFetcher } = digestRecordingDownloader(downloads);
   await installHarness({
     python: "/venv/bin/python",
     candidates: [wheelUrl],
-    homeDir: path.join("home", "npm"),
+    homeDir: TEST_HOME_DIR,
     version: "1.9.1",
     runStepFn: (command, args) => {
       pipCalls.push([command, args]);
@@ -563,7 +567,7 @@ test("installHarness walks PyPI → wheel → archive across the fallback chain"
   await installHarness({
     python: "/venv/bin/python",
     candidates: [pypiSpec, wheelUrl, archiveUrl],
-    homeDir: path.join("home", "npm"),
+    homeDir: TEST_HOME_DIR,
     version: "1.9.1",
     runStepFn: (command, args) => {
       pipArgs.push(args);
@@ -577,13 +581,13 @@ test("installHarness walks PyPI → wheel → archive across the fallback chain"
   assert.deepEqual(pipArgs, [
     pipInstallArgs(pypiSpec),
     pipInstallArgs(wheelUrl),
-    pipInstallArgs(downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl")),
+    pipInstallArgs(downloadCachePath(TEST_HOME_DIR, "1.9.1", ".whl")),
     pipInstallArgs(archiveUrl),
-    pipInstallArgs(downloadCachePath(path.join("home", "npm"), "1.9.1")),
+    pipInstallArgs(downloadCachePath(TEST_HOME_DIR, "1.9.1")),
   ]);
   assert.deepEqual(downloads.map(([, downloadUrl, dest]) => [downloadUrl, dest]), [
-    [wheelUrl, downloadCachePath(path.join("home", "npm"), "1.9.1", ".whl")],
-    [archiveUrl, downloadCachePath(path.join("home", "npm"), "1.9.1")],
+    [wheelUrl, downloadCachePath(TEST_HOME_DIR, "1.9.1", ".whl")],
+    [archiveUrl, downloadCachePath(TEST_HOME_DIR, "1.9.1")],
   ]);
 });
 
@@ -595,7 +599,7 @@ test("installHarness surfaces the combined error when every candidate fails", as
     installHarness({
       python: "/venv/bin/python",
       candidates: [pypiSpec, wheelUrl],
-      homeDir: path.join("home", "npm"),
+      homeDir: TEST_HOME_DIR,
       version: "1.9.1",
       runStepFn: () => {
         throw new BootstrapError("pip exited with code 1");
@@ -616,7 +620,7 @@ test("installHarness installs a single explicit override directly", async () => 
   await installHarness({
     python: "/venv/bin/python",
     candidates: [url],
-    homeDir: path.join("home", "npm"),
+    homeDir: TEST_HOME_DIR,
     version: "1.9.1",
     runStepFn: (command, args) => pipCalls.push([command, args]),
 downloader: async () => {
@@ -633,7 +637,7 @@ test("installHarness rejects when no candidates are provided", async () => {
     installHarness({
       python: "/venv/bin/python",
       candidates: [],
-      homeDir: path.join("home", "npm"),
+      homeDir: TEST_HOME_DIR,
       version: "1.9.1",
       runStepFn: () => undefined,
       checksumFetcher: noChecksumStub,
@@ -1100,7 +1104,7 @@ test("installRemoteArtifact keeps the primary pip error when the fallback fails"
     installRemoteArtifact(
       "python",
       "https://x/y.whl",
-      path.join("home", "npm"),
+      TEST_HOME_DIR,
       "1.0.0",
       async () => {
         throw new BootstrapError("pip exited with code 1: CERTIFICATE_VERIFY_FAILED");

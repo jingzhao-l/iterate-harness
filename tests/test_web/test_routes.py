@@ -684,6 +684,66 @@ class TestReports:
         )
         assert response.status_code == 404
 
+    def test_download_returns_attachment_without_preview_size_cap(
+        self, client: TestClient, tmp_path: Path
+    ):
+        (tmp_path / ".iterate").mkdir(parents=True, exist_ok=True)
+        body = "<html>" + ("x" * (9 * 1024 * 1024)) + "</html>"
+        (tmp_path / ".iterate" / "report.html").write_text(body, encoding="utf-8")
+
+        # The preview refuses this size; the download must still serve it.
+        preview = client.get(
+            "/api/v1/reports/preview",
+            params={"project_root": str(tmp_path), "name": "report.html"},
+        )
+        assert preview.status_code == 413
+
+        response = client.get(
+            "/api/v1/reports/download",
+            params={"project_root": str(tmp_path), "name": "report.html"},
+        )
+        assert response.status_code == 200
+        assert response.headers["content-disposition"] == 'attachment; filename="report.html"'
+        assert response.headers["content-type"].startswith("text/html")
+        assert response.text == body
+
+    def test_download_csv_media_type(self, client: TestClient, tmp_path: Path):
+        (tmp_path / ".iterate").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".iterate" / "report.csv").write_text(
+            "severity,file\nhigh,a.py\n", encoding="utf-8"
+        )
+        response = client.get(
+            "/api/v1/reports/download",
+            params={"project_root": str(tmp_path), "name": "report.csv"},
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+        assert response.text == "severity,file\nhigh,a.py\n"
+
+    def test_download_blocks_traversal_and_non_report_files(
+        self, client: TestClient, tmp_path: Path
+    ):
+        (tmp_path / ".iterate").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".iterate" / "web-audit.jsonl").write_text("{}\n", encoding="utf-8")
+        traversal = client.get(
+            "/api/v1/reports/download",
+            params={"project_root": str(tmp_path), "name": "../../etc/passwd"},
+        )
+        assert traversal.status_code == 422
+        journal = client.get(
+            "/api/v1/reports/download",
+            params={"project_root": str(tmp_path), "name": "web-audit.jsonl"},
+        )
+        assert journal.status_code == 404
+
+    def test_download_missing_file_404(self, client: TestClient, tmp_path: Path):
+        (tmp_path / ".iterate").mkdir(parents=True, exist_ok=True)
+        response = client.get(
+            "/api/v1/reports/download",
+            params={"project_root": str(tmp_path), "name": "report.html"},
+        )
+        assert response.status_code == 404
+
     def test_preview_still_allows_every_report_filename(self, client: TestClient, tmp_path: Path):
         (tmp_path / ".iterate").mkdir(parents=True, exist_ok=True)
         for name in ("report.html", "replay.html", "report.csv"):

@@ -12,6 +12,12 @@ from iterate_harness.iterate import ci_report
 from iterate_harness.iterate.decision_log import append_entry, make_entry, read_entries
 
 
+@pytest.fixture(autouse=True)
+def _no_github_step_summary(monkeypatch):
+    """Keep a CI runner's real step-summary file out of these tests."""
+    monkeypatch.delenv(ci_report.GITHUB_STEP_SUMMARY_ENV, raising=False)
+
+
 def report_entry(
     *,
     findings: list[dict] | None = None,
@@ -317,6 +323,95 @@ class TestIterateReportCli:
         result = CliRunner().invoke(cli.app, ["iterate", "report", "--fail-on", "nope"])
         assert result.exit_code == 2  # typer.BadParameter usage error
         assert "must be one of" in result.output
+
+    def test_github_summary_is_written_without_changing_exit_code(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        summary_path = tmp_path / "step-summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+        append_entry(
+            tmp_path,
+            report_entry(
+                findings=[
+                    {
+                        "severity": "critical",
+                        "file": "a.py",
+                        "line": 1,
+                        "summary": "s",
+                        "dimension": "security",
+                    }
+                ]
+            ),
+        )
+        result = CliRunner().invoke(cli.app, ["iterate", "report", "--github-summary"])
+        assert result.exit_code == 1  # gate still decides the exit code
+        text = summary_path.read_text(encoding="utf-8")
+        assert "## iterate report" in text
+        assert "| critical | security | a.py:1 | s |" in text
+
+    def test_github_summary_auto_enables_when_env_is_set(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        summary_path = tmp_path / "step-summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+        append_entry(tmp_path, report_entry(findings=[]))
+        result = CliRunner().invoke(cli.app, ["iterate", "report"])
+        assert result.exit_code == 0
+        assert summary_path.exists()
+        assert "**findings:** 0" in summary_path.read_text(encoding="utf-8")
+
+    def test_no_github_summary_disables_auto_mode(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        summary_path = tmp_path / "step-summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+        append_entry(tmp_path, report_entry(findings=[]))
+        result = CliRunner().invoke(
+            cli.app, ["iterate", "report", "--no-github-summary"]
+        )
+        assert result.exit_code == 0
+        assert not summary_path.exists()
+
+
+class TestStepSummary:
+    def test_auto_mode_reads_the_env(self, monkeypatch):
+        assert ci_report.step_summary_enabled() is False
+        monkeypatch.setenv(ci_report.GITHUB_STEP_SUMMARY_ENV, " /tmp/summary.md ")
+        assert ci_report.step_summary_enabled() is True
+        monkeypatch.setenv(ci_report.GITHUB_STEP_SUMMARY_ENV, "   ")
+        assert ci_report.step_summary_enabled() is False
+
+    def test_explicit_choice_overrides_the_env(self, monkeypatch):
+        monkeypatch.setenv(ci_report.GITHUB_STEP_SUMMARY_ENV, "/tmp/summary.md")
+        assert ci_report.step_summary_enabled(False) is False
+        monkeypatch.delenv(ci_report.GITHUB_STEP_SUMMARY_ENV)
+        assert ci_report.step_summary_enabled(True) is True
+
+    def test_append_creates_parent_and_appends(self, tmp_path):
+        target = tmp_path / "nested" / "summary.md"
+        assert ci_report.append_step_summary("first", str(target)) == str(target)
+        assert target.read_text(encoding="utf-8") == "first\n"
+        ci_report.append_step_summary("second", str(target))
+        assert target.read_text(encoding="utf-8") == "first\nsecond\n"
+
+    def test_append_separates_a_file_without_trailing_newline(self, tmp_path):
+        target = tmp_path / "summary.md"
+        target.write_text("first", encoding="utf-8")
+        ci_report.append_step_summary("second", str(target))
+        assert target.read_text(encoding="utf-8") == "first\nsecond\n"
+
+    def test_append_without_a_target_returns_none(self, monkeypatch):
+        monkeypatch.delenv(ci_report.GITHUB_STEP_SUMMARY_ENV, raising=False)
+        assert ci_report.append_step_summary("body") is None
+
+    def test_append_to_an_unwritable_path_returns_none(self, tmp_path):
+        directory = tmp_path / "summary-is-a-directory"
+        directory.mkdir()
+        assert ci_report.append_step_summary("body", str(directory)) is None
+
+    def test_append_ignores_empty_body(self, tmp_path):
+        target = tmp_path / "summary.md"
+        assert ci_report.append_step_summary("   ", str(target)) is None
+        assert not target.exists()
 
 
 class TestIterateReportSlashCommand:
