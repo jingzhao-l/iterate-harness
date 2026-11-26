@@ -41,7 +41,7 @@ jobs:
           ref: ${{ github.event.release.tag_name || github.ref_name }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # Node 20 ships npm 10, which predates OIDC trusted publishing
           # (added in npm 11.5.1). Do NOT pass `registry-url`: setup-node would
