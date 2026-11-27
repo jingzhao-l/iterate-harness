@@ -924,11 +924,16 @@ class TestSessionRestore:
 
     def test_iterate_resume_run_and_session_are_mutually_exclusive(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
+        # CI exports FORCE_COLOR, so Click renders the usage error through rich and
+        # splits ``--run`` across ANSI spans; assert on the plain text, not raw bytes.
         result = CliRunner().invoke(
-            app, ["iterate", "resume", "--run", "--session", "abc123"]
+            app,
+            ["iterate", "resume", "--run", "--session", "abc123"],
+            env={"FORCE_COLOR": "1"},
         )
+        plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert result.exit_code == 2
-        assert "--run and --session are mutually exclusive" in result.output
+        assert "--run and --session are mutually exclusive" in plain_output
 
     def test_iterate_resume_falls_back_to_full_session_payload(self, tmp_path, monkeypatch):
         """When latest.json is missing, the listing fallback must load the full
